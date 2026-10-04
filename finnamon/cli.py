@@ -542,7 +542,7 @@ def cmd_channel(a) -> None:
                 try:
                     scheduler.restart(["web"])
                     print("restarted the dashboard, so its intercom session runs in this mode")
-                except (RuntimeError, subprocess.CalledProcessError) as e:
+                except (RuntimeError, subprocess.CalledProcessError, OSError) as e:
                     print(f"warning: could not restart the dashboard ({e}): finnamon update --no-pull", file=sys.stderr)
     else:
         out({"inbound": store.get_state(conn, "inbound") or "daemon"})
