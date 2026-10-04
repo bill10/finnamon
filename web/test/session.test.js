@@ -19,11 +19,13 @@ function fakeSpawn() {
 }
 
 test('claudeArgs: dontAsk always; the Telegram channel only in channel mode', () => {
-  assert.deepEqual(claudeArgs('daemon'), ['--permission-mode', 'dontAsk']);
+  assert.deepEqual(claudeArgs('daemon'), ['--permission-mode', 'dontAsk', '--setting-sources', 'project', '--strict-mcp-config'],
+    'the daemon reads the bot: a Telegram plugin enabled in the person\'s config must not start here and poll it too');
   assert.deepEqual(claudeArgs('channel'), ['--permission-mode', 'dontAsk', '--channels', 'plugin:telegram@claude-plugins-official', '--disallowedTools', 'WebSearch', 'WebFetch'],
     'the channel session reads bank memos with nobody at the dashboard: no web, as in every claude -p Finnamon spawns');
-  assert.deepEqual(claudeArgs('session'), ['--permission-mode', 'dontAsk', '--disallowedTools', 'WebSearch', 'WebFetch'],
-    'session mode: the daemon types the chat in, so the same no-web rule, and no plugin');
+  assert.deepEqual(claudeArgs('session'), ['--permission-mode', 'dontAsk', '--setting-sources', 'project', '--strict-mcp-config', '--disallowedTools', 'WebSearch', 'WebFetch'],
+    'session mode: the daemon types the chat in, so the same no-web rule, and sealed against the plugin');
+  assert.ok(!claudeArgs('channel').includes('--strict-mcp-config') && !claudeArgs('channel').includes('--setting-sources'), 'channel mode is the one that loads the plugin');
 });
 
 test('the household session runs in the installed assistant bundle, never the checkout', () => {
@@ -157,12 +159,12 @@ test('the household session id is minted once, then resumed, and a start that do
 
   let s = mk(null);                                    // first boot ever
   assert.deepEqual(s.get(), { id: '11111111-1111-4111-8111-111111111111', created: false });
-  assert.deepEqual(claudeArgs('daemon', s.get()).slice(2), ['--session-id', '11111111-1111-4111-8111-111111111111'], 'a new id is minted, not resumed');
+  assert.deepEqual(claudeArgs('daemon', s.get()).slice(5), ['--session-id', '11111111-1111-4111-8111-111111111111'], 'a new id is minted, not resumed');
   s.started();
   assert.deepEqual(saved, { id: '11111111-1111-4111-8111-111111111111', created: true }, 'once claude holds the id, the next boot has to resume it');
 
   s = mk({ id: '11111111-1111-4111-8111-111111111111', created: true });             // every boot after
-  assert.deepEqual(claudeArgs('daemon', s.get()).slice(2), ['--resume', '11111111-1111-4111-8111-111111111111']);
+  assert.deepEqual(claudeArgs('daemon', s.get()).slice(5), ['--resume', '11111111-1111-4111-8111-111111111111']);
   assert.deepEqual(claudeArgs('channel', s.get()).slice(2),
     ['--resume', '11111111-1111-4111-8111-111111111111', '--channels', 'plugin:telegram@claude-plugins-official', '--disallowedTools', 'WebSearch', 'WebFetch'],
     'channel mode resumes the same session: it is the one Telegram talks to, so it reads bank memos unattended and gets no web');
@@ -245,10 +247,10 @@ test('wired into the dashboard, a resume that finds nothing starts a new convers
     args: () => claudeArgs('daemon', intercom.get()), onStart: () => intercom.started(), onExit: ({ uptimeMs }) => intercom.noteExit(uptimeMs),
     log: { warn() {}, error() {} },
   });
-  assert.deepEqual(seen[0].slice(2), ['--resume', '44444444-4444-4444-8444-444444444444']);
+  assert.deepEqual(seen[0].slice(5), ['--resume', '44444444-4444-4444-8444-444444444444']);
   procs[0].exit({ exitCode: 1 });   // "No conversation found with session ID"
   t.mock.timers.tick(3_000);
-  assert.deepEqual(seen[1].slice(2), ['--session-id', '55555555-5555-4555-8555-555555555555'], 'the conversation is gone, so one is started');
+  assert.deepEqual(seen[1].slice(5), ['--session-id', '55555555-5555-4555-8555-555555555555'], 'the conversation is gone, so one is started');
   s.stop();
 });
 
@@ -257,7 +259,7 @@ test('a session id that is not a uuid never reaches claude argv, and a deliberat
   // --resume takes an optional value, so a stored id starting with a dash would be read as a flag of its own on the
   // household's session rather than consumed as the id.
   const hostile = intercomSession({ home: '/nope', read: () => ({ id: '--dangerously-skip-permissions', created: true }), write: () => {}, uuid: () => '66666666-6666-4666-8666-666666666666' });
-  assert.deepEqual(claudeArgs('daemon', hostile.get()).slice(2), ['--session-id', '66666666-6666-4666-8666-666666666666'],
+  assert.deepEqual(claudeArgs('daemon', hostile.get()).slice(5), ['--session-id', '66666666-6666-4666-8666-666666666666'],
     'a non-uuid is discarded, not passed through');
 
   let saved = null;
