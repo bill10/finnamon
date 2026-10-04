@@ -3,6 +3,16 @@
 All notable changes to Finnamon are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.32.1.0] - 2026-10-04
+
+### Fixed
+- **Telegram messages reach the intercom again in session mode.** The dashboard's intercom session now starts sealed
+  (`--setting-sources project --strict-mcp-config`, the same seal every other `claude` Finnamon spawns carries) in session
+  and daemon modes, so a Telegram plugin enabled in your Claude Code config no longer starts there and long-polls the bot
+  beside the daemon (the "Another program is reading this bot's messages" 409 notice). Only channel mode loads the plugin.
+- **`finnamon channel session` / `off` restart the dashboard themselves**, so the intercom picks up the new mode without a
+  manual `finnamon update --no-pull`, and say so; without a dashboard installed they point at `finnamon install`.
+
 ## [0.32.0.0] - 2026-10-04
 
 ### Changed
