@@ -72,7 +72,10 @@ the cwd of every household `claude`, and where Claude Code keeps their transcrip
   session's about a second after starting, with no reconnect, so in channel mode a spawn took the
   chat down until someone restarted the dashboard. None of these sessions has ever needed an MCP
   server; they drive `finnamon` and `agent-browser` over Bash. The one deliberate exception is
-  `web/server.js`'s household PTY: it is the plugin's intended consumer and keeps MCP.
+  `web/server.js`'s household PTY in channel mode: it is the plugin's intended consumer and keeps MCP. In session and
+  daemon mode the daemon reads the bot, so `claudeArgs` seals that PTY too (a plugin enabled anywhere in the person's
+  config would otherwise long-poll the same bot: 409s, and the chat's messages go to it instead of the relay), and
+  `finnamon channel session|off` restart the dashboard so the new argv takes effect.
 - **No web in any run without a person watching.** `claude_runner.run()` builds the one
   `--disallowedTools` tail itself and ends it with `WebSearch` and `WebFetch` (`UNATTENDED_DISALLOWED`);
   a caller adds bans through `disallowed=`, never a tail of its own. So triage and the daemon's
