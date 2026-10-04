@@ -1,0 +1,58 @@
+#!/usr/bin/env node
+// A stand-in for `claude` in the dashboard's intercom, for scripts/demo/launch-video.mjs only: it never calls a model.
+// It answers the turns in DEMO_TURNS ([{ match, step, command, reply }], match a regex) the way Claude Code would record
+// them, in the session transcript web/talk.js reads (<CLAUDE_CONFIG_DIR>/projects/<cwd>/<id>.jsonl): the typed line, one
+// tool call (its description is the spoken progress line), then the reply at end_turn. The terminal shows the same.
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const argv = process.argv.slice(2);
+const id = argv[argv.indexOf('--session-id') + 1 || argv.indexOf('--resume') + 1];
+const cwd = join(process.env.FINNAMON_HOME, 'assistant');   // what the server takes for the session's cwd (config.assistant)
+const dir = join(process.env.CLAUDE_CONFIG_DIR, 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+mkdirSync(dir, { recursive: true });
+const log = (e) => appendFileSync(join(dir, `${id}.jsonl`), `${JSON.stringify({ sessionId: id, timestamp: new Date().toISOString(), ...e })}\n`);
+const turns = JSON.parse(process.env.DEMO_TURNS || '[]');
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const out = (s) => process.stdout.write(s.replace(/\n/g, '\r\n'));
+const DIM = '\x1b[2m', OFF = '\x1b[0m';
+const prompt = () => out(`\n${DIM}────────────────────────────────${OFF}\n❯ `);
+
+out(`${DIM}Finnamon assistant · demo household${OFF}\n`);
+prompt();
+
+let buf = '', busy = Promise.resolve();
+process.stdin.setRawMode?.(true);
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (d) => {
+  buf += d.replace(/\x1b\[20[01]~/g, '');
+  let at;
+  while ((at = buf.indexOf('\r')) >= 0) {
+    const line = buf.slice(0, at).trim();
+    buf = buf.slice(at + 1);
+    if (line) busy = busy.then(() => answer(line));
+  }
+});
+
+async function answer(line) {
+  out(`${line}\n`);
+  log({ type: 'user', message: { role: 'user', content: line } });
+  const t = turns.find(t => new RegExp(t.match, 'i').test(line));
+  if (!t) {
+    const reply = 'This stand-in only knows the questions in the demo script.';
+    log({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: reply }], stop_reason: 'end_turn' } });
+    out(`\n⏺ ${reply}\n`);
+    return prompt();
+  }
+  await sleep(600);
+  log({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_demo', name: 'Bash', input: { command: t.command, description: t.step } }], stop_reason: 'tool_use' } });
+  out(`\n⏺ Bash(${t.command})\n  ${DIM}⎿  ${t.step}…${OFF}\n`);
+  await sleep(t.thinkMs ?? 2200);
+  if (t.exec) spawnSync('faketime', ['-f', `@${t.today}`, 'python3', '-m', 'finnamon.cli', ...t.exec], { env: process.env, cwd: fileURLToPath(new URL('../../..', import.meta.url)) });   // a real `finnamon chart` against the demo home
+  log({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_demo', content: '' }] } });
+  log({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: t.reply }], stop_reason: 'end_turn' } });
+  out(`\n⏺ ${t.reply}\n`);
+  prompt();
+}

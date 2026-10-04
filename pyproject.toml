@@ -1,0 +1,34 @@
+[project]
+name = "finnamon"
+dynamic = ["version"]   # the VERSION file is the one source; /ship bumps it
+description = "Your money. Your financial AI. Turn Claude into your personal finance assistant: Plaid → SQLite → Telegram alerts and a dashboard, on your own computer."
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = []
+
+[project.optional-dependencies]
+charts = ["matplotlib>=3.9,<4"]
+mcp = ["mcp>=1.2,<2"]
+dev = ["pytest>=8,<9"]
+
+[project.scripts]
+finnamon = "finnamon.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "VERSION"
+pattern = '^(?P<version>\d+(?:\.\d+)+)'
+
+[tool.hatch.build.targets.wheel]
+packages = ["finnamon"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "e2e: needs PLAID_SANDBOX_SECRET in ~/.finnamon/secrets.toml and network",
+  "eval: needs `claude` on PATH; spends tokens",
+]

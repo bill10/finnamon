@@ -1,0 +1,24 @@
+{
+  "name": "finnamon-web",
+  "version": "0.5.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Finnamon's local dashboard: accounts, budgets, charts, and the household's Claude Code session as an intercom.",
+  "type": "module",
+  "main": "server.js",
+  "engines": {
+    "node": ">=20.12"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test --import ./test/setup.js test/*.test.js",
+    "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true"
+  },
+  "dependencies": {
+    "@ricky0123/vad-web": "^0.0.31",
+    "express": "^4.21.0",
+    "node-pty": "^1.2.0-beta.12",
+    "onnxruntime-web": "1.30.0",
+    "ws": "^8.18.0"
+  }
+}

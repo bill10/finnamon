@@ -1,0 +1,301 @@
+"""Alerts → Telegram. One message per alert (so a quoted reply maps to exactly one alert).
+Sunday roundup: one numbered message for low-confidence anomalies, with roundup_items rows.
+
+    pending alert ──render()──▶ HTML ──send_message──▶ 200: sent_at + telegram_message_id
+                                                    └─▶ 429/5xx: stays unsent, retried next run
+"""
+from __future__ import annotations
+
+import json
+import logging
+import re
+import shlex
+import sqlite3
+import time
+
+from . import store, telegram
+from .telegram import esc
+
+log = logging.getLogger("finnamon.notify")
+
+SENDABLE = "sent_at IS NULL AND resolved_at IS NULL AND (tier = 'rule' OR (verdict = 'promote' AND confidence = 'high'))"   # resolved while queued (Dismiss on the page): never sent
+ROUNDUP_CHUNK_CHARS = 3500  # under Telegram's 4096 with HTML entities to spare; never truncate escaped HTML
+
+
+# NACHA fields after the DES: description; the class code (WEB/PPD/...) only counts at the very end of that tail
+_ACH_TAIL = re.compile(r"\s+(ID|INDN|CO ID|PPD ID|CCD ID)\b:?.*$|\s+(PPD|CCD|TEL|WEB|ARC|POS)$", re.IGNORECASE)
+# noise anywhere: confirmation numbers, store/check numbers, masked ids, and NACHA person/company fields without a DES: prefix
+_NOISE = re.compile(r"\s*\b(Confirmation|Conf|REF)\b\s*[#:]?\s*\S*\d\S*"      # confirmation / reference numbers (must contain a digit)
+                    r"|(?<!check )(?<!check)\s*#\s*\d{3,}"                       # store numbers, but a check number is information
+                    r"|\s*\bX{3,}\d+"                                             # masked ids
+                    r"|\s+\b(INDN|CO ID|PPD ID|CCD ID)\b:.*$"                    # NACHA person/company fields without a DES: prefix
+                    r"|(?<=\d)\s+(WEB|PPD|CCD|TEL|ARC)$", re.IGNORECASE)          # a trailing SEC code, only after a number
+_CHASE = re.compile(r"ORIG CO NAME:(?P<co>.*?)\s+ORIG ID:.*?CO ENTRY DESCR:(?P<desc>.*?)\s+SEC:", re.IGNORECASE)
+
+
+def tidy(name) -> str:
+    """A bank descriptor the way a person would say it. 'AMERICAN EXPRESS DES:ACH PMT ID:A4476 INDN:Jane Doe CO ID:XXXXX33497 WEB'
+    becomes 'AMERICAN EXPRESS (ACH PMT)'; 'Online Banking transfer to CHK 9665 Confirmation# XXXXX40731' becomes
+    'Online Banking transfer to CHK 9665'. Plaid's merchant_name is already clean and passes through."""
+    s = "" if name is None else str(name)
+    m = _CHASE.search(s)                   # Chase-style: ORIG CO NAME:VENMO ORIG ID:... CO ENTRY DESCR:PAYMENT SEC:WEB TRACE#:... IND NAME:...
+    if m:
+        s = f"{m['co'].strip()} ({m['desc'].strip()})" if m["desc"].strip() else m["co"].strip()
+    if " DES:" in s:                       # NACHA-style: <company> DES:<description> ID:<id> INDN:<person> CO ID:<id> <class>
+        company, _, rest = s.partition(" DES:")
+        desc = _ACH_TAIL.sub("", rest).strip()
+        s = f"{company.strip()} ({desc})" if desc else company.strip()
+    while (n := _NOISE.sub("", s)) != s:   # to a fixed point, so tidy(tidy(x)) == tidy(x)
+        s = n
+    s = re.sub(r"\s{2,}", " ", s).strip(" -,").strip()   # .strip(" -,") leaves a tab or an NBSP, and a name of nothing but those is no name
+    return s or str(name or "").strip()
+
+
+def money(x) -> str:
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return esc(x)
+    return f"-${abs(x):,.2f}" if x < 0 else f"${x:,.2f}"
+
+
+def _fix(p: dict) -> tuple[str, str]:
+    """The bank's name and the reply that fixes it; when two logins share the bank, both carry whose login and the item id."""
+    bank = esc(p.get("institution") or p.get("item_id"))
+    if p.get("duplicate"):
+        bank = f"{bank} ({esc(p.get('owner'))}'s login, {esc(p.get('item_id'))})" if p.get("owner") else f"{bank} ({esc(p.get('item_id'))})"
+        return bank, f"fix {esc(p.get('item_id'))}"
+    return bank, f"fix {bank}"
+
+
+def render(alert: sqlite3.Row) -> str:
+    """Telegram HTML for an alert. The web dashboard puts this straight into the page too, so every bank string
+    goes through esc(): this is an XSS boundary, not just Telegram formatting."""
+    p = json.loads(alert["payload_json"])
+    k = alert["kind"]
+    acct = f"{esc(p.get('account'))} …{esc(p.get('mask'))}" if p.get("mask") else esc(p.get("account"))
+    if k == "sync_health":
+        if p.get("status") == "ITEM_LOGIN_REQUIRED":
+            bank, fix = _fix(p)
+            return (f"🔌 <b>{bank} needs a re-login.</b> Reply <i>{fix}</i> and I'll send the login link here. "
+                    f"Until then its accounts aren't updating.")
+        if p.get("status") not in (None, "good"):
+            return f"🔌 <b>{esc(p.get('institution') or p.get('item_id'))} sync error:</b> {esc(p.get('status'))}. {esc(p.get('last_error') or '')}"
+        if p.get("source") == "manual":
+            return (f"🗂 <b>{esc(p.get('institution') or p.get('item_id'))} hasn't been imported since {esc(p.get('last_synced_at') or 'it was added')}.</b> "
+                    f"Download its CSV and use Import CSV on the dashboard, or <code>finnamon import</code>.")
+        return f"🩺 <b>{esc(p.get('institution') or p.get('item_id'))} hasn't synced since {esc(p.get('last_synced_at') or 'link')}.</b>"
+    if k == "consent_expiring":   # raised by sync.sync_accounts, once per expiry date
+        bank, fix = _fix(p)
+        return (f"⏳ <b>{bank}'s connection expires {esc(str(p.get('expires') or '')[:10])}.</b> Reply <i>{fix}</i> and I'll send a link "
+                f"to renew it here; after that date its accounts stop updating.")
+    if k == "duplicate_charge":   # the bank sends no name at all for some charges: say so, the way the anomaly line does
+        return (f"⚠️ <b>Possible duplicate:</b> {esc(tidy(p.get('merchant')) or 'an unnamed charge')} {money(p.get('amount'))} on {acct}, "
+                f"{esc(p.get('date_a'))} and {esc(p.get('date_b'))}. Same merchant, same amount.")
+    if k == "new_recurring":
+        return (f"🔁 <b>New recurring charge:</b> {esc(tidy(p.get('merchant')) or 'an unnamed payee')} {money(p.get('amount'))} "
+                f"{esc((p.get('frequency') or '').lower())} on {acct}, first seen {esc(p.get('first_date'))}.")
+    if k == "channel_deaf":
+        n = int(p.get("pending") or 0)
+        return (f"🔇 <b>I stopped hearing this chat.</b> {n} message{'' if n == 1 else 's'} {'is' if n == 1 else 'are'} waiting and nothing is collecting them, "
+                f"since {esc(p.get('since') or 'a few minutes ago')}. I can still send, which is how you are reading this. "
+                "In a terminal on the Finnamon box: <code>finnamon update --no-pull</code> restarts Finnamon and I pick the chat back up.")
+    if k == "low_balance":
+        return f"💧 <b>{acct} is at {money(p.get('available'))}</b>, below your {money(p.get('threshold'))} threshold."
+    if k == "budget_pace":
+        if p.get("state") == "over":
+            return f"📊 <b>{esc(p.get('budget'))} is over budget:</b> {money(p.get('spent'))} of {money(p.get('limit'))} with {int(p['days']) - int(p['day'])} days left."
+        return (f"📊 <b>{esc(p.get('budget'))} on pace to go over:</b> {money(p.get('spent'))} spent by day {esc(p.get('day'))}, "
+                f"tracking to {money(p.get('projection'))} against your {money(p.get('limit'))} budget.")
+    if k == "detector_error":
+        return f"🩺 <b>Detector {esc(p.get('detector'))} failed:</b> {esc(p.get('error'))}"
+    if k == "run_error":
+        return f"🩺 <b>A sync run crashed:</b> {esc(p.get('error'))} (see the log on the Finnamon box). I'll try again on the next run."
+    if k == "triage_error":
+        return "🩺 <b>Anomaly triage is failing.</b> In a terminal on the Finnamon box, run <code>claude</code> to check the login, then <code>finnamon triage</code>."
+    if k.startswith("anomaly:"):
+        what = tidy(p.get("merchant") or p.get("name")) or "a transaction"
+        amount = next((p[k] for k in ("amount", "last_amount", "avg_amount") if p.get(k) is not None), None)   # a recurring change describes the charge it tracks
+        try:
+            outgoing = float(amount or 0) >= 0
+        except (TypeError, ValueError):
+            outgoing = True
+        head = f"🔍 <b>{money(amount if outgoing else abs(float(amount)))} {'to' if outgoing else 'from'} {esc(what)}</b>"
+        if p.get("account"):
+            head += f" on {acct}"
+        if p.get("date"):
+            head += f", {esc(p.get('date'))}"
+        return f"{head}. {esc(alert['reason'] or '')}".strip()
+    return f"ℹ️ {esc(k)}: <code>{esc(json.dumps(p)[:500])}</code>"
+
+
+RESTARTED = "The assistant restarted; resend anything from the last minute."
+
+
+def pending(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(f"SELECT * FROM alerts WHERE {SENDABLE} ORDER BY id").fetchall()
+
+
+def send_pending(conn: sqlite3.Connection, chat_id: int | str | None = None, sleep=time.sleep) -> int:
+    chat_id = chat_id or store.get_state(conn, "chat_id")
+    if not chat_id:
+        log.warning("no chat_id in state; nothing sent")
+        return 0
+    sent = 0
+    for i, alert in enumerate(pending(conn)):
+        if i and i % 15 == 0:
+            sleep(60)  # Telegram allows ~20 messages/min per chat
+        try:
+            send_one(conn, alert, chat_id)
+        except telegram.TelegramError as e:
+            log.warning("send failed for alert %s: %s", alert["id"], e)
+            if e.code == 429:
+                sleep(e.retry_after or 5)
+            continue
+        sent += 1
+    return sent
+
+
+def send_one(conn: sqlite3.Connection, alert, chat_id: int | str | None = None) -> int | None:
+    """Send one alert now and stamp it. Raises TelegramError; send_pending handles the retry policy around it.
+
+    Something that has to be read soon cannot wait for the next cycle: the sync thread runs every
+    sync_interval_hours (6 by default), which would make a three-minute detection a six-hour telling."""
+    chat_id = chat_id or store.get_state(conn, "chat_id")
+    if not chat_id:
+        return None
+    mid = telegram.send_message(chat_id, render(alert))
+    conn.execute("UPDATE alerts SET sent_at = datetime('now','localtime'), telegram_chat_id = ?, telegram_message_id = ? WHERE id = ?",
+                 (str(chat_id), mid, alert["id"]))
+    return mid
+
+
+def send_roundup(conn: sqlite3.Connection, as_of: str, chat_id: int | str | None = None, force: bool = False) -> int | None:
+    """Sunday: one numbered message with the week's low-confidence anomalies, or one all-quiet line when there are
+    none, because a quiet watchdog must not look like a dead one. A Sunday the machine slept through is sent on the
+    Monday, and not again. Returns message_id or None."""
+    dow = conn.execute("SELECT strftime('%w', ?)", (as_of,)).fetchone()[0]
+    week = conn.execute("SELECT strftime('%Y-%W', date(?, ?))", (as_of, "-1 days" if dow == "1" else "+0 days")).fetchone()[0]   # Monday belongs to the Sunday before
+    if not force and (dow not in ("0", "1") or store.get_state(conn, "last_roundup_week") == week):
+        return None
+    chat_id = chat_id or store.get_state(conn, "chat_id")
+    in_slot = dow in ("0", "1")   # a forced roundup mid-week must not stamp, and so cancel, the coming Sunday's
+    if not chat_id:
+        if in_slot:
+            store.set_state(conn, "last_roundup_week", week)
+        return None
+    rows = conn.execute("SELECT * FROM alerts WHERE sent_at IS NULL AND resolved_at IS NULL AND verdict='promote' AND confidence='low' ORDER BY id").fetchall()
+    if not rows:
+        try:
+            mid = telegram.send_message(chat_id, quiet_line(conn, as_of))
+        except telegram.TelegramError as e:
+            log.warning("all-quiet roundup failed: %s (the week is not marked done)", e)
+            return None
+        if in_slot:
+            store.set_state(conn, "last_roundup_week", week)
+        return mid
+    # One numbered list, chunked under Telegram's limit; each chunk is its own message with its own roundup_items rows.
+    items = [(n, a, f"{n}. {render(a).replace('🔍 ', '')}") for n, a in enumerate(rows, 1)]
+    footer = "\nReply <i>normal 3</i> (etc.) to stop hearing about a pattern."
+    chunks: list[list[tuple]] = [[]]
+    size = len("📋 <b>Things I noticed this week</b>")
+    for it in items:
+        if chunks[-1] and size + len(it[2]) + len(footer) > ROUNDUP_CHUNK_CHARS:
+            chunks.append([]); size = 0
+        chunks[-1].append(it); size += len(it[2]) + 1
+    first_mid = None
+    for ci, chunk in enumerate(chunks):
+        head = "📋 <b>Things I noticed this week</b>" + (f" ({ci + 1}/{len(chunks)})" if len(chunks) > 1 else "")
+        text = "\n".join([head, *[it[2] for it in chunk]]) + (footer if ci == len(chunks) - 1 else "")
+        try:
+            mid = telegram.send_message(chat_id, text)
+        except telegram.TelegramError as e:
+            log.warning("roundup chunk %d failed: %s (alerts stay unsent; the week is not marked done)", ci, e)
+            return first_mid
+        first_mid = first_mid or mid
+        with store.tx(conn):
+            for n, a, _ in chunk:
+                conn.execute("UPDATE alerts SET sent_at = datetime('now','localtime'), telegram_chat_id = ?, telegram_message_id = ? WHERE id = ?",
+                             (str(chat_id), mid, a["id"]))
+                conn.execute("INSERT INTO roundup_items (telegram_chat_id, telegram_message_id, n, alert_id) VALUES (?,?,?,?)", (str(chat_id), mid, n, a["id"]))
+    if first_mid and in_slot:
+        store.set_state(conn, "last_roundup_week", week)
+    return first_mid
+
+
+def quiet_line(conn: sqlite3.Connection, as_of: str) -> str:
+    """The roundup of a week with nothing in it: still proof that syncing and watching happened."""
+    # min, not max: the proof is only as fresh as the stalest bank, and a dead one must not hide behind a live one
+    accts, oldest = conn.execute("SELECT count(*), min(i.last_synced_at) FROM accounts a JOIN items i ON i.item_id=a.item_id WHERE a.mirror_of IS NULL").fetchone()
+    n = conn.execute("SELECT count(*) FROM tx_now WHERE date > date(?, '-7 days')", (as_of,)).fetchone()[0]
+    sent = conn.execute("SELECT count(*) FROM alerts WHERE sent_at > datetime(?, '-7 days')", (as_of,)).fetchone()[0]
+    # untriaged candidates (triage down) and alerts whose send failed are not "nothing"
+    waiting = conn.execute(f"SELECT count(*) FROM alerts WHERE (tier='anomaly' AND verdict IS NULL AND sent_at IS NULL) OR ({SENDABLE})").fetchone()[0]
+    if waiting:
+        flagged = f"{waiting} alert{'' if waiting == 1 else 's'} still waiting to be checked or sent"
+    elif sent:
+        flagged = f"nothing to add to the {sent} alert{'' if sent == 1 else 's'} already sent"
+    else:
+        flagged = "nothing flagged"
+    return (f"{'🟡' if waiting else '🟢'} <b>{'Quiet' if waiting else 'All quiet'} this week.</b> {accts} account{'' if accts == 1 else 's'} watched, "
+            f"all synced since {esc(oldest or 'never')}; {n:,} transaction{'' if n == 1 else 's'} in the last 7 days; {flagged}.")
+
+
+SUGGESTED_LOW_BALANCE = 500
+
+
+def first_link_welcome(conn: sqlite3.Connection, item_id: str) -> str:
+    """Appended to the household's first linked-bank summary, once: what is watched now, and what turns on more."""
+    lines = ["\n<b>What I watch from now on:</b> duplicate charges, new subscriptions and price changes, anything unusual "
+             "(I check it before I bother you), and banks that stop syncing. Urgent things come right away; the rest waits "
+             "for a Sunday roundup, which comes every week, even if only to say all is quiet.",
+             "\n<b>To get more out of week one:</b>",
+             "• Budgets turn on pace alerts: reply <i>set up my budgets</i> and I'll propose some from your history."]
+    chk = conn.execute("SELECT account_id, name FROM accounts WHERE item_id=? AND type='depository' AND mirror_of IS NULL "
+                       "ORDER BY coalesce(subtype,'')<>'checking', name LIMIT 1", (item_id,)).fetchone()
+    if chk and store.setting(conn, "low_balance_threshold", chk[0]) is None:
+        lines.append(f"• Low-balance alerts are off. Reply <i>alert me if {esc(chk[1])} drops below ${SUGGESTED_LOW_BALANCE}</i> "
+                     f"(or any amount) to turn them on, or run "
+                     f"<code>finnamon threshold {esc(shlex.quote(chk[1]))} {SUGGESTED_LOW_BALANCE}</code>.")
+    return "\n".join(lines)
+
+
+def item_linked_summary(conn: sqlite3.Connection, item_id: str, as_of: str | None = None) -> str:
+    """One-time summary after a new Item's first sync (User Workflow Step 2).
+
+    A list, and no balances or amounts: the chat is shared and scrolls back forever. Numbers are one question away."""
+    as_of = as_of or store.now_local()
+    inst = conn.execute("SELECT institution FROM items WHERE item_id=?", (item_id,)).fetchone()[0] or item_id
+    accts = conn.execute("SELECT name, mask, type, subtype FROM accounts WHERE item_id=? ORDER BY type, name", (item_id,)).fetchall()
+    n, oldest = conn.execute("SELECT count(*), min(date) FROM transactions t JOIN accounts a ON a.account_id=t.account_id WHERE a.item_id=?", (item_id,)).fetchone()
+    holdings = conn.execute("SELECT count(*) FROM holdings h JOIN accounts a ON a.account_id=h.account_id WHERE a.item_id=?", (item_id,)).fetchone()[0]
+    # NULLIF before COALESCE: Plaid sends '' as well as NULL, and a plain COALESCE would take the '' and never reach the
+    # description, so a stream whose name lives there would be dropped by the filter rather than named by it.
+    rec = conn.execute("SELECT DISTINCT COALESCE(NULLIF(trim(merchant_name),''), NULLIF(trim(description),'')) m FROM recurring r JOIN accounts a ON a.account_id=r.account_id "
+                       "WHERE a.item_id=? AND r.direction='outflow' AND r.status<>'EARLY_DETECTION' AND m IS NOT NULL "
+                       "ORDER BY last_amount DESC LIMIT 8", (item_id,)).fetchall()   # the nameless rows go in SQL so they cannot spend one of the 8 slots
+    # merchants, not money moving between the household's own accounts or onto its own loans and cards.
+    # tx_all_accounts, not tx_now: `finnamon link` marks a duplicate account as a mirror before it sends this,
+    # so tx_now would report the bank it just linked as empty. Scoped to one Item, so nothing double-counts.
+    # display before the raw name for the same reason as the NULLIF above: an alias is the household's own name
+    # for a payee, but COALESCE stops at '' rather than at NULL, so a blank one must still fall through.
+    top = conn.execute("SELECT COALESCE(NULLIF(trim(display),''), NULLIF(trim(name),'')) m FROM tx_all_accounts "
+                       "WHERE item_id=? AND amount>0 AND pending=0 AND date>=date(?,'-90 days') "
+                       "AND COALESCE(category_primary,'') NOT IN ('TRANSFER_IN','TRANSFER_OUT','LOAN_PAYMENTS') AND m IS NOT NULL "
+                       "GROUP BY m ORDER BY sum(amount) DESC LIMIT 5", (item_id, as_of)).fetchall()
+    lines = [f"<b>Linked {esc(inst)}</b> ({len(accts)} account{'' if len(accts) == 1 else 's'}):"]
+    for name, mask, typ, sub in accts:
+        kind = (sub or typ or "").replace("_", " ")
+        lines.append(f"• {esc(name)}" + (f" …{esc(mask)}" if mask else "") + (f" ({esc(kind)})" if kind else ""))
+    facts = [f"{n:,} transactions since {esc(oldest or '?')}"]
+    if holdings:
+        facts.append(f"{holdings} holdings")
+    lines.append("\n" + ", ".join(facts) + ".")
+    def bullets(rows):   # a row the bank left nameless is no bullet, and an empty list is no heading either
+        return [f"• {esc(t)}" for r in rows if (t := tidy(r[0]))]   # tidy() is the one place a name of pure whitespace becomes no name
+    for head, rows in (("Recurring I can see:", rec), ("Top merchants, last 90 days:", top)):
+        if (b := bullets(rows)):
+            lines.append(f"\n<b>{head}</b>")
+            lines += b
+    lines.append("\nI'll start watching from today. Balances and amounts: just ask me here.")
+    return "\n".join(lines)

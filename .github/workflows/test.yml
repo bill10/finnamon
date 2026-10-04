@@ -1,0 +1,47 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install (dev + optional extras the tests import)
+        run: uv pip install -e ".[dev,charts,mcp]"
+
+      # No secrets anywhere; HOME, FINNAMON_HOME and CLAUDE_CONFIG_DIR are scratch dirs, never real ones.
+      - name: pytest (not eval)
+        run: |
+          export HOME="$RUNNER_TEMP/home" FINNAMON_HOME="$RUNNER_TEMP/finnamon" CLAUDE_CONFIG_DIR="$RUNNER_TEMP/claude"
+          mkdir -p "$HOME" "$FINNAMON_HOME" "$CLAUDE_CONFIG_DIR"
+          python -m pytest tests -q -m "not eval"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: web npm test
+        working-directory: web
+        run: |
+          export HOME="$RUNNER_TEMP/home" FINNAMON_HOME="$RUNNER_TEMP/finnamon" CLAUDE_CONFIG_DIR="$RUNNER_TEMP/claude"
+          npm ci && npm test

@@ -1,0 +1,62 @@
+name: release
+
+# Once the test workflow passes on a push to main, scripts/release.py turns the changelog.d/ fragments into the next
+# version (VERSION and a CHANGELOG.md section), and this job commits that to main as "vX release: <headline>" and
+# tags it vX. A merge with no fragments (docs, a test) releases nothing.
+#
+# Only the tested commit is released, and only while it is still main's tip: if main moved on, that newer commit's own
+# test run releases everything, this commit's fragments included. So a fragment never ships ahead of its tests, and
+# two runs never release the same fragments.
+#
+# No loop: the release commit is pushed with GITHUB_TOKEN, and GitHub starts no workflow runs for GITHUB_TOKEN pushes,
+# so it gets no test run and so no release run; it also carries no fragments.
+
+on:
+  workflow_run:
+    workflows: [test]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Turn changelog.d fragments into a version
+        env:
+          TESTED: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ "$(git rev-parse HEAD)" != "$TESTED" ]; then
+            echo "main moved past $TESTED; the newer commit's test run releases its fragments"; exit 0
+          fi
+          v="$(python3 scripts/release.py)"
+          if [ -z "$v" ]; then echo "No changelog.d fragments"; exit 0; fi
+          # The merge's own subject, minus any "vX type:" prefix and "(#N)", so the release reads as the PR's headline.
+          headline="$(git log -1 --format=%s | sed -E 's/^(v[0-9.]+ )?[a-z]+(\([^)]*\))?!?: //; s/ \(#[0-9]+\)$//')"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A VERSION CHANGELOG.md changelog.d
+          git commit -m "v$v release: $headline"
+          git tag "v$v"
+          # One atomic push, commit and tag together, so a version is never left untagged. A plain push: if a merge
+          # landed since checkout it is refused, and that merge's own run releases both.
+          if ! git push --atomic origin HEAD:main "refs/tags/v$v"; then
+            echo "main moved during the release; the newer commit's test run releases these fragments"; exit 0
+          fi

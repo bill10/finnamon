@@ -1,0 +1,125 @@
+name: wsl
+
+# Finnamon on Windows means WSL2: Ubuntu inside Windows, where it is a Linux install like any other. This job installs it
+# there the way docs/INSTALL.md says, runs the test suites, starts `finnamon demo` and fetches its page, and, with systemd
+# on in /etc/wsl.conf, installs the systemd user units and checks they come up. No secrets: every home is a scratch one.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/wsl.yml
+      - finnamon/scheduler.py
+      - finnamon/cli.py
+      - finnamon/demo.py
+      - pyproject.toml
+      - uv.lock
+      - web/package.json
+      - web/package-lock.json
+      - docs/INSTALL.md
+
+concurrency:
+  group: wsl-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  wsl:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: wsl-bash {0}
+    steps:
+      - name: Keep LF line endings (the tree is cloned into WSL from this checkout)
+        shell: pwsh
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+
+      - uses: Vampire/setup-wsl@d1da7f2c0322a5ee4f24975344f67fc0f5baf364   # v7.0.0
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: 2
+          wsl-shell-user: finn   # an ordinary user, as a household's would be; run steps say `-u root` when they need it
+          additional-packages: git curl ca-certificates xz-utils build-essential python3
+          wsl-conf: |
+            [boot]
+            systemd=true
+
+      - name: Restart the distribution so systemd is PID 1
+        shell: pwsh
+        run: wsl --shutdown
+
+      - name: What WSL this is
+        run: |
+          uname -a
+          cat /etc/os-release | head -2
+          echo "PID 1: $(ps -p 1 -o comm=)"
+
+      - name: Install uv and Node 20 inside WSL
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          mkdir -p ~/.local/node
+          curl -fsSL https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-x64.tar.xz | tar -xJ -C ~/.local/node --strip-components=1
+          export PATH="$HOME/.local/bin:$HOME/.local/node/bin:$PATH"
+          uv --version && node --version
+
+      - name: Clone into the WSL filesystem and `uv tool install -e .` (docs/INSTALL.md, step 1)
+        run: |
+          export PATH="$HOME/.local/bin:$HOME/.local/node/bin:$PATH"
+          git config --global --add safe.directory '*'
+          git clone --no-hardlinks "$(wslpath '${{ github.workspace }}')" ~/finnamon
+          cd ~/finnamon
+          uv tool install -e .
+          (cd web && npm ci)
+          finnamon --version || finnamon --help | head -3
+
+      - name: pytest (not eval)
+        run: |
+          export PATH="$HOME/.local/bin:$HOME/.local/node/bin:$PATH"
+          cd ~/finnamon
+          uv venv -q -p 3.12 && uv pip install -q -e ".[dev,charts,mcp]"
+          s=$(mktemp -d)
+          HOME="$s/home" FINNAMON_HOME="$s/finnamon" CLAUDE_CONFIG_DIR="$s/claude" sh -c 'mkdir -p "$HOME" "$FINNAMON_HOME" "$CLAUDE_CONFIG_DIR" && .venv/bin/python -m pytest tests -q -m "not eval"'
+
+      - name: web npm test
+        run: |
+          export PATH="$HOME/.local/bin:$HOME/.local/node/bin:$PATH"
+          cd ~/finnamon/web
+          s=$(mktemp -d)
+          HOME="$s/home" FINNAMON_HOME="$s/finnamon" CLAUDE_CONFIG_DIR="$s/claude" sh -c 'mkdir -p "$HOME" "$FINNAMON_HOME" "$CLAUDE_CONFIG_DIR" && npm test'
+
+      - name: finnamon demo, its page answers 200 with the demo key
+        run: |
+          export PATH="$HOME/.local/bin:$HOME/.local/node/bin:$PATH"
+          out=$(finnamon demo --print)
+          echo "$out" | sed -E 's/token=[0-9a-f]+/token=…/'
+          url=$(echo "$out" | grep -o 'http://localhost:[0-9]*/?token=[0-9a-f]*' | head -1)
+          code=$(curl -s -o /dev/null -w '%{http_code}' -L -c /tmp/jar -b /tmp/jar "$url")
+          echo "GET the demo page with its key: $code"
+          finnamon demo --stop
+          test "$code" = 200
+
+      - name: systemd user units (finnamon install) come up
+        run: |
+          export PATH="$HOME/.local/bin:$HOME/.local/node/bin:$PATH"
+          if [ "$(ps -p 1 -o comm=)" != systemd ]; then
+            echo "::warning::systemd is not PID 1 in this WSL; the scheduler path was not exercised"; exit 0
+          fi
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          systemctl --user is-system-running || true   # "degraded" is fine: a unit of the distro's own failing
+          # The default ~/.finnamon of this throwaway VM's user, so the units carry the household's plain names.
+          finnamon install --yes
+          sleep 5
+          systemctl --user --no-pager status finnamon-daemon.service finnamon-heartbeat.timer finnamon-web.service || true
+          systemctl --user is-active finnamon-heartbeat.timer finnamon-web.service
+          code=$(curl -s -o /dev/null -w '%{http_code}' -L -c /tmp/jar2 -b /tmp/jar2 "$(finnamon open --print)")
+          echo "GET the installed dashboard with its key: $code"
+          finnamon doctor || true   # informational: no Plaid keys, no bot, no claude here
+          finnamon install --uninstall
+          test "$code" = 200

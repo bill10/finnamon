@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+*.egg-info/
+dist/
+build/
+finnamon/detectors/pending/*.sql
+.finnamon/
+*.db
+*.db-wal
+*.db-shm
+.DS_Store
+web/node_modules/
+.uploads/
+
+# a design-tool cache keyed by session id and absolute paths; machine-local, never repo content
+.impeccable/
+
+# a claude session or an install pointed at the bundle source would leave these; neither is repo content
+finnamon/assistant_bundle/.claude/settings.local.json
+finnamon/assistant_bundle/.finnamon-bundle.json
+scripts/demo/node_modules/
