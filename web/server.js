@@ -285,6 +285,11 @@ export function claudeArgs(inbound, session = null) {
   // Session mode: the daemon types each phone message into this session (createRelay in talk.js), so it reads bank memos
   // with nobody at the dashboard just the same, and loses the web the same way; it needs no plugin.
   if (inbound === 'session') args.push('--disallowedTools', 'WebSearch', 'WebFetch');
+  // Outside channel mode the daemon is the bot's one reader. The Telegram plugin, enabled anywhere in the person's Claude
+  // Code config, would start in this session too and long-poll the same bot: 409s, and the messages go to it instead of
+  // the relay. So the seal every other claude Finnamon spawns carries (claude_runner.run): no MCP server, and only the
+  // assistant directory's own settings, so no plugin is enabled at all. Before the variadic --disallowedTools tail.
+  if (inbound !== 'channel') args.splice(2, 0, '--setting-sources', 'project', '--strict-mcp-config');
   return args;
 }
 

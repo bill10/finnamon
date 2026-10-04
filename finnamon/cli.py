@@ -533,8 +533,17 @@ def cmd_channel(a) -> None:
             print("inbound = daemon. The daemon reads Telegram and answers each message with its own `claude -p` session (resumes polling within a minute).")
         if was == "channel":
             print("Stop the channel session first (two pollers on one bot collide): the dashboard's session reads the bot until it restarts.")
-        if was != "daemon" or a.action == "session":   # the session's argv (--channels, the web tools) is fixed when the dashboard starts it
-            print("Restart the dashboard so its session picks the mode up: finnamon update --no-pull   (if it isn't installed: finnamon install)")
+        # The intercom's argv (--channels, the MCP seal, the web tools) is fixed when the dashboard starts it, and a session
+        # still carrying the channel plugin keeps reading the bot under the daemon (409s, messages the relay never sees).
+        if was != "daemon" or a.action == "session":
+            if not scheduler.installed("web"):
+                print("The dashboard isn't installed: finnamon install sets it up with this mode.")
+            else:
+                try:
+                    scheduler.restart(["web"])
+                    print("restarted the dashboard, so its intercom session runs in this mode")
+                except (RuntimeError, subprocess.CalledProcessError) as e:
+                    print(f"warning: could not restart the dashboard ({e}): finnamon update --no-pull", file=sys.stderr)
     else:
         out({"inbound": store.get_state(conn, "inbound") or "daemon"})
 

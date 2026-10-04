@@ -188,6 +188,12 @@ def unit_dir(os_name: str | None = None) -> Path:
     return Path.home() / "Library" / "LaunchAgents" if os_name == "Darwin" else Path.home() / ".config" / "systemd" / "user"
 
 
+def installed(name: str, os_name: str | None = None) -> bool:
+    """Whether `finnamon install` put this job's unit on the machine (restart() of one that is not there fails)."""
+    os_name = os_name or platform.system()
+    return (unit_dir(os_name) / (f"{label(name, os_name)}.plist" if os_name == "Darwin" else unit(name, os_name=os_name))).exists()
+
+
 def drifted_units(os_name: str | None = None) -> list[str]:
     """Units whose installed text is no longer what render() produces, so `finnamon update` has to send you to `install`.
 

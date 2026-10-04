@@ -152,7 +152,7 @@ def test_session_mode_polls_and_switching_is_safe(conn, tg, monkeypatch, capsys)
     store.set_state(conn, "channel_deaf_since", "2026-08-01 00:00:00")
     cli.main(["channel", "session"])
     out = capsys.readouterr().out
-    assert "inbound = session" in out and "Stop the channel session first" in out and "finnamon update --no-pull" in out
+    assert "inbound = session" in out and "Stop the channel session first" in out and "finnamon install" in out   # no dashboard unit here
     assert store.get_state(conn, "inbound") == "session"
     assert store.get_state(conn, "inbound_off_at"), "what the plugin already answered is not answered twice"
     assert store.get_state(conn, "channel_deaf_since") is None
@@ -166,4 +166,30 @@ def test_session_mode_polls_and_switching_is_safe(conn, tg, monkeypatch, capsys)
     d.poll_loop()
     assert calls
     cli.main(["channel", "off"])
-    assert store.get_state(conn, "inbound") is None and "finnamon update --no-pull" in capsys.readouterr().out
+    assert store.get_state(conn, "inbound") is None and "finnamon install" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("was,action,restarts", [("channel", "session", True), (None, "session", True), ("session", "off", True),
+                                                 ("channel", "off", True), (None, "off", False)])
+def test_switching_mode_restarts_the_dashboard(conn, monkeypatch, capsys, was, action, restarts):
+    """The intercom's argv is fixed at start: a session left on the old mode keeps the plugin polling the bot (409s), so
+    the switch restarts the dashboard itself rather than leaving it to a restart nobody remembers."""
+    from finnamon import scheduler
+    store.set_state(conn, "inbound", was)
+    calls = []
+    monkeypatch.setattr(scheduler, "installed", lambda name, os_name=None: name == "web")
+    monkeypatch.setattr(scheduler, "restart", lambda names, os_name=None: calls.append(names) or names)
+    cli.main(["channel", action])
+    assert calls == ([["web"]] if restarts else [])
+    assert ("restarted the dashboard" in capsys.readouterr().out) is restarts
+
+
+def test_a_failed_dashboard_restart_says_how_to_finish(conn, monkeypatch, capsys):
+    from finnamon import scheduler
+    monkeypatch.setattr(scheduler, "installed", lambda name, os_name=None: True)
+    def boom(names, os_name=None):
+        raise RuntimeError("web restarted but is not running")
+    monkeypatch.setattr(scheduler, "restart", boom)
+    cli.main(["channel", "session"])
+    assert store.get_state(conn, "inbound") == "session", "the mode is switched even when the restart is not"
+    assert "finnamon update --no-pull" in capsys.readouterr().err
