@@ -743,3 +743,16 @@ def test_import_browser_at_a_bank_with_no_known_login_opens_a_blank_window(home,
     monkeypatch.setenv("FINNAMON_CHROME", sys.executable)
     cli.main(["import", "--browser", "ally"])
     assert launched == ["about:blank"]
+
+
+# Value: protects=removing a manual account closes its already-sent open alerts as 'unlinked' and keeps their verdict; fails_when=
+# remove_account goes back to touching only unsent alerts (a sent one stays open on the page about a dead account); why_new=only
+# link --remove was tested for sent alerts; seam=none
+def test_account_remove_resolves_its_sent_alerts_as_unlinked(home, conn):
+    from finnamon import link
+    chk = manual(conn)
+    conn.execute("INSERT INTO alerts (tier, kind, key, account_id, payload_json, as_of, sent_at) VALUES ('rule','low_balance','k-sent',?,'{}',?,?)", (chk, AS_OF, AS_OF))
+    conn.execute("INSERT INTO alerts (tier, kind, key, account_id, payload_json, as_of) VALUES ('rule','low_balance','k-new',?,'{}',?)", (chk, AS_OF))
+    link.remove_account(conn, chk)
+    rows = {r[0]: tuple(r[1:]) for r in conn.execute("SELECT key, resolved_at IS NOT NULL, resolution, verdict, sent_at IS NOT NULL FROM alerts")}
+    assert rows == {"k-sent": (1, "unlinked", None, 1), "k-new": (1, "unlinked", "suppress", 1)}

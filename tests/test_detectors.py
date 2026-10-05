@@ -264,10 +264,37 @@ def test_duplicate_charge_true_duplicate_still_fires_and_normal_mutes_only_that_
     assert alerts(conn, "duplicate_charge")[-1]["key"] == "dup:d:e"   # a bigger double charge there still reaches the chat; at or under the cap stays muted
 
 
-def test_duplicate_charge_uses_index_for_self_join(conn):
+def test_duplicate_charge_three_identical_charges_are_one_alert(conn, tg):
+    """QA 10/4: three $52.18 Shell charges raised three pair alerts and went out as two messages."""
     seed(conn)
-    plan = " ".join(detect.explain(conn, RULES["duplicate_charge"], AS_OF))
-    assert "USING INDEX" in plan or "USING COVERING INDEX" in plan, plan
+    for tid, d in (("a", "2026-09-17"), ("b", "2026-09-17"), ("c", "2026-09-18")):
+        txn(conn, tid, "chk", d, 52.18, "SHELL OIL", "Shell", "mch_shell")
+    assert len(run(conn, "duplicate_charge")) == 1
+    a = alerts(conn, "duplicate_charge")[0]
+    assert (a["key"], a["transaction_id"], a["payload"]["count"], a["payload"]["date_a"]) == ("dup:a:c:3", "c", 3, "2026-09-17")
+    assert notify.send_pending(conn) == 1 and "Charged 3 times:</b> Shell $52.18 on Chase Checking …4821, 2026-09-17 to 2026-09-18" in tg.sent[0]["text"]
+    assert run(conn, "duplicate_charge") == []
+    txn(conn, "d", "chk", "2026-09-19", 52.18, "SHELL OIL", "Shell", "mch_shell")   # a fourth lands on a later sync: news of its own
+    assert len(run(conn, "duplicate_charge")) == 1 and alerts(conn, "duplicate_charge")[-1]["payload"]["count"] == 4
+
+
+def test_duplicate_charge_reads_transactions_once(conn):
+    # The quadratic case (8s at 30k rows) was a pair self-join; runs are one windowed pass over an index range.
+    seed(conn)
+    plan = detect.explain(conn, RULES["duplicate_charge"], AS_OF)
+    reads = [p for p in plan if p.startswith(("SEARCH t ", "SCAN t"))]
+    assert len(reads) == 1 and "USING INDEX" in reads[0], plan
+
+
+def test_duplicate_charge_a_chained_run_is_counted_whole(conn):
+    """Codex review: charges 3 days apart with a 3-day window are one run of three, not a hidden pair and a pair."""
+    seed(conn)
+    for tid, d in (("a", "2026-09-12"), ("b", "2026-09-15"), ("c", "2026-09-18")):
+        txn(conn, tid, "chk", d, 52.18, "SHELL OIL", "Shell", "mch_shell")
+    txn(conn, "far", "chk", "2026-09-02", 52.18, "SHELL OIL", "Shell", "mch_shell")   # 10 days before: its own (single) charge
+    assert len(run(conn, "duplicate_charge")) == 1
+    a = alerts(conn, "duplicate_charge")[0]
+    assert (a["key"], a["payload"]["count"], a["payload"]["date_a"], a["payload"]["txn_a"]) == ("dup:a:c:3", 3, "2026-09-12", "a")
 
 
 def test_sync_health_stale_and_error(conn):
@@ -275,13 +302,34 @@ def test_sync_health_stale_and_error(conn):
     assert run(conn, "sync_health") == []  # synced at AS_OF: healthy
     conn.execute("UPDATE items SET last_synced_at='2026-09-18 12:00:00'")
     ids = run(conn, "sync_health")
-    assert len(ids) == 1 and alerts(conn)[0]["key"] == "health:item1:2026-09-19"
-    assert run(conn, "sync_health") == []  # once per day
+    assert len(ids) == 1 and alerts(conn)[0]["key"] == "health:item1:stale:2026-09-18 12:00:00"
+    assert run(conn, "sync_health") == []
+    assert run(conn, "sync_health", "2026-09-22 06:00:00") == []   # one alert per problem, not one per day
     conn.execute("UPDATE items SET status='ITEM_LOGIN_REQUIRED', last_synced_at=?", (AS_OF,))
     assert run(conn, "sync_health", "2026-09-20 06:00:00") and alerts(conn)[-1]["payload"]["status"] == "ITEM_LOGIN_REQUIRED"
     assert alerts(conn)[-1]["payload"]["duplicate"] == 0
     conn.execute("INSERT INTO items (item_id, institution, owner, status, last_synced_at) SELECT 'item2', institution, owner, 'good', ? FROM items", (AS_OF,))
-    assert run(conn, "sync_health", "2026-09-21 06:00:00") and alerts(conn)[-1]["payload"]["duplicate"] == 1   # two logins at one bank
+    assert len(run(conn, "sync_health", "2026-09-21 06:00:00")) == 1   # item2, now stale; item1's login problem is still the one alert
+    assert alerts(conn)[-1]["payload"]["item_id"] == "item2" and alerts(conn)[-1]["payload"]["duplicate"] == 1   # two logins at one bank
+
+
+def test_sync_health_closes_on_the_next_good_sync_and_when_replaced(conn):
+    seed(conn)
+    conn.execute("UPDATE items SET last_synced_at='2026-09-18 12:00:00'")
+    detect.run(conn, AS_OF, only=["sync_health"])
+    stale = alerts(conn, "sync_health")[0]
+    assert stale["resolved_at"] is None and "finnamon doctor" in notify.render(conn.execute("SELECT * FROM alerts").fetchone())
+    conn.execute("UPDATE items SET status='ITEM_LOGIN_REQUIRED'")   # the stale bank turns out to want a login: one alert, the new one
+    detect.run(conn, "2026-09-20 06:00:00", only=["sync_health"])
+    old, login = alerts(conn, "sync_health")
+    assert (old["resolution"], login["resolved_at"]) == ("superseded", None)   # not "synced again": the bank has not synced
+    detect.run(conn, "2026-09-21 06:00:00", only=["sync_health"])
+    assert len(alerts(conn, "sync_health")) == 1 + 1 and alerts(conn, "sync_health")[-1]["resolved_at"] is None   # still one open
+    conn.execute("UPDATE items SET status='good', last_synced_at='2026-09-21 07:00:00'")   # the bank came back by itself
+    assert detect.run(conn, "2026-09-21 08:00:00", only=["sync_health"]) == []
+    assert [a["resolution"] for a in alerts(conn, "sync_health")] == ["superseded", "recovered"]
+    conn.execute("UPDATE items SET last_synced_at='2026-09-21 07:00:00'")
+    assert len(detect.run(conn, "2026-09-23 08:00:00", only=["sync_health"])) == 1   # breaks again later: a new problem, a new alert
 
 
 def test_new_recurring_after_baseline_only_and_once(conn):
@@ -312,15 +360,21 @@ def test_new_recurring_names_a_stream_whose_name_is_only_in_the_description(conn
     assert notify.render(next(a for a in alerts(conn) if a["key"] == "recurring:noname")).startswith("\U0001f501 <b>New recurring charge:</b> an unnamed payee")
 
 
-def test_low_balance_weekly_key(conn):
+def test_low_balance_once_per_dip(conn):
     seed(conn)
     store.set_setting(conn, "low_balance_threshold", 1000, "chk")
     conn.execute("INSERT INTO balances VALUES ('chk', '2026-09-19 06:00:00', 900, 640)")
     assert len(run(conn, "low_balance")) == 1
-    assert run(conn, "low_balance", "2026-09-20 12:00:00") == []       # same ISO week
-    assert len(run(conn, "low_balance", "2026-09-28 12:00:00")) == 1  # next week, still low
-    conn.execute("INSERT INTO balances VALUES ('cc', '2026-09-19 06:00:00', -500, 100)")   # credit account: never
-    assert run(conn, "low_balance", "2026-10-05 12:00:00") == [] or all(a["account_id"] == "chk" for a in alerts(conn))
+    assert run(conn, "low_balance", "2026-09-20 12:00:00") == []
+    conn.execute("INSERT INTO balances VALUES ('chk', '2026-09-27 06:00:00', 900, 610)")
+    assert run(conn, "low_balance", "2026-09-28 12:00:00") == []       # next week, still low: the same dip
+    conn.execute("INSERT INTO balances VALUES ('chk', '2026-10-01 06:00:00', 2500, 2400)")   # payday: recovered
+    assert run(conn, "low_balance", "2026-10-01 12:00:00") == []
+    conn.execute("INSERT INTO balances VALUES ('chk', '2026-10-03 06:00:00', 700, 650)")     # and down again: a new dip
+    assert len(run(conn, "low_balance", "2026-10-03 12:00:00")) == 1
+    assert [a["key"] for a in alerts(conn)] == ["lowbal:chk:2026-09-19 06:00:00", "lowbal:chk:2026-10-03 06:00:00"]
+    conn.execute("INSERT INTO balances VALUES ('cc', '2026-10-03 06:00:00', -500, 100)")   # credit account: never
+    assert run(conn, "low_balance", "2026-10-05 12:00:00") == []
 
 
 def test_budget_pace_and_over_are_exclusive_and_net(conn):
@@ -397,16 +451,82 @@ def test_unmatched_transfer_matched_vs_not(conn):
     assert keys == {"anom:xfer:zelle"}
 
 
-def test_recurring_changed_amount_and_skipped(conn):
+def test_recurring_changed_is_skipped_payments_only(conn):
     seed(conn, first_synced_at="2026-01-01 00:00:00")
     base = "INSERT INTO recurring (stream_id, account_id, direction, merchant_name, frequency, avg_amount, last_amount, first_date, last_date, predicted_next_date, status, first_seen_at) VALUES (?,?,'outflow',?,?,?,?,?,?,?,?,?)"
-    conn.execute(base, ("comcast", "chk", "Comcast", "MONTHLY", 89.99, 109.99, "2026-01-05", "2026-09-15", "2026-10-15", "MATURE", "2026-06-01 00:00:00"))
+    conn.execute(base, ("comcast", "chk", "Comcast", "MONTHLY", 89.99, 109.99, "2026-01-05", "2026-09-15", "2026-10-15", "MATURE", "2026-06-01 00:00:00"))   # recurring_price's
     conn.execute(base, ("peloton", "cc", "Peloton", "MONTHLY", 44, 44, "2026-01-01", "2026-08-01", "2026-09-01", "MATURE", "2026-06-01 00:00:00"))
     conn.execute(base, ("netflix", "cc", "Netflix", "MONTHLY", 15.49, 15.49, "2026-01-05", "2026-09-05", "2026-10-05", "MATURE", "2026-06-01 00:00:00"))
     n = len(run(conn, "recurring_changed"))
     got = {a["payload"]["merchant"]: a["payload"]["change"] for a in alerts(conn)}
-    assert n == 2 and got == {"Comcast": "amount", "Peloton": "skipped"}
+    assert n == 1 and got == {"Peloton": "skipped"}
 
+
+def netflix(conn, amounts, stream="netflix", **kw):
+    """A monthly stream with one charge per amount, the last on 2026-09-15; recurring's average includes the new price."""
+    seed(conn, first_synced_at="2026-01-01 00:00:00")
+    for i, amt in enumerate(amounts):
+        txn(conn, f"{stream}{i}", "cc", f"2026-{9 - len(amounts) + 1 + i:02d}-15", amt, "NETFLIX.COM", "Netflix", "mch_netflix", "ENTERTAINMENT", "ENTERTAINMENT_TV_AND_MOVIES")
+    conn.execute("INSERT INTO recurring (stream_id, account_id, direction, merchant_name, merchant_entity_id, frequency, avg_amount, last_amount, first_date, last_date, "
+                 "predicted_next_date, status, is_active, first_seen_at) VALUES (?,'cc','outflow','Netflix','mch_netflix','MONTHLY',?,?,'2026-01-15','2026-09-15','2026-10-15',?,?,'2026-02-01 00:00:00')",
+                 (stream, sum(amounts) / len(amounts), amounts[-1], kw.get("status", "MATURE"), kw.get("active", 1)))
+
+
+def test_recurring_price_hit_names_both_prices_and_dedups(conn):
+    netflix(conn, [15.49, 15.49, 15.49, 17.99])   # the average (16.12) is within 20% of the new price: the old check never fired
+    ids = run(conn, "recurring_price")
+    assert len(ids) == 1
+    a = alerts(conn)[0]
+    assert (a["key"], a["tier"], a["transaction_id"]) == ("recprice:netflix3", "rule", "netflix3")
+    assert "Netflix went from $15.49 to $17.99" in notify.render(conn.execute("SELECT * FROM alerts").fetchone())
+    assert run(conn, "recurring_price") == []   # dedup on the charge
+    txn(conn, "netflix4", "cc", "2026-10-15", 17.99, "NETFLIX.COM", "Netflix", "mch_netflix", "ENTERTAINMENT", "ENTERTAINMENT_TV_AND_MOVIES")
+    conn.execute("UPDATE recurring SET last_amount=17.99, last_date='2026-10-15'")
+    assert run(conn, "recurring_price", "2026-10-16 08:00:00") == []   # the new price, again: nothing changed
+
+
+def test_recurring_price_accepted_then_raised_again_alerts(conn):
+    netflix(conn, [15.49, 15.49, 15.49, 17.99])
+    run(conn, "recurring_price")
+    budgets.normal(conn, alert_id=alerts(conn)[0]["id"])   # "that's expected": $17.99 is the price now
+    conn.execute("UPDATE suppressions SET created_at='2026-09-01'")
+    for i, d in ((4, "2026-10-15"), (5, "2026-11-15")):
+        txn(conn, f"netflix{i}", "cc", d, 17.99 if i == 4 else 22.99, "NETFLIX.COM", "Netflix", "mch_netflix", "ENTERTAINMENT", "ENTERTAINMENT_TV_AND_MOVIES")
+    conn.execute("UPDATE recurring SET last_amount=22.99, last_date='2026-11-15'")
+    assert len(run(conn, "recurring_price", "2026-11-16 08:00:00")) == 1   # above the accepted price: news again
+
+
+@pytest.mark.parametrize("stream_fields", ["entity_id", "merchant_name_only", "description_only"])
+def test_recurring_price_matches_a_stream_without_an_entity_id(conn, stream_fields):
+    # Value: protects=streams Plaid sends without merchant_entity_id still alert; fails_when=the stream match compares one COALESCE; why_new=fixture streams always had the id; seam=none
+    netflix(conn, [15.49, 15.49, 15.49, 17.99])
+    if stream_fields != "entity_id":
+        conn.execute("UPDATE recurring SET merchant_entity_id=NULL")
+    if stream_fields == "description_only":
+        conn.execute("UPDATE recurring SET merchant_name=NULL, description='NETFLIX.COM'")
+    assert len(run(conn, "recurring_price")) == 1
+
+
+@pytest.mark.parametrize("case", ["same_price", "variable_bill", "too_few_charges", "early_detection", "inactive", "old_charge", "normal_on_stream", "kindless_normal",
+                                  "backfill", "second_plan_at_the_merchant"])
+def test_recurring_price_misses(conn, case):
+    amounts = {"same_price": [15.49] * 3, "variable_bill": [82.10, 95.40, 101.75], "too_few_charges": [15.49, 17.99]}.get(case, [15.49, 15.49, 17.99])
+    netflix(conn, amounts, status="EARLY_DETECTION" if case == "early_detection" else "MATURE", active=0 if case == "inactive" else 1)
+    if case == "backfill":   # the re-price happened before the first sync
+        conn.execute("UPDATE items SET first_synced_at='2026-09-16 00:00:00'")
+    if case == "second_plan_at_the_merchant":   # two live Netflix plans on one card: whose charge is whose is a guess
+        conn.execute("INSERT INTO recurring (stream_id, account_id, direction, merchant_name, merchant_entity_id, frequency, avg_amount, last_amount, first_date, last_date, "
+                     "status, first_seen_at) VALUES ('netflix-b','cc','outflow','Netflix','mch_netflix','MONTHLY',6.99,6.99,'2026-01-03','2026-09-03','MATURE','2026-02-01 00:00:00')")
+    as_of = "2026-10-20 08:00:00" if case == "old_charge" else AS_OF
+    if case == "kindless_normal":
+        conn.execute("INSERT INTO suppressions (canonical, created_at) VALUES ('mch_netflix', '2026-09-01')")
+    if case == "normal_on_stream":
+        run(conn, "recurring_price")
+        r = budgets.normal(conn, alert_id=alerts(conn)[0]["id"])
+        assert (r["kind"], r["stream_id"], r["canonical"], r["account_id"], r["max_amount"]) == ("recurring_price", "netflix", "mch_netflix", "cc", 17.99)
+        conn.execute("UPDATE suppressions SET created_at='2026-09-01'")
+        conn.execute("DELETE FROM alerts")
+    assert run(conn, "recurring_price", as_of) == []
 
 
 def test_recurring_changed_ignores_backfilled_and_inactive_streams(conn):
@@ -454,13 +574,6 @@ def test_run_all_and_detector_error_is_loud(conn, tmp_path, monkeypatch):
     assert detect.run(conn, AS_OF) == []  # once per day
 
 
-def test_self_join_uses_a_date_range_on_the_index(conn):
-    # The quadratic case: the inner leg must be a range search on (account_id, date), not a scan per outer row.
-    seed(conn)
-    plan = detect.explain(conn, RULES["duplicate_charge"], AS_OF)
-    assert any("SEARCH t USING INDEX idx_txn_account_date (account_id=? AND date>? AND date<?)" in p for p in plan), plan
-
-
 def test_recurring_changed_cancelled_acknowledges_one_stream_and_kindless_normal_never_covers_it(conn):
     """#64: "yes, I cancelled it" mutes that stream only; another stream at the merchant, and a later new one, still
     alert. A merchant-level "normal" with no kind means its charges are normal, not that its subscriptions stopping is."""
@@ -477,7 +590,7 @@ def test_recurring_changed_cancelled_acknowledges_one_stream_and_kindless_normal
     assert (r["kind"], r["stream_id"], r["canonical"], r["account_id"]) == ("anomaly:recurring_changed", "acme-a", "mch_acme", "cc")
     conn.execute("UPDATE suppressions SET created_at='2026-09-01'")
     later = "2026-10-20 09:00:00"
-    conn.execute("UPDATE recurring SET last_amount=35, last_date='2026-10-15', predicted_next_date='2026-11-15' WHERE stream_id='acme-b'")   # the other Acme stream changes price
+    # the other Acme stream (predicted 2026-10-10) has now missed a payment too
     conn.execute(base, ("acme-c", "cc", 5, 5, "2026-06-01", "2026-08-01"))       # and a newer one has stopped too
     run(conn, "recurring_changed", as_of=later)
     assert {a["key"] for a in alerts(conn)} - {"anom:rec:acme-a:2026-09"} == {"anom:rec:acme-b:2026-10", "anom:rec:acme-c:2026-10"}
@@ -510,3 +623,85 @@ def test_transfer_and_mortgage_synonyms_are_whole_phrase_only():
     assert taxonomy.resolve("transfer")[0] == "TRANSFER_OUT_ACCOUNT_TRANSFER" and taxonomy.resolve("Mortgage")[0] == "LOAN_PAYMENTS_MORTGAGE_PAYMENT"
     for phrase in ("transfer fee", "wire transfer", "venmo transfer", "mortgage interest"):
         assert taxonomy.resolve(phrase)[0] not in ("TRANSFER_OUT_ACCOUNT_TRANSFER", "LOAN_PAYMENTS_MORTGAGE_PAYMENT"), phrase
+
+
+# --- QA 10/4: routine money movements are not anomalies ------------------------------------------
+
+CANDIDATES = ["no_source", "first_merchant", "new_category", "amount_outlier"]
+
+
+def test_card_payment_both_sides_and_own_transfers_raise_no_candidate(conn):
+    seed(conn)
+    txn(conn, "pay", "chk", "2026-09-17", 812.40, "CHASE CREDIT CRD EPAY", None, None, "LOAN_PAYMENTS", "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT")
+    txn(conn, "payin", "cc", "2026-09-17", -812.40, "PAYMENT THANK YOU", None, None, "LOAN_PAYMENTS", "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT")
+    txn(conn, "sav", "chk", "2026-09-18", 1500, "ONLINE TRANSFER TO SAV", None, None, "TRANSFER_OUT", "TRANSFER_OUT_SAVINGS")
+    assert [i for n in CANDIDATES for i in run(conn, n)] == []
+    txn(conn, "odd", "chk", "2026-09-18", 240, "SQ *PMT 8827", None, None, "GENERAL_SERVICES", "GENERAL_SERVICES_OTHER_GENERAL_SERVICES")
+    assert len(run(conn, "no_source")) == 1   # an unknown payee still is
+
+
+def test_zelle_rent_is_one_candidate_group(conn):
+    from finnamon import triage
+    seed(conn)
+    txn(conn, "rent", "chk", "2026-09-17", 2400, "Zelle payment to Pat Landlord", None, None, "TRANSFER_OUT", "TRANSFER_OUT_ACCOUNT_TRANSFER")
+    store.set_setting(conn, "large_amount", 1000)
+    ids = [i for n in [*CANDIDATES, "unmatched_transfer"] for i in run(conn, n)]
+    assert len(ids) > 1 and [g["group"] for g in triage.groups(conn)] == ["rent"]   # several detectors, one transaction, one thing to judge
+
+
+def test_two_charges_at_a_new_merchant_on_one_day_are_one_first_merchant(conn):
+    seed(conn)
+    for tid in ("v1", "v2"):
+        txn(conn, tid, "chk", "2026-09-17", 60, "BLUE BOTTLE", "Blue Bottle", "mch_bb", "FOOD_AND_DRINK", "FOOD_AND_DRINK_COFFEE")
+    assert [a["transaction_id"] for a in alerts(conn)] == [] and len(run(conn, "first_merchant")) == 1
+    assert len(run(conn, "new_category")) == 1
+
+
+# Value: protects=one bank's good sync closes only its own sync_health alert; fails_when=resolve_recovered drops the item_id match
+# (closes every open sync_health on any good sync); why_new=the existing close test has one bank; seam=none
+def test_sync_health_recovery_closes_only_the_bank_that_synced(conn):
+    seed(conn)
+    conn.execute("INSERT INTO items (item_id, institution, owner, status, first_synced_at, last_synced_at) "
+                 "SELECT 'item2', 'Ally', owner, 'good', first_synced_at, last_synced_at FROM items WHERE item_id='item1'")
+    conn.execute("UPDATE items SET last_synced_at='2026-09-18 12:00:00'")
+    assert len(detect.run(conn, AS_OF, only=["sync_health"])) == 2
+    conn.execute("UPDATE items SET last_synced_at='2026-09-19 07:00:00' WHERE item_id='item1'")   # item1 back; item2 still stale
+    detect.run(conn, "2026-09-19 08:00:00", only=["sync_health"])
+    got = {a["payload"]["item_id"]: a["resolution"] for a in alerts(conn, "sync_health")}
+    assert got == {"item1": "recovered", "item2": None}
+
+
+def test_mortgage_and_a_card_payment_with_history_raise_no_outlier(conn):
+    # Value: protects=candidates skip flow mortgage/card_payment even past amount_outlier's median; fails_when=the flow filter is dropped from amount_outlier; why_new=the card test has no 3-charge history; seam=none
+    seed(conn)
+    conn.execute("INSERT INTO accounts (account_id, item_id, name, type, subtype, mask, owner) VALUES ('mtg','item1','Home Loan','loan','mortgage','5555','bill')")
+    for i, d in enumerate(("2026-05-03", "2026-06-03", "2026-07-03", "2026-08-03")):
+        txn(conn, f"pay{i}", "chk", d, 100, "CHASE CREDIT CRD EPAY", None, None, "LOAN_PAYMENTS", "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT")
+    txn(conn, "pay", "chk", "2026-09-17", 2400, "CHASE CREDIT CRD EPAY", None, None, "LOAN_PAYMENTS", "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT")
+    txn(conn, "payin", "cc", "2026-09-17", -2400, "PAYMENT THANK YOU", None, None, "LOAN_PAYMENTS", "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT")
+    txn(conn, "mort", "chk", "2026-09-18", 3605.99, "LOAN SERVICER WEB PMT", None, None, "LOAN_PAYMENTS", "LOAN_PAYMENTS_MORTGAGE_PAYMENT")
+    assert [i for n in CANDIDATES for i in run(conn, n)] == []
+    txn(conn, "pay", "chk", "2026-09-17", 2400, "CHASE CREDIT CRD EPAY", None, None, "GENERAL_SERVICES", "GENERAL_SERVICES_OTHER_GENERAL_SERVICES")
+    conn.execute("DELETE FROM transactions WHERE transaction_id='payin'")
+    assert [a["kind"] for a in alerts(conn) if a["transaction_id"] == "pay"] == [] and run(conn, "amount_outlier")   # unpaired, it is an outlier again
+
+
+def test_sync_health_an_error_that_returns_every_sync_is_one_alert(conn):
+    # Value: protects=one alert while the same bank error persists; fails_when=the open-same-status guard is dropped; why_new=apply_page moves last_synced_at before a later step fails; seam=none
+    seed(conn)
+    conn.execute("UPDATE items SET status='ADDITIONAL_CONSENT_REQUIRED'")
+    assert len(detect.run(conn, AS_OF, only=["sync_health"])) == 1
+    conn.execute("UPDATE items SET last_synced_at='2026-09-19 18:00:00'")   # a page applied, then recurring failed again
+    assert detect.run(conn, "2026-09-19 18:05:00", only=["sync_health"]) == []
+    assert [a["resolved_at"] for a in alerts(conn, "sync_health")] == [None]
+
+
+
+def test_duplicate_charge_a_run_aging_out_of_the_lookback_does_not_alert_again(conn):
+    # Value: protects=one alert per run as days pass; fails_when=runs are formed only inside the lookback bound; why_new=every other dup test runs one as_of; seam=none
+    seed(conn)
+    for tid, d in (("a", "2026-09-09"), ("b", "2026-09-12"), ("c", "2026-09-15")):
+        txn(conn, tid, "chk", d, 52.18, "SHELL OIL", "Shell", "mch_shell")
+    assert len(run(conn, "duplicate_charge", "2026-09-19 12:00:00")) == 1
+    for day in range(20, 29):
+        assert run(conn, "duplicate_charge", f"2026-09-{day} 12:00:00") == []

@@ -11,7 +11,7 @@ RULES = {p.stem: p for p in detect.detectors()}
 
 def hsa(conn):
     seed(conn)
-    txn(conn, "hsa", "chk", "2026-09-17", -2090, "HSAWCSPCUSTODIAN DES:HSADISTRIB ID:1 INDN:B CO ID:X PPD", None, None, "TRANSFER_IN", "TRANSFER_IN_ACCOUNT_TRANSFER")
+    txn(conn, "hsa", "chk", "2026-09-17", -2090, "HSAWCSPCUSTODIAN DES:HSADISTRIB ID:1 INDN:B CO ID:X PPD", None, None, "TRANSFER_IN", "TRANSFER_IN_DEPOSIT")   # a deposit, not an own-account transfer (no_source skips those)
 
 
 def fire(conn, *names):

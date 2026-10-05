@@ -698,11 +698,15 @@ async function api(method, url, body) {
 const KIND_ICONS = [[/sync|login/, 'plug', 'hot'], [/duplicate/, 'copy', ''], [/recurring/, 'arrows-clockwise', ''], [/balance/, 'drop', 'warn'],
   [/budget|pace/, 'target', 'warn'], [/merchant/, 'storefront', ''], [/large|unusual|spike|anomal/, 'warning-circle', 'hot']];
 const EMOJI_LEAD = /^\s*(?:[☀-➿]️?|[\uD83C-\uDBFF][\uDC00-\uDFFF]️?)+\s*/;
+const ALERTS_SHOWN = 8;
+let alertsAll = false;   // Show N more: the whole open list until the page reloads
 const reconnectBtn = (item) => `<button class="link" type="button" data-reconnect="${esc(item)}">Reconnect</button>`;
 function renderAlerts(s) {
   // The server sends only what Finnamon told the household or is about to (`finnamon alerts --sent`); triage's own notes
   // on the rest stay with the assistant. Open ones come in s.alerts (`--open`), the latest resolved in s.resolved.
-  const rows = (s.alerts || []).slice(0, 8), done = s.resolved || [];
+  const open = s.alerts || [], rows = alertsAll ? open : open.slice(0, ALERTS_SHOWN), done = s.resolved || [];
+  $('alerts-more').hidden = rows.length === open.length;
+  $('alerts-more').textContent = `Show ${open.length - rows.length} more`;
   const linked = (s.status.items || []).length > 0;   // "Nothing to flag" with no bank would say all is well while nothing is watched
   $('alerts-empty').style.display = rows.length || !linked ? 'none' : '';
   $('alerts-nolink').style.display = rows.length || linked ? 'none' : '';
@@ -718,7 +722,8 @@ function renderAlerts(s) {
     return item(a, `<div class="when">${esc(when(a.sent_at || a.created_at))}</div><div class="acts">${first}${act(a, 'dismiss', 'Dismiss')}</div></span>`) +
       `<span class="tag ${tag[0]}">${tag[1]}</span></li>`;
   }).join('');
-  const how = (a) => a.resolution === 'normal' ? `It’s normal${a.suppression_id ? ` (rule ${Number(a.suppression_id)})` : ''}` : a.resolution === 'dismissed' ? 'Dismissed' : a.resolution === 'reconnected' ? 'Reconnected' : 'Resolved';
+  const how = (a) => a.resolution === 'normal' ? `It’s normal${a.suppression_id ? ` (rule ${Number(a.suppression_id)})` : ''}` : a.resolution === 'dismissed' ? 'Dismissed'
+    : ({ reconnected: 'Reconnected', recovered: 'Synced again', superseded: 'Replaced by a newer alert', unlinked: 'Bank removed' })[a.resolution] || 'Resolved';
   $('alerts-resolved').hidden = !done.length;
   $('alerts-resolved-n').textContent = done.length;
   $('alerts-resolved-body').innerHTML = done.map(a => item(a, `<div class="when">${esc(how(a))} · ${esc(when(a.resolved_at))}</div></span>`) +
@@ -747,6 +752,7 @@ document.addEventListener('click', (e) => {
   e.preventDefault();   // in Accounts it sits in a <summary>: the click is the button's, not the section's toggle
   reconnect(b);
 });
+$('alerts-more').addEventListener('click', () => { alertsAll = true; if (summary) renderAlerts(summary); });
 $('alerts').addEventListener('click', async (e) => {
   const b = e.target.closest('button[data-alert]'); if (!b) return;
   for (const x of $('alerts').querySelectorAll('button[data-alert]')) x.disabled = true;   // one at a time: the list is redrawn after

@@ -339,21 +339,21 @@ def alias_set(conn: sqlite3.Connection, raw_name: str, canonical: str) -> dict:
 
 
 def rule_kinds() -> list[str]:
-    """The alert kinds a suppression can quiet: the detectors that read the prelude's `suppressed`, and recurring_changed
-    (by its stream). A rule for any other kind would never match, so `--kind` refuses it."""
-    return sorted({detect.kind_of(f)[1] for f in detect.detectors() if "suppressed" in f.read_text()} | {"anomaly:recurring_changed"})
+    """The alert kinds a suppression can quiet: the detectors that read the prelude's `suppressed`, and recurring_changed and
+    recurring_price (by their stream). A rule for any other kind would never match, so `--kind` refuses it."""
+    return sorted({detect.kind_of(f)[1] for f in detect.detectors() if "suppressed" in f.read_text()} | {"anomaly:recurring_changed", "recurring_price"})
 
 
 # "It's normal" on an alert no rule can quiet: it resolves that alert, writes no rule, and says what happens next.
 NO_RULE_NOTES = {
-    "low_balance": "Resolved for this week; it alerts again next week while {account} stays under ${threshold:,.0f}. "
+    "low_balance": "Resolved for this dip; it alerts again once {account} has gone back above ${threshold:,.0f} and drops under it again. "
                    "To alert at a lower balance: finnamon threshold \"{account}\" <amount>.",
     "budget_pace": "Resolved for this month; the {budget} budget alerts again once spending reaches the limit, or next month. "
                    "To change the limit: finnamon budget set \"{budget}\" <amount>.",
     "budget_pace:over": "Resolved for this month; the {budget} budget is over its limit and alerts again next month if it goes over again. "
                         "To change the limit: finnamon budget set \"{budget}\" <amount>.",
-    "sync_health": "Resolved for today; it alerts again tomorrow if {institution} still isn't syncing. "
-                   "If the bank wants a new login, reconnect it from the dashboard's Accounts.",
+    "sync_health": "Resolved; it alerts again if {institution}'s problem changes, or if it syncs and then breaks again. Run finnamon doctor to see why it "
+                   "isn't syncing; if the bank wants a new login, reconnect it from the dashboard's Accounts.",
 }
 
 
@@ -410,6 +410,10 @@ def normal(conn: sqlite3.Connection, canonical: str | None = None, kind: str | N
             r = conn.execute("SELECT COALESCE(merchant_entity_id, merchant_name, description) FROM recurring WHERE stream_id=?", (stream_id,)).fetchone()
             found = (r and r[0]) or found   # the detector's own expression, so the rule matches what it sees
             account_id = account_id or a["account_id"]
+        if kind == "recurring_price" == a["kind"]:   # "that's expected" is this subscription's new price, not every price at the merchant
+            stream_id = p.get("stream_id")
+            account_id = account_id or a["account_id"]
+            max_amount = max_amount if max_amount is not None else p.get("amount")   # a later rise above the accepted price still alerts
         if kind == "duplicate_charge":   # "normal" means this charge twice is fine, not every duplicate at the merchant
             # ponytail: a cap, so a smaller duplicate there stays muted too; an exact-amount column if that bites
             account_id = account_id or a["account_id"]

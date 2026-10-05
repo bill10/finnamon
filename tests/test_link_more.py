@@ -194,7 +194,9 @@ def test_link_remove_recovers_after_a_crash_and_resolves_pending_alerts(home, co
     assert config.item_tokens() == {}
     rows = {r[0]: (r[1], r[2]) for r in conn.execute("SELECT key, resolved_at IS NOT NULL, sent_at IS NOT NULL FROM alerts")}
     assert rows["lb:chk"] == (1, 1) and rows["health:item1:2026-09-19"] == (1, 1)   # never sent pointing at a dead Item
-    assert rows["lb:old"] == (0, 1)                                                    # already-sent history untouched
+    assert rows["lb:old"] == (1, 1)                                                    # a sent one leaves the open list too
+    assert {r[0] for r in conn.execute("SELECT resolution FROM alerts")} == {"unlinked"}
+    assert conn.execute("SELECT verdict FROM alerts WHERE key='lb:old'").fetchone()[0] is None   # a told alert keeps what it was
 
 
 def test_link_complete_survives_a_failed_first_sync(home, conn, tg, monkeypatch):

@@ -267,6 +267,7 @@ details.mergebox p.muted { margin: 0 0 8px; font-size: 13px; }
 .alerts .when { font-size: 13px; color: var(--muted); }
 .alerts .acts { display: flex; gap: 4px; margin: 2px 0 0 -6px; }   /* the link buttons' padding, pulled back to the text's edge */
 .alerts .acts button.link { font-size: 13px; }
+#alerts-more { margin-top: 8px; }
 .resolved { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
 .resolved > summary { cursor: pointer; font-size: 13px; color: var(--muted); padding: 4px 0; }
 .resolved li > span:not(:last-child) { opacity: .6; }   /* greyed: done with; Undo keeps full contrast */

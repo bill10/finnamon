@@ -719,8 +719,11 @@ test('resolved alerts render apart, greyed, saying how; only an undoable one get
   const renderAlerts = new Function('$', 'esc', 'icon', 'when', `${src}; return renderAlerts;`)($, String, () => '', String);
   renderAlerts({ status: { items: [{}] }, alerts: [{ id: 7, kind: 'duplicate_charge', text: 'dup', sent_at: 't' }], resolved: [
     { id: 5, text: 'a', resolved_at: 'r', resolution: 'normal', suppression_id: 9 }, { id: 4, text: 'b', resolved_at: 'r', resolution: 'dismissed' },
-    { id: 3, text: 'c', resolved_at: 'r', resolution: null }] });
+    { id: 3, text: 'c', resolved_at: 'r', resolution: null }, { id: 2, text: 'd', resolved_at: 'r', resolution: 'recovered' },
+    { id: 1, text: 'e', resolved_at: 'r', resolution: 'unlinked' }] });
   const open = els['alerts-body'].innerHTML, done = els['alerts-resolved-body'].innerHTML;
+  // Value: protects=Finnamon's own closes say why (bank synced again / bank removed); fails_when=the recovered/unlinked labels are dropped; why_new=only normal/dismissed/null were rendered; seam=none
+  assert.ok(done.includes('Synced again · r') && done.includes('Bank removed · r'));
   assert.ok(open.includes('data-alert="7" data-act="normal"') && open.includes('data-alert="7" data-act="dismiss"'));
   assert.ok(!/onclick/i.test(open + done), 'no inline handlers: the CSP would refuse them');
   assert.ok(done.includes('It’s normal (rule 9)') && done.includes('Dismissed') && done.includes('Resolved · r'));
@@ -728,6 +731,25 @@ test('resolved alerts render apart, greyed, saying how; only an undoable one get
   assert.equal(els['alerts-resolved'].hidden, false);
   renderAlerts({ status: { items: [{}] }, alerts: [], resolved: [] });
   assert.equal(els['alerts-resolved'].hidden, true);
+});
+
+test('more than 8 open alerts: the first 8 and a Show N more that lists the rest', () => {
+  const app = readFileSync(join(import.meta.dirname, '../public/app.js'), 'utf8');
+  const html = readFileSync(join(import.meta.dirname, '../public/index.html'), 'utf8');
+  assert.ok(html.includes('<button class="quiet" id="alerts-more" type="button" hidden>'));
+  const src = /\nconst KIND_ICONS[\s\S]*?\nfunction renderAlerts\(s\) \{[\s\S]*?\n\}\n/.exec(app)[0];
+  const els = {};
+  const $ = (id) => (els[id] ||= { style: {}, innerHTML: '' });
+  const [renderAlerts, showAll] = new Function('$', 'esc', 'icon', 'when', `${src}; return [renderAlerts, () => { alertsAll = true; }];`)($, String, () => '', String);
+  const alerts = Array.from({ length: 11 }, (_, i) => ({ id: i + 1, kind: 'duplicate_charge', text: `a${i}`, sent_at: 't' }));
+  renderAlerts({ status: { items: [{}] }, alerts, resolved: [] });
+  assert.equal(els['alerts-body'].innerHTML.split('</li>').length - 1, 8);
+  assert.equal(els['alerts-more'].hidden, false);
+  assert.equal(els['alerts-more'].textContent, 'Show 3 more');
+  showAll();
+  renderAlerts({ status: { items: [{}] }, alerts, resolved: [] });
+  assert.equal(els['alerts-body'].innerHTML.split('</li>').length - 1, 11);
+  assert.equal(els['alerts-more'].hidden, true);
 });
 
 test('removing a manual account: the name after --, --yes (the page asked), and only with the key from this page\'s origin', async () => {
