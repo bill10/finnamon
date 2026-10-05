@@ -140,6 +140,28 @@ def category_set(conn: sqlite3.Connection, merchant: str, category_text: str) ->
     return {"merchant": merchant, "canonical": canonical, "category": code}
 
 
+def tx_category_set(conn: sqlite3.Connection, transaction_id: str, category_text: str | None) -> dict:
+    """A one-time edit: this one transaction only, ahead of the merchant rule. category_text None clears it."""
+    t = conn.execute("SELECT transaction_id, date, amount, display FROM tx_all_accounts WHERE transaction_id=?", (transaction_id.strip(),)).fetchone()
+    if not t:
+        raise ValueError(f"no transaction '{transaction_id}' (ids are tx_now.transaction_id)")
+    if category_text is None:
+        n = conn.execute("DELETE FROM tx_category_override WHERE transaction_id=?", (t["transaction_id"],)).rowcount
+        code = None
+    else:
+        code = resolve_category(category_text)
+        if code in taxonomy.DETAILED:
+            raise ValueError("a transaction override needs a detailed category, e.g. FOOD_AND_DRINK_GROCERIES")
+        conn.execute("INSERT INTO tx_category_override (transaction_id, pfc_primary, pfc_detailed) VALUES (?,?,?) "
+                     "ON CONFLICT(transaction_id) DO UPDATE SET pfc_primary=excluded.pfc_primary, pfc_detailed=excluded.pfc_detailed, created_at=datetime('now','localtime')",
+                     (t["transaction_id"], taxonomy.primary_of(code), code))
+    now = conn.execute("SELECT category FROM tx_all_accounts WHERE transaction_id=?", (t["transaction_id"],)).fetchone()[0]
+    out = {"transaction_id": t["transaction_id"], "date": t["date"], "amount": t["amount"], "merchant": t["display"], "category": now}
+    if category_text is None:
+        out["cleared"] = bool(n)
+    return out
+
+
 def canonical_for(conn: sqlite3.Connection, merchant: str) -> str:
     """What the prelude will compute for this merchant: entity id if Plaid knows it, else the name as typed."""
     r = conn.execute("SELECT merchant_entity_id FROM transactions WHERE merchant_entity_id IS NOT NULL AND lower(merchant_name)=lower(?) LIMIT 1",

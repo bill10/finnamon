@@ -146,7 +146,7 @@ def test_triage_runs_cannot_write_settings_or_budgets(home, conn, monkeypatch, c
     seed(conn)
     monkeypatch.setenv("FINNAMON_TRIAGE", "1")
     for argv in (["settings", "--account", "*", "set", "large_amount", "9999999"], ["budget", "--category", "food", "set", "groceries", "1"],
-                 ["normal", "Costco"], ["threshold", "Chase Checking", "1"], ["category", "costco", "groceries"], ["alias", "a", "b"]):
+                 ["normal", "Costco"], ["threshold", "Chase Checking", "1"], ["category", "costco", "groceries"], ["category", "--tx", "t1", "groceries"], ["alias", "a", "b"]):
         with pytest.raises(SystemExit):
             cli.main(argv)
         assert "read-only" in capsys.readouterr().err

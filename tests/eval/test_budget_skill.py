@@ -121,3 +121,13 @@ def test_a_voice_turn_is_answered_in_a_few_speakable_sentences(fixture_home):
     text = out.get("result", "")
     assert text and len(text) < 500, f"too long to listen to ({len(text)} chars): {text[:500]}"
     assert not any(m in text for m in ("|", "```", "**", "\n- ", "\n* ", "/")), f"markup or a path in a spoken answer: {text[:500]}"
+
+
+def test_one_charge_is_a_one_time_edit_and_always_is_the_merchant_rule(fixture_home):
+    env = {"FINNAMON_HOME": str(fixture_home)}
+    run_claude("The Costco charge on August 15th was actually groceries. Recategorize just that one; don't ask me anything.", env)
+    conn = store.connect()
+    assert [tuple(r) for r in conn.execute("SELECT transaction_id, pfc_detailed FROM tx_category_override")] == [("c8", "FOOD_AND_DRINK_GROCERIES")]
+    assert conn.execute("SELECT count(*) FROM category_override").fetchone()[0] == 0, "one charge must not become a merchant rule"
+    run_claude("Actually, Costco is always groceries for us, every charge. Make that the rule; don't ask me anything.", env)
+    assert [tuple(r) for r in conn.execute("SELECT canonical, pfc_detailed FROM category_override")] == [("mch_costco", "FOOD_AND_DRINK_GROCERIES")]
