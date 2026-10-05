@@ -15,9 +15,9 @@ def set_value(conn: sqlite3.Connection, name: str, value) -> dict:
     if not name or len(name) > MAX_NAME:
         raise ValueError(f"a property needs a name of 1 to {MAX_NAME} characters")
     try:
-        value = float(str(value).replace(",", "").lstrip("$"))
-    except (TypeError, ValueError):
-        raise ValueError("a property value is a number of dollars") from None
+        value = store.parse_amount(value, "a property value")
+    except ValueError:
+        raise ValueError("a property value is a number of dollars, like 21500 or $21,500") from None
     if not math.isfinite(value) or value < 0:
         raise ValueError("a property value is zero or more dollars")
     before = conn.execute("SELECT name, value FROM properties WHERE name=?", (name,)).fetchone()   # NOCASE: "House" is "house"

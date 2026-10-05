@@ -2045,10 +2045,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--dry-run", action="store_true", help="look only: fetch, then name the commits to pull and the services that would restart; nothing is pulled, migrated, installed or restarted"); s.add_argument("--force", action="store_true", help="register the Telegram channel plugin even outside ~/.finnamon/assistant"); s.set_defaults(fn=cmd_update)
 
     s = sp.add_parser("budget"); s.add_argument("action", choices=["list", "suggest", "set", "remove", "overall"], nargs="?", default="list")
-    s.add_argument("name", nargs="?"); s.add_argument("amount", nargs="?", type=float)
+    s.add_argument("name", nargs="?"); s.add_argument("amount", nargs="?")
     s.add_argument("--category", action="append"); s.add_argument("--merchant", action="append", dest="merchants")   # each repeatable; given, they replace the budget's
     s.add_argument("--fixed", action=argparse.BooleanOptionalAction); s.add_argument("--months", type=int, default=6); s.add_argument("--as-of"); s.set_defaults(fn=cmd_budget)
-    s = sp.add_parser("threshold"); s.add_argument("account"); s.add_argument("amount", type=float); s.set_defaults(fn=cmd_threshold)
+    s = sp.add_parser("threshold"); s.add_argument("account"); s.add_argument("amount"); s.set_defaults(fn=cmd_threshold)
     s = sp.add_parser("settings"); s.add_argument("action", choices=["list", "get", "set"], nargs="?", default="list"); s.add_argument("key", nargs="?"); s.add_argument("value", nargs="?"); s.add_argument("--account"); s.add_argument("--ops", action="store_true", help="operational keys (daemon interval, timeouts); not for Claude"); s.set_defaults(fn=cmd_settings)
     s = sp.add_parser("category", help="<merchant> <category> (a rule: every past and future charge) | --tx <transaction_id> <category> (one charge, a one-time edit; --clear undoes it) | list | resolve <text>")
     s.add_argument("merchant", nargs="?"); s.add_argument("category", nargs="?"); s.add_argument("--tx", metavar="TRANSACTION_ID"); s.add_argument("--clear", action="store_true"); s.add_argument("--rules", action="store_true")
@@ -2057,7 +2057,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sp.add_parser("alias", help="raw bank string -> canonical merchant; a %% makes it a pattern (%% any run of characters, then _ one; every match becomes one merchant) | --list | --remove <name>")
     s.add_argument("name", nargs="?"); s.add_argument("canonical", nargs="?"); s.add_argument("--list", action="store_true"); s.add_argument("--remove", metavar="NAME"); s.set_defaults(fn=cmd_alias)
     s = sp.add_parser("normal", help="suppress a pattern. No --kind = every alert kind except recurring_changed (a merchant charging is normal; its subscription "
-                     "stopping is still news). --alert on a recurring_changed or recurring_price alert acknowledges that one stream (a price: up to the accepted one). --list shows ids; --remove ID deletes one"); s.add_argument("merchant", nargs="?"); s.add_argument("--kind"); s.add_argument("--account"); s.add_argument("--max-amount", type=float)
+                     "stopping is still news). --alert on a recurring_changed or recurring_price alert acknowledges that one stream (a price: up to the accepted one). --list shows ids; --remove ID deletes one"); s.add_argument("merchant", nargs="?"); s.add_argument("--kind"); s.add_argument("--account"); s.add_argument("--max-amount")
     s.add_argument("--note"); s.add_argument("--alert", type=int); s.add_argument("--roundup-item", nargs=2, type=int, metavar=("MESSAGE_ID", "N")); s.add_argument("--list", action="store_true"); s.add_argument("--remove", type=int, metavar="ID", help="delete the rule with this id (from --list)"); s.set_defaults(fn=cmd_normal)
 
     s = sp.add_parser("alerts"); g = s.add_mutually_exclusive_group(); g.add_argument("--untriaged", action="store_true"); g.add_argument("--suppressed", action="store_true"); s.add_argument("--sent", action="store_true", help="only alerts sent to the household, or queued to be"); s.add_argument("--since", type=int, default=30); s.add_argument("--limit", type=int, default=50)

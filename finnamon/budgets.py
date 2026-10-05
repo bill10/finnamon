@@ -50,9 +50,9 @@ def _cat_name(code: str) -> str:
 
 def _positive(amount, what: str) -> float:
     try:
-        v = float(amount)
-    except (TypeError, ValueError):
-        raise ValueError(f"{what} must be a number") from None
+        v = store.parse_amount(amount, what)
+    except ValueError:
+        raise ValueError(f"{what} must be a number of dollars, like 1200 or $1,200") from None
     if not math.isfinite(v) or v <= 0:
         raise ValueError(f"{what} must be a positive amount")
     return v
@@ -272,8 +272,9 @@ def threshold_set(conn: sqlite3.Connection, account_text: str, amount: float) ->
     if a["type"] != "depository":   # low_balance.sql reads depository balances only: a card's or a brokerage's line could never fire
         raise ValueError(f"{a['name']} …{a['mask']} is a {a['type']} account; a low-balance alert watches the cash in a checking or savings "
                          "account, so a threshold here would never fire. Name a checking or savings account")
+    amount = store.parse_amount(amount, "a threshold")
     store.set_setting(conn, "low_balance_threshold", amount, a["account_id"])
-    return {"account": a["name"], "mask": a["mask"], "threshold": float(amount)}
+    return {"account": a["name"], "mask": a["mask"], "threshold": amount}
 
 
 def category_set(conn: sqlite3.Connection, merchant: str, category_text: str, m: dict | None = None) -> dict:

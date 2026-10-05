@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -93,6 +94,21 @@ def _split(sql: str) -> list[str]:
 
 # --- settings -------------------------------------------------------------------------------
 
+def parse_amount(text, what: str = "amount") -> float:
+    """Dollars as a person types them: 1200, 1,200.50, $900, -$5, "$ 1 200". The one parser every typed amount goes through."""
+    if isinstance(text, (int, float)) and not isinstance(text, bool):
+        v = float(text)
+    else:
+        t = re.sub(r"[\s,]", "", str(text or ""))
+        neg = t.startswith("-")
+        t = t.lstrip("-+").lstrip("$")
+        try:
+            v = -float(t) if neg else float(t)
+        except ValueError:
+            raise ValueError(f"{what} must be a number of dollars, like 1200 or $1,200") from None
+    return v   # nan and inf parse; each caller's range check refuses them
+
+
 def setting_num(conn: sqlite3.Connection, key: str, default: float, account_id: str | None = None) -> float:
     """A numeric setting, clamped to its spec; a bad row can never break the daemon."""
     v = setting(conn, key, account_id)
@@ -132,8 +148,8 @@ def validate_setting(key: str, value, ops: bool = False) -> str:
     if not spec:
         raise ValueError(f"unknown setting {key}; one of {', '.join([*SETTINGS, *OPS_SETTINGS])}")
     try:
-        v = float(value)
-    except (TypeError, ValueError):
+        v = parse_amount(value, key)
+    except ValueError:
         raise ValueError(f"{key} must be a number") from None
     lo, hi = spec
     if not lo <= v <= hi:

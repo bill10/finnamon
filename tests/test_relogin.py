@@ -333,4 +333,4 @@ def test_sync_health_text_for_pending_expiration_and_a_plain_error(env, conn):
     conn.execute("INSERT INTO alerts (tier, kind, key, payload_json, as_of) VALUES ('rule','sync_health','health:item1:err',?,'2026-10-04')",
                  (json.dumps({"item_id": "item1", "institution": "Chase", "status": "INSTITUTION_DOWN", "last_error": "bank is down."}),))
     text = notify.render(conn.execute("SELECT * FROM alerts WHERE key='health:item1:err'").fetchone())
-    assert "Chase sync error:</b> INSTITUTION_DOWN. bank is down. Run <code>finnamon doctor</code>" in text and "re-login" not in text
+    assert "Chase couldn't sync:</b> the bank's site is down (INSTITUTION_DOWN). bank is down. Run <code>finnamon doctor</code>" in text and "re-login" not in text

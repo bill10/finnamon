@@ -13,6 +13,7 @@ import re
 import shlex
 import sqlite3
 import time
+import datetime
 
 from . import store, telegram
 from .telegram import esc
@@ -60,6 +61,43 @@ def money(x) -> str:
     return f"-${abs(x):,.2f}" if x < 0 else f"${x:,.2f}"
 
 
+def day(iso, year: bool = False) -> str:
+    """A date a person reads: 2026-10-01 → Oct 1 (with the year when it isn't this one). Anything that isn't a date passes through."""
+    m = re.match(r"(\d{4})-(\d\d)-(\d\d)", str(iso or ""))
+    if not m:
+        return esc(iso)
+    y, mo, d = map(int, m.groups())
+    try:
+        s = f"{datetime.date(y, mo, d):%b} {d}"
+    except ValueError:
+        return esc(iso)
+    return f"{s}, {y}" if year or y != datetime.date.today().year else s
+
+
+def when(ts) -> str:
+    """A timestamp without seconds: 2026-10-04 10:22:13 → Oct 4, 10:22 AM."""
+    m = re.match(r"(\d{4}-\d\d-\d\d)[ T](\d\d):(\d\d)", str(ts or ""))
+    if not m:
+        return day(ts)
+    h, mi = int(m[2]), m[3]
+    return f"{day(m[1])}, {h % 12 or 12}:{mi} {'AM' if h < 12 else 'PM'}"
+
+
+BANK_PROBLEMS = {   # Plaid's code → what a person would say; the code stays in parentheses
+    "INSTITUTION_DOWN": "the bank's site is down", "INSTITUTION_NOT_RESPONDING": "the bank isn't responding", "INSTITUTION_NOT_AVAILABLE": "the bank isn't available right now",
+    "RATE_LIMIT_EXCEEDED": "too many requests, so it will retry", "INTERNAL_SERVER_ERROR": "Plaid had a problem on its side", "ITEM_NOT_FOUND": "the connection no longer exists",
+    "INVALID_ACCESS_TOKEN": "the saved connection was rejected", "NO_TOKEN": "the connection's key is missing", "ACCESS_NOT_GRANTED": "access to the accounts was not granted",
+    "USER_SETUP_REQUIRED": "the bank wants you to finish setup on its own site", "PRODUCTS_NOT_SUPPORTED": "the bank doesn't support what Finnamon asked for",
+    "DB_ERROR": "Finnamon couldn't save what the bank sent", "SYNC_ERROR": "the last sync failed", "ADDITIONAL_CONSENT_REQUIRED": "the bank needs a new permission from you",
+}
+
+
+def _title(name) -> str:
+    """A budget as the household would say it: stored lowercase, shown capitalized."""
+    n = str(name or "")
+    return esc(n[:1].upper() + n[1:])
+
+
 def _fix(p: dict) -> tuple[str, str]:
     """The bank's name and the reply that fixes it; when two logins share the bank, both carry whose login and the item id."""
     bank = esc(p.get("institution") or p.get("item_id"))
@@ -94,31 +132,35 @@ def render(alert: sqlite3.Row, page: bool = False) -> str:
                     + "Until then its accounts aren't updating.")
         doctor = " Run <code>finnamon doctor</code> on the Finnamon box to see what to fix; this closes by itself once the bank syncs again."
         if p.get("status") not in (None, "good"):
+            code = str(p.get("status"))
             err = esc(p.get("last_error") or "").rstrip(". ")
-            return f"🔌 <b>{esc(p.get('institution') or p.get('item_id'))} sync error:</b> {esc(p.get('status'))}." + (f" {err}." if err else "") + doctor
+            what = BANK_PROBLEMS.get(code, "the sync hit a problem")
+            return (f"🔌 <b>{esc(p.get('institution') or p.get('item_id'))} couldn't sync:</b> {what} ({esc(code)})." + (f" {err}." if err else "") + doctor)
         if p.get("source") == "manual":
-            return (f"🗂 <b>{esc(p.get('institution') or p.get('item_id'))} hasn't been imported since {esc(p.get('last_synced_at') or 'it was added')}.</b> "
+            return (f"🗂 <b>{esc(p.get('institution') or p.get('item_id'))} hasn't been imported since {when(p.get('last_synced_at')) if p.get('last_synced_at') else 'it was added'}.</b> "
                     f"Download its CSV and use Import CSV on the dashboard, or <code>finnamon import</code>.")
-        return f"🩺 <b>{esc(p.get('institution') or p.get('item_id'))} hasn't synced since {esc(p.get('last_synced_at') or 'link')}.</b>" + doctor
+        return f"🩺 <b>{esc(p.get('institution') or p.get('item_id'))} hasn't synced since {when(p.get('last_synced_at')) if p.get('last_synced_at') else 'it was linked'}.</b>" + doctor
     if k == "consent_expiring":   # raised by sync.sync_accounts, once per expiry date
         bank, fix = _fix(p)
         if page:
-            return f"⏳ <b>{bank}'s connection expires {esc(str(p.get('expires') or '')[:10])}.</b> After that date its accounts stop updating."
-        return (f"⏳ <b>{bank}'s connection expires {esc(str(p.get('expires') or '')[:10])}.</b> Reply <i>{fix}</i> and I'll send a link "
+            return f"⏳ <b>{bank}'s connection expires {day(str(p.get('expires') or '')[:10])}.</b> After that date its accounts stop updating."
+        return (f"⏳ <b>{bank}'s connection expires {day(str(p.get('expires') or '')[:10])}.</b> Reply <i>{fix}</i> and I'll send a link "
                 f"to renew it here; after that date its accounts stop updating.")
     if k == "duplicate_charge":   # the bank sends no name at all for some charges: say so, the way the anomaly line does
+        normal = "" if page else " Reply <i>it's normal</i> if it was meant."   # the README's line; the page has its own button
+        what = f"{esc(tidy(p.get('merchant')) or 'an unnamed charge')} {money(p.get('amount'))} on {acct}"
+        same = p.get("date_a") == p.get("date_b")
         if int(p.get("count") or 2) > 2:   # one alert for the whole run of repeats
-            span = f"all on {esc(p.get('date_b'))}" if p.get("date_a") == p.get("date_b") else f"{esc(p.get('date_a'))} to {esc(p.get('date_b'))}"
-            return (f"⚠️ <b>Charged {int(p['count'])} times:</b> {esc(tidy(p.get('merchant')) or 'an unnamed charge')} {money(p.get('amount'))} on {acct}, "
-                    f"{span}. Same merchant, same amount.")
-        return (f"⚠️ <b>Possible duplicate:</b> {esc(tidy(p.get('merchant')) or 'an unnamed charge')} {money(p.get('amount'))} on {acct}, "
-                f"{esc(p.get('date_a'))} and {esc(p.get('date_b'))}. Same merchant, same amount.")
+            span = f"all on {day(p.get('date_b'))}" if same else f"{day(p.get('date_a'))} to {day(p.get('date_b'))}"
+            return f"⚠️ <b>Charged {int(p['count'])} times:</b> {what}, {span}. Same merchant, same amount.{normal}"
+        span = f"both on {day(p.get('date_a'))}" if same else f"{day(p.get('date_a'))} and {day(p.get('date_b'))}"
+        return f"⚠️ <b>Possible duplicate:</b> {what}, {span}. Same merchant, same amount.{normal}"
     if k == "new_recurring":
         return (f"🔁 <b>New recurring charge:</b> {esc(tidy(p.get('merchant')) or 'an unnamed payee')} {money(p.get('amount'))} "
-                f"{esc((p.get('frequency') or '').lower())} on {acct}, first seen {esc(p.get('first_date'))}.")
+                f"{esc((p.get('frequency') or '').lower())} on {acct}, first seen {day(p.get('first_date'))}.")
     if k == "recurring_price":
         return (f"🔁 <b>{esc(tidy(p.get('merchant')) or 'A subscription')} went from {money(p.get('old_amount'))} to {money(p.get('amount'))}</b> "
-                f"on {acct}, {esc(p.get('date'))}.")
+                f"on {acct}, {day(p.get('date'))}.")
     if k == "channel_deaf":
         n = int(p.get("pending") or 0)
         return (f"🔇 <b>I stopped hearing this chat.</b> {n} message{'' if n == 1 else 's'} {'is' if n == 1 else 'are'} waiting and nothing is collecting them, "
@@ -128,8 +170,8 @@ def render(alert: sqlite3.Row, page: bool = False) -> str:
         return f"💧 <b>{acct} is at {money(p.get('available'))}</b>, below your {money(p.get('threshold'))} threshold."
     if k == "budget_pace":
         if p.get("state") == "over":
-            return f"📊 <b>{esc(p.get('budget'))} is over budget:</b> {money(p.get('spent'))} of {money(p.get('limit'))} with {int(p['days']) - int(p['day'])} days left."
-        return (f"📊 <b>{esc(p.get('budget'))} on pace to go over:</b> {money(p.get('spent'))} spent by day {esc(p.get('day'))}, "
+            return f"📊 <b>{_title(p.get('budget'))} is over budget:</b> {money(p.get('spent'))} of {money(p.get('limit'))} with {int(p['days']) - int(p['day'])} days left."
+        return (f"📊 <b>{_title(p.get('budget'))} on pace to go over:</b> {money(p.get('spent'))} spent by day {esc(p.get('day'))}, "
                 f"tracking to {money(p.get('projection'))} against your {money(p.get('limit'))} budget.")
     if k == "detector_error":
         return f"🩺 <b>Detector {esc(p.get('detector'))} failed:</b> {esc(p.get('error'))}"
@@ -148,7 +190,7 @@ def render(alert: sqlite3.Row, page: bool = False) -> str:
         if p.get("account"):
             head += f" on {acct}"
         if p.get("date"):
-            head += f", {esc(p.get('date'))}"
+            head += f", {day(p.get('date'))}"
         return f"{head}. {esc(alert['reason'] or '')}".strip()
     return f"ℹ️ {esc(k)}: <code>{esc(json.dumps(p)[:500])}</code>"
 
@@ -292,13 +334,15 @@ def quiet_line(conn: sqlite3.Connection, as_of: str) -> str:
     # untriaged candidates (triage down) and alerts whose send failed are not "nothing"
     waiting = conn.execute(f"SELECT count(*) FROM alerts WHERE (tier='anomaly' AND verdict IS NULL AND sent_at IS NULL) OR ({SENDABLE})").fetchone()[0]
     if waiting:
-        flagged = f"{waiting} alert{'' if waiting == 1 else 's'} still waiting to be checked or sent"
+        flagged = f"{waiting} alert{'' if waiting == 1 else 's'} {'is' if waiting == 1 else 'are'} still waiting to be checked or sent"
     elif sent:
         flagged = f"nothing to add to the {sent} alert{'' if sent == 1 else 's'} already sent"
     else:
         flagged = "nothing flagged"
-    return (f"{'🟡' if waiting else '🟢'} <b>{'Quiet' if waiting else 'All quiet'} this week.</b> {accts} account{'' if accts == 1 else 's'} watched, "
-            f"all synced since {esc(oldest or 'never')}; {n:,} transaction{'' if n == 1 else 's'} in the last 7 days; {flagged}.")
+    head = f"🟡 <b>A quiet week, but {flagged}.</b>" if waiting else "🟢 <b>All quiet this week.</b>"
+    tail = "" if waiting else f" {flagged[0].upper() + flagged[1:]}."
+    return (f"{head} {accts} account{'' if accts == 1 else 's'} watched, all synced by {esc(when(oldest) if oldest else 'never')}; "
+            f"{n:,} transaction{'' if n == 1 else 's'} in the last 7 days.{tail}")
 
 
 SUGGESTED_LOW_BALANCE = 500

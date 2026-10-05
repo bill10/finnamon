@@ -272,7 +272,7 @@ def test_duplicate_charge_three_identical_charges_are_one_alert(conn, tg):
     assert len(run(conn, "duplicate_charge")) == 1
     a = alerts(conn, "duplicate_charge")[0]
     assert (a["key"], a["transaction_id"], a["payload"]["count"], a["payload"]["date_a"]) == ("dup:a:c:3", "c", 3, "2026-09-17")
-    assert notify.send_pending(conn) == 1 and "Charged 3 times:</b> Shell $52.18 on Chase Checking …4821, 2026-09-17 to 2026-09-18" in tg.sent[0]["text"]
+    assert notify.send_pending(conn) == 1 and "Charged 3 times:</b> Shell $52.18 on Chase Checking …4821, Sep 17 to Sep 18" in tg.sent[0]["text"]
     assert run(conn, "duplicate_charge") == []
     txn(conn, "d", "chk", "2026-09-19", 52.18, "SHELL OIL", "Shell", "mch_shell")   # a fourth lands on a later sync: news of its own
     assert len(run(conn, "duplicate_charge")) == 1 and alerts(conn, "duplicate_charge")[-1]["payload"]["count"] == 4
