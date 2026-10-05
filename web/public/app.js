@@ -640,7 +640,7 @@ function renderBanks(s) {
   const sec = (key, name, note, rows) => {   // a native <details>: keyboard, screen reader and aria-expanded come with it
     const tot = bankTotal(rows), n = rows.length, plan = view === 'bank' ? ownerPlan(rows, members) : view === 'type' ? { rows: everyone.rows || members.length > 1, name: everyone.name } : { head: '', rows: false, name: () => '' };
     return `<details class="bank" data-key="${esc(k(key))}"${open.has(k(key)) ? ' open' : ''}><summary><svg class="ic chev" aria-hidden="true" viewBox="0 0 16 16"><path d="M6 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>` +
-      `<span class="bn">${esc(name)}${plan.head ? ` <span class="own">${esc(plan.head)}</span>` : ''}</span><span class="cnt">${esc(plural(n, 'account'))}</span><span class="bal num${tot < 0 ? ' owed' : ''}">${esc(money(tot))}</span>${note ? `<span class="note">${note}</span>` : ''}</summary>${list(rows, plan)}</details>`;
+      `<span class="bn">${esc(name)}${plan.head ? ` <span class="own">${esc(plan.head)}</span>` : ''}</span><span class="cnt">${esc(plural(n, 'account'))}</span>${rows.every(a => a.balance == null) ? '<span class="bal none" title="No balance yet">—</span>' : `<span class="bal num${tot < 0 ? ' owed' : ''}">${esc(money(tot))}</span>`}${note ? `<span class="note">${note}</span>` : ''}</summary>${list(rows, plan)}</details>`;
   };
   let html = '';
   for (const its of banks.values()) {
