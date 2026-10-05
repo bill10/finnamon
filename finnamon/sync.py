@@ -90,9 +90,10 @@ def apply_page(conn: sqlite3.Connection, item_id: str, page: dict, now: str) -> 
             for a in page["accounts"]:
                 conn.execute(_UPSERT_ACCOUNT, _account_row(a, item_id, owner))
         for t in added + modified:
-            # A posted transaction that names its pending twin replaces it.
+            # A posted transaction that names its pending twin replaces it, keeping a one-time category edit made on the pending one.
             if t.get("pending_transaction_id"):
                 conn.execute("DELETE FROM transactions WHERE transaction_id=?", (t["pending_transaction_id"],))
+                conn.execute("UPDATE OR IGNORE tx_category_override SET transaction_id=? WHERE transaction_id=?", (t["transaction_id"], t["pending_transaction_id"]))   # an edit on the posted one wins
             conn.execute(_UPSERT_TXN, _txn_row(t))
         for r in removed:
             conn.execute("DELETE FROM transactions WHERE transaction_id=?", (r["transaction_id"],))

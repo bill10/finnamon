@@ -314,6 +314,8 @@ def _remove(conn: sqlite3.Connection, item_id: str) -> dict:
 
 def _drop_rows(conn: sqlite3.Connection, account_id: str) -> None:
     conn.execute("UPDATE accounts SET mirror_of=NULL WHERE mirror_of=?", (account_id,))
+    # one-time category edits are keyed by transaction: an imported row's id is a hash of its content, so a re-import would revive them
+    conn.execute("DELETE FROM tx_category_override WHERE transaction_id IN (SELECT transaction_id FROM transactions WHERE account_id=?)", (account_id,))
     # every table keyed by account_id: the four with a FK (foreign_keys=ON makes a miss here fail loudly) plus settings and suppressions
     for table in ("balances", "transactions", "recurring", "holdings", "settings", "suppressions"):
         conn.execute(f"DELETE FROM {table} WHERE account_id=?", (account_id,))

@@ -7,7 +7,7 @@ from finnamon import config
 
 def test_fresh_db_has_schema_and_defaults(conn):
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    for t in ("items", "accounts", "transactions", "recurring", "merchant_alias", "category_override", "suppressions",
+    for t in ("items", "accounts", "transactions", "recurring", "merchant_alias", "category_override", "tx_category_override", "suppressions",
               "settings", "budgets", "alerts", "roundup_items", "feedback", "holdings", "state", "owners", "balances"):
         assert t in tables
     assert store.setting(conn, "dup_min_amount") == "10"
@@ -17,7 +17,7 @@ def test_fresh_db_has_schema_and_defaults(conn):
 def test_reopen_is_idempotent(home):
     a = store.connect()
     b = store.connect()
-    assert [r[0] for r in b.execute("SELECT name FROM schema_migrations")] == ["001_init.sql", "002_properties.sql", "003_properties_nocase.sql", "004_manual_items.sql", "005_tx_now_view.sql", "006_recurring_is_active.sql", "007_suppression_stream.sql", "008_tx_flow.sql", "009_alert_resolution.sql", "010_account_type.sql"]
+    assert [r[0] for r in b.execute("SELECT name FROM schema_migrations")] == ["001_init.sql", "002_properties.sql", "003_properties_nocase.sql", "004_manual_items.sql", "005_tx_now_view.sql", "006_recurring_is_active.sql", "007_suppression_stream.sql", "008_tx_flow.sql", "009_alert_resolution.sql", "010_account_type.sql", "011_tx_category_override.sql"]
     assert store.migrate(a) == []
 
 

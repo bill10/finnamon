@@ -137,7 +137,35 @@ def category_set(conn: sqlite3.Connection, merchant: str, category_text: str) ->
     conn.execute("INSERT INTO category_override (canonical, pfc_primary, pfc_detailed) VALUES (?,?,?) "
                  "ON CONFLICT(canonical) DO UPDATE SET pfc_primary=excluded.pfc_primary, pfc_detailed=excluded.pfc_detailed, created_at=datetime('now','localtime')",
                  (canonical, taxonomy.primary_of(code), code))
-    return {"merchant": merchant, "canonical": canonical, "category": code}
+    out = {"merchant": merchant, "canonical": canonical, "category": code}
+    pinned = conn.execute("SELECT count(*) FROM tx_category_override x JOIN tx_now t USING (transaction_id) WHERE t.canonical=?", (canonical,)).fetchone()[0]
+    if pinned:   # a one-time edit beats the rule, so those charges keep their own category
+        out["one_time_edits_kept"] = pinned
+    return out
+
+
+def tx_category_set(conn: sqlite3.Connection, transaction_id: str, category_text: str | None) -> dict:
+    """A one-time edit: this one transaction only, ahead of the merchant rule. category_text None clears it."""
+    t = conn.execute("SELECT transaction_id, date, amount, display, pending FROM tx_now WHERE transaction_id=?", (transaction_id.strip(),)).fetchone()   # a mirror's id: its twin is the one counted
+    if not t:
+        raise ValueError(f"no transaction '{transaction_id}' (ids are tx_now.transaction_id)")
+    if category_text is None:
+        n = conn.execute("DELETE FROM tx_category_override WHERE transaction_id=?", (t["transaction_id"],)).rowcount
+        code = None
+    else:
+        code = resolve_category(category_text)
+        if code in taxonomy.DETAILED:
+            raise ValueError("a transaction override needs a detailed category, e.g. FOOD_AND_DRINK_GROCERIES")
+        conn.execute("INSERT INTO tx_category_override (transaction_id, pfc_primary, pfc_detailed) VALUES (?,?,?) "
+                     "ON CONFLICT(transaction_id) DO UPDATE SET pfc_primary=excluded.pfc_primary, pfc_detailed=excluded.pfc_detailed, created_at=datetime('now','localtime')",
+                     (t["transaction_id"], taxonomy.primary_of(code), code))
+    now = conn.execute("SELECT category FROM tx_now WHERE transaction_id=?", (t["transaction_id"],)).fetchone()[0]
+    out = {"transaction_id": t["transaction_id"], "date": t["date"], "amount": t["amount"], "merchant": t["display"], "category": now}
+    if category_text is None:
+        out["cleared"] = bool(n)
+    elif t["pending"]:
+        out["note"] = "pending: the edit follows it when the bank posts it, unless the bank posts it as an unrelated new transaction"
+    return out
 
 
 def canonical_for(conn: sqlite3.Connection, merchant: str) -> str:

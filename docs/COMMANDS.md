@@ -14,6 +14,9 @@ their ids, `finnamon normal --remove <id>` deletes one. "Fine this once" is `fin
 no rule, the next one still alerts. `finnamon alerts --undo <id>` reopens either kind and removes only the rule that
 alert wrote. Each covers every alert on that alert's transaction: when two detectors fire on one charge, it is one alert
 (the other under `folded`), one message and one Dismiss.
+"Costco is groceries" is a rule, `finnamon category costco groceries`: every Costco charge, past and future. "That one
+charge was groceries" is a one-time edit of that charge only, `finnamon category --tx <transaction_id> groceries` (`--clear`
+undoes it; it wins over the rule); the assistant asks which you mean when it can't tell.
 It can start adding a bank ("add my Chase account" → `finnamon link --start` gives you the Plaid link; you
 log in, the daemon finishes), and send a broken bank's re-login link to the chat (reply "fix Chase" to a re-login or
 expiring-connection alert → `finnamon link --update <item_id> --telegram`; when two logins share a bank the alert says

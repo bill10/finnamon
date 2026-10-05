@@ -4,11 +4,12 @@
 --   transactions ──┬── accounts (mirror_of IS NULL)  ── items (first_synced_at, source: 'plaid' | 'manual')
 --                  ├── merchant_alias   (name = t.name, or t.name LIKE a %pattern; exact first, then the longest;
 --                  │                     created_at <= as_of)                              → alias_canonical
---                  ├── category_override(canonical,           created_at <= as_of)   → category, category_primary
+--                  ├── tx_category_override(transaction_id, created_at <= as_of) ┐ one-time edit first,
+--                  ├── category_override(canonical,           created_at <= as_of)   ┴ then the merchant rule → category, category_primary
 --                  └── suppressions     (kind/canonical/acct/amount, created_at <= as_of) → suppressed
 --
 -- Time-scoping every join on :as_of is what makes an alert replayable from the DB. That is the one difference from
--- the `tx_now` view (migrations/005_tx_now_view.sql, `flow` added by 008_tx_flow.sql), which every non-detector read path uses;
+-- the `tx_now` view (migrations/005_tx_now_view.sql, `flow` added by 008_tx_flow.sql, the one-time edit by 011), which every non-detector read path uses;
 -- KEEP THE TWO IN STEP.
 WITH
 g AS (                                    -- global settings: (SELECT value FROM g WHERE key='x')
@@ -29,9 +30,9 @@ tx0 AS (
     t.pfc_primary, t.pfc_detailed, t.alias_canonical,
     COALESCE(t.merchant_entity_id, t.alias_canonical, t.merchant_name, t.name)    AS canonical,
     COALESCE(t.alias_canonical, t.merchant_name, t.name)                          AS display,
-    COALESCE(o.pfc_detailed, t.pfc_detailed)                                      AS category,
-    COALESCE(o.pfc_primary,  t.pfc_primary)                                       AS category_primary,
-    o.canonical IS NOT NULL                                                       AS overridden,
+    COALESCE(x.pfc_detailed, o.pfc_detailed, t.pfc_detailed)                     AS category,
+    COALESCE(x.pfc_primary,  o.pfc_primary,  t.pfc_primary)                      AS category_primary,
+    x.transaction_id IS NOT NULL OR o.canonical IS NOT NULL                       AS overridden,
     EXISTS (
       SELECT 1 FROM sup
       WHERE (sup.kind IS NULL OR sup.kind = '__KIND__')
@@ -52,6 +53,9 @@ tx0 AS (
   LEFT JOIN category_override o
          ON o.canonical = COALESCE(t.merchant_entity_id, t.alias_canonical, t.merchant_name, t.name)
         AND o.created_at <= :as_of
+  LEFT JOIN tx_category_override x
+         ON x.transaction_id = t.transaction_id
+        AND x.created_at <= :as_of
 ),
 tx AS (                                   -- tx0 plus `flow` (migrations/008_tx_flow.sql: what each value means; the CASE is a verbatim copy)
   SELECT transaction_id, account_id, item_id, owner, account_type, account_subtype, account_name, mask,

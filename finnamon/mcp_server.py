@@ -28,7 +28,7 @@ def build():
     def search_transactions(text: str = "", days: int = 90, limit: int = 50) -> str:
         """Transactions matching text (merchant or raw name) in the last N days."""
         rows = query.run(
-            "SELECT date, amount, display merchant, category, account_name account FROM tx_now "
+            "SELECT transaction_id, date, amount, display merchant, category, account_name account FROM tx_now "
             "WHERE date >= date('now', ?) AND lower(COALESCE(display,'')||' '||COALESCE(merchant_name,'')||' '||COALESCE(name,'')) LIKE ? "
             "ORDER BY date DESC LIMIT ?", params=(f"-{int(days)} days", f"%{text.lower()}%", int(limit)))
         return query.to_json(rows)
