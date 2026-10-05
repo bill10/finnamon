@@ -92,7 +92,7 @@ def budget_set(conn: sqlite3.Connection, name: str, amount: float, categories: l
                if len(cs) > 1 or taxonomy.guessed(t, cs[0])]
     if guesses:
         out["guessed"] = "; ".join(guesses) + (" (from the budget's name)" if not categories else "") + \
-            ". If that is not what it should count, set it with --category (repeatable) or --merchant"
+            ". If that is not what it should count, pick its categories or merchants (--category, repeatable, or --merchant)"
     if not keep:   # another budget counting the same charges: both would alert on them
         both = MATCH.replace(":bid", ":other")
         mine = {(s["kind"], s["value"]) for s in conn.execute("SELECT kind, value FROM budget_selectors WHERE budget_id=?", (bid,))}
@@ -106,7 +106,7 @@ def budget_set(conn: sqlite3.Connection, name: str, amount: float, categories: l
         if overlaps:
             out["overlaps"] = overlaps
             out["warning"] = ("these charges are also in " + ", ".join(f"the {o['budget']} budget ({o['charges']} past charges)" for o in overlaps)
-                              + ": each budget counts them and alerts on them; narrow one with --category or --merchant if they should count once")
+                              + ": each budget counts them and alerts on them; narrow one's categories or merchants (--category, --merchant) if they should count once")
     if merchants:
         one = MERCHANT.replace(":v", "s.value").replace(":l", "s.label")
         out["matches"] = {m: conn.execute(f"SELECT count(*) FROM tx_now t WHERE pending=0 AND {SPEND} AND EXISTS (SELECT 1 FROM budget_selectors s "

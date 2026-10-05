@@ -65,6 +65,25 @@ test('names reach the CLI after a -- so they can never be options; a merchant se
   });
 });
 
+test('a budget\'s picks and a transaction\'s category reach the CLI as values, never options', async () => {
+  await withApp(async ({ base, post, calls }) => {
+    assert.equal((await post('/api/budget', { name: 'eating out', amount: 400, categories: ['Restaurant', ' FOOD_AND_DRINK_COFFEE '], merchants: ['-rf'] })).status, 200);
+    assert.deepEqual(calls.at(-1), ['budget', 'set', '--category=Restaurant', '--category=FOOD_AND_DRINK_COFFEE', '--merchant=-rf', '--', 'eating out', '400']);
+    for (const bad of [{ categories: 'x' }, { categories: [''] }, { merchants: [3] }, { merchants: ['x'.repeat(81)] }, { categories: Array(41).fill('x') }])
+      assert.equal((await post('/api/budget', { name: 'x', amount: 5, ...bad })).status, 400, JSON.stringify(bad));
+    assert.equal((await post('/api/tx/category', { transaction_id: 'import:abc', category: 'Groceries' })).status, 200);
+    assert.deepEqual(calls.at(-1), ['category', '--tx=import:abc', '--', 'Groceries']);
+    assert.equal((await post('/api/tx/category', { transaction_id: 'tx1', category: 'transfer', every: true })).status, 200);
+    assert.deepEqual(calls.at(-1), ['category', '--tx=tx1', '--every', '--', 'transfer']);
+    for (const bad of [{ transaction_id: 'a b', category: 'x' }, { transaction_id: 'tx1' }, { transaction_id: 'tx1', category: 'x'.repeat(81) }])
+      assert.equal((await post('/api/tx/category', bad)).status, 400, JSON.stringify(bad));
+    await fetch(`${base}/api/categories`);
+    assert.deepEqual(calls.at(-1), ['category', 'list', '--json']);
+    await fetch(`${base}/api/summary`);
+    assert.ok(calls.some(c => c[0] === 'budget' && c[1] === 'overall'), 'the Overall line counts a shared charge once');
+  });
+});
+
 test('the board reaches the page as a list, whatever the file holds', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'finnamon-board-')), spec = join(dir, 'current.json');
   const app = buildApp({ token: () => KEY, cli: async () => ({}), allowHost: () => true, spec });

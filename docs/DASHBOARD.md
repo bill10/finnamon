@@ -4,7 +4,9 @@ A local page in Finnamon's own colours: net worth as a figure with its monthly c
 liabilities with each one's share (click the Property row to state what the house or the car is worth) beside a
 3, 6 or 12-month trend, an **Add account** menu (Link account: Plaid Link runs in
 the page, the bank's login opens in the same tab, nothing to copy; or Import CSV for a bank Plaid can't reach, a window that adds the manual account and takes its file, with a Fetch by AI option that runs the browser import in its own session, shown as an Import tab in the intercom), budgets as an overall bar plus the categories
-that matter (a line under one says what it covers when its name doesn't: several categories, a merchant, or `fixed`) with a **Manage** mode to change, add or remove them, the alerts sent to the household lately, or about
+that matter (a line under one says what it covers when its name doesn't: several categories, a merchant, or `fixed`) with a **Manage** mode to change, add or remove them (each shows what it counts; its pencil opens a picker of categories
+from the taxonomy and merchants the household has seen; the Overall bar counts a charge two budgets share once, and an
+"Uncategorized (N)" line opens the transactions with no category, an import's mostly, which count toward no budget), the alerts sent to the household lately, or about
 to be (open or unsent, each with **It's normal** and **Dismiss**, except a bank that needs a re-login or whose connection
 is expiring, which gets **Reconnect** in place of It's normal, as it does beside "needs a new login" in the accounts list:
 it opens Plaid's login page for that bank in a new tab, and within a minute of the login Finnamon syncs the bank, resolves
@@ -61,3 +63,8 @@ and running it again changes nothing; `--off` takes the names back out and stops
 It ends with a QR code: scan it with the phone's camera and the dashboard opens there, logged in. The code in it is a one-time pairing code, not the key: it lets in one device, within 5 minutes, only on the tailnet name and never over Funnel, and the page swaps it for the key's cookie (the address is printed under the QR for a phone without a camera). Run `finnamon remote` again for the next phone. `finnamon open --host <machine>.<tailnet>.ts.net` still prints an address with the key itself, to open there once (hand it over privately, never through the household chat: every member and the assistant read that). The page keeps the key as a cookie for 30 days, or until `finnamon web token --rotate`; after that, a fresh QR code. The address bar forgets the key after the redirect; what a browser keeps of an address you typed or pasted is its own, so on a phone paste it once into a private window if that matters to you. The key is
 the only thing the tailnet is asked for: a `Tailscale-User-Login` header is not trusted, because to this server a
 `tailscale serve` proxy and any other local process both arrive from loopback and either could set it. Never a public port.
+
+**Change category.** A transaction row in any table panel (recent, large, uncategorized, or one the assistant drew that
+carries `transaction_id`) opens a picker: this charge only (`finnamon category --tx`) or every charge from its merchant
+(the rule, `--tx … --every`). The category column shows the detailed category ("restaurant", not "food and drink"). After a
+CSV import with rows that have no category, the page says how many and opens the uncategorized table; nothing is guessed.

@@ -20,7 +20,18 @@ undoes it; it wins over the rule). `finnamon category costco --clear` deletes th
 A budget covers one or more categories and merchants: `finnamon budget set dining 400 --category restaurants
 --category "fast food" --category coffee`, `finnamon budget set "water and trash" 90 --merchant "Seattle Public Utilities"
 --merchant Recology` (each flag repeats; a merchant is any name its charges show, as for `finnamon category`, and a name with no charge is refused with suggestions; either one given replaces all of the budget's categories and merchants; a charge
-several of them match counts once; two budgets may share a category). The mortgage counts (the checking-side payment, once,
+several of them match counts once; two budgets may share a category, and `budget set` then warns (`overlaps`) since both
+alert on those charges; the dashboard's Overall counts such a charge once). Every `budget set` says what it counts
+(`counts`, as people read it); a new budget named without `--category` takes its name as the category and says so
+(`guessed`) when the name was only read as one ("dining" → Restaurant, "utilities" → every utility but rent). A name that is
+no category ("subscriptions", "kids", "car insurance") is refused with what it might mean: name its categories or merchants.
+`finnamon alias --list` shows every alias with the transactions it covers today and `finnamon alias --remove "<name>"`
+deletes one; an alias whose raw name or pattern matches no transaction is refused with the raw names it might mean.
+A bank's CSV has no categories: `finnamon import` says how many new rows have none (`uncategorized`, by merchant), and
+`finnamon category --uncategorized` lists them all; categorize them by merchant (a rule each) or by charge (`--tx`).
+`finnamon category --tx <transaction_id> <category> --every` writes the rule for that charge's merchant (the dashboard's
+"Every charge from …"). `finnamon threshold "<account>" <amount>` takes a checking or savings account (a card's or a
+brokerage's could never fire), named as `finnamon account list` shows it or by its last four digits. The mortgage counts (the checking-side payment, once,
 even when the bank filed it as a transfer) toward a budget on the mortgage category (`LOAN_PAYMENTS_MORTGAGE_PAYMENT`, or all
 of `LOAN_PAYMENTS`) or on its merchant, and never toward any other category; transfers and card payments never count.
 Pace counts the mortgage, and a charge of a monthly or yearly bill or subscription Plaid sees as recurring (the same

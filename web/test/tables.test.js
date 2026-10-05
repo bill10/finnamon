@@ -44,3 +44,16 @@ test('tableHtml: a hand-edited entry with null rows or columns draws what it can
   assert.ok(html.includes('>x</td>'));
   assert.ok(tableHtml({ title: 't', table: { columns: [] }, data: { values: { a: 1 } } }, 2026).includes('<tbody></tbody>'));
 });
+
+test('tableHtml: a row with its transaction_id opens the category picker; an escaped id, the category cell its button', () => {
+  const html = tableHtml({ title: 't', table: { columns: [{ field: 'merchant', label: 'Merchant', format: 'text' }, { field: 'category', label: 'Category', format: 'text' }] },
+    data: { values: [{ merchant: 'HSBC', category: 'uncategorized', transaction_id: 'import:"x' }, { merchant: 'Nopa', category: 'restaurant' }] } }, 2026);
+  assert.ok(html.includes('<tr class="tx" data-tx="import:&quot;x">'));
+  assert.ok(html.includes('<td class="none" title="uncategorized"><button class="recat" data-recat="import:&quot;x" aria-label="Change category: uncategorized">uncategorized<svg'));
+  assert.ok(html.includes('<tr><td title="Nopa">Nopa</td><td title="restaurant">restaurant</td></tr>'), 'a row without an id is plain');
+});
+
+test('tableHtml: with no category column the merchant cell is the row\'s button', () => {
+  const html = tableHtml({ title: 't', table: { columns: [{ field: 'merchant', label: 'Merchant', format: 'text' }] }, data: { values: [{ merchant: 'HSBC', transaction_id: 'x1' }] } }, 2026);
+  assert.ok(html.includes('<button class="recat" data-recat="x1" aria-label="Change category of: HSBC">HSBC<svg'));
+});
