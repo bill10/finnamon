@@ -2,6 +2,8 @@
 import json
 import sqlite3
 
+import pytest
+
 from finnamon import budgets, cli, detect, store
 from tests.conftest import AS_OF, seed, txn
 
@@ -29,6 +31,11 @@ def test_mortgage_budget_counts_the_checking_payment_once(conn):
         b = budgets.budget_list(conn, AS_OF)[0]
         assert (b["spent"], b["pace"]) == (3200, 3200)
     assert [a["key"] for a in pace_alerts(conn)] == ["budget:1:2026-09:over"]   # spent == limit; the detector reads the same rows
+    # October: Plaid files the payment as a transfer, but it pairs with the loan account, so flow is 'mortgage' and it still counts
+    txn(conn, "pay2", "chk", "2026-10-01", 3200, "LOAN SERVICER WEB PMT", None, None, "TRANSFER_OUT", "TRANSFER_OUT_ACCOUNT_TRANSFER")
+    txn(conn, "loan2", "mtg", "2026-10-01", -3200, "PAYMENT RECEIVED", None, None, "LOAN_PAYMENTS", "LOAN_PAYMENTS_MORTGAGE_PAYMENT")
+    assert budgets.budget_list(conn, "2026-10-05 12:00:00")[0]["spent"] == 3200
+    assert pace_alerts(conn, "2026-10-05 12:00:00")[-1]["key"] == "budget:1:2026-10:over"
 
 
 def test_recurring_bill_is_counted_once_not_projected(conn):
@@ -43,6 +50,11 @@ def test_recurring_bill_is_counted_once_not_projected(conn):
     # a one-off at the same merchant far from the stream's amount stays variable
     txn(conn, "x", "chk", "2026-09-05", 400, "LITTLE SPROUTS", "Little Sprouts", None, "GENERAL_SERVICES", "GENERAL_SERVICES_CHILDCARE")
     assert budgets.budget_list(conn, "2026-09-06 12:00:00")[0]["recurring"] == 1500
+    # a stream Plaid first saw after as_of was unknown then: budget list --as-of and the detector both project the bill
+    conn.execute("UPDATE recurring SET first_seen_at='2026-09-10 06:00:00'")
+    conn.execute("DELETE FROM transactions WHERE transaction_id='x'"); conn.execute("DELETE FROM alerts")
+    assert budgets.budget_list(conn, "2026-09-06 12:00:00")[0]["recurring"] == 0
+    assert pace_alerts(conn, "2026-09-06 12:00:00")[0]["projection"] == budgets.budget_list(conn, "2026-09-06 12:00:00")[0]["pace"] == 7650
 
 
 def test_fixed_budget_is_never_projected(conn):
@@ -97,3 +109,37 @@ def test_migration_moves_each_budgets_category_into_a_selector():
         db.execute(stmt)
     assert db.execute("SELECT budget_id, kind, value FROM budget_selectors").fetchall() == [(1, "category", "FOOD_AND_DRINK_GROCERIES")]
     assert db.execute("SELECT fixed FROM budgets").fetchone() == (0,)
+
+
+# Value: protects=the dashboard's covers line (taxonomy.label: detailed code -> its leaf, primary -> itself, merchants as typed); fails_when=label drops the primary prefix wrongly or covers loses merchants/order; why_new=nothing asserted covers or taxonomy.label; seam=none
+def test_covers_labels_categories_for_people_then_merchants(conn):
+    seed(conn)
+    b = budgets.budget_set(conn, "dining", 300, ["FOOD_AND_DRINK_COFFEE", "FOOD_AND_DRINK"], ["Blue Bottle"])
+    assert b["covers"] == ["Coffee", "Food and drink", "Blue Bottle"]
+
+
+# Value: protects=selectors given replace the old ones, and a blank merchant is refused before anything is written; fails_when=budget_set appends instead of DELETE-then-insert, or the blank check moves after the write; why_new=existing tests only set selectors once or keep them; seam=none
+def test_new_selectors_replace_old_and_blank_merchant_is_refused(conn):
+    seed(conn)
+    txn(conn, "r", "cc", "2026-09-10", 40, "CHIPOTLE", "Chipotle", "mch_chip", "FOOD_AND_DRINK", "FOOD_AND_DRINK_RESTAURANT")
+    txn(conn, "c", "cc", "2026-09-11", 6, "BLUE BOTTLE", "Blue Bottle", "mch_bb", "FOOD_AND_DRINK", "FOOD_AND_DRINK_COFFEE")
+    budgets.budget_set(conn, "dining", 300, "restaurant")
+    b = budgets.budget_set(conn, "dining", 300, merchants=["Blue Bottle"])
+    assert (b["category"], b["categories"], b["merchants"]) == (None, [], ["Blue Bottle"])
+    assert budgets.budget_list(conn, AS_OF)[0]["spent"] == 6
+    with pytest.raises(ValueError):
+        budgets.budget_set(conn, "dining", 300, merchants=["  "])
+    assert budgets.budget_list(conn, AS_OF)[0]["merchants"] == ["Blue Bottle"]
+
+
+# Value: protects=the dashboard's limit edit (`budget set -- name amount`, no flags) keeps merchants and fixed; --no-fixed clears it; fails_when=--fixed defaults to False or a None --category/--merchant is read as "clear"; why_new=the CLI test only covers the all-flags path; seam=none
+def test_cli_limit_edit_keeps_selectors_and_fixed(home, conn, capsys):
+    seed(conn)
+    cli.main(["budget", "set", "daycare", "1500", "--merchant", "Little Sprouts", "--fixed"])
+    capsys.readouterr()
+    cli.main(["budget", "set", "--", "daycare", "1600"])
+    out = json.loads(capsys.readouterr().out)
+    assert (out["monthly_limit"], out["merchants"], out["fixed"]) == (1600, ["Little Sprouts"], True)
+    cli.main(["budget", "set", "daycare", "1600", "--no-fixed"])
+    out = json.loads(capsys.readouterr().out)
+    assert (out["merchants"], out["fixed"]) == (["Little Sprouts"], False)

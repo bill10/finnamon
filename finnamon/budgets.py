@@ -96,12 +96,14 @@ def budget_list(conn: sqlite3.Connection, as_of: str | None = None) -> list[dict
 # not money in. The mortgage counts, once: its checking-side payment is 'mortgage', the loan account's mirror 'skipped'.
 SPEND = "flow IN ('expense','refund','mortgage')"
 # KEEP IN STEP WITH detectors/rules/budget_pace.sql. A budget counts a transaction any of its selectors matches, once.
-MATCH = ("EXISTS (SELECT 1 FROM budget_selectors s WHERE s.budget_id = ? AND ((s.kind = 'category' AND s.value IN (t.category, t.category_primary)) "
+# A payment paired with the mortgage loan is a mortgage whatever Plaid filed it under (often a transfer).
+MATCH = ("EXISTS (SELECT 1 FROM budget_selectors s WHERE s.budget_id = :bid AND ((s.kind = 'category' AND (s.value IN (t.category, t.category_primary) "
+         "OR (t.flow = 'mortgage' AND s.value IN ('LOAN_PAYMENTS_MORTGAGE_PAYMENT', 'LOAN_PAYMENTS')))) "
          "OR (s.kind = 'merchant' AND s.value = t.canonical)))")
 # A charge of one of Plaid's recurring streams (a bill, a subscription): pace counts it once, never projects it.
 # Same merchant and within 25% of the stream's amount, so a one-off at a merchant that also bills monthly stays variable.
 # ponytail: merchant + amount, not Plaid's transaction_ids per stream (not stored); store them if this misfiles.
-RECURRING = ("EXISTS (SELECT 1 FROM recurring r WHERE r.direction = 'outflow' "
+RECURRING = ("EXISTS (SELECT 1 FROM recurring r WHERE r.direction = 'outflow' AND r.first_seen_at <= :as_of "
              "AND (r.merchant_entity_id = t.merchant_entity_id OR lower(r.merchant_name) = lower(t.merchant_name) OR r.description = t.name) "
              "AND (abs(t.amount - r.avg_amount) <= 0.25 * abs(r.avg_amount) OR abs(t.amount - r.last_amount) <= 0.25 * abs(r.last_amount)))")
 
@@ -110,9 +112,9 @@ def month_to_date(conn: sqlite3.Connection, budget_id: int, as_of: str) -> tuple
     """(spent, the part of it that is recurring charges)."""
     r = conn.execute(
         f"SELECT COALESCE(SUM(amount),0), COALESCE(SUM(CASE WHEN amount > 0 AND {RECURRING} THEN amount END),0) FROM tx_now t "
-        "WHERE pending=0 AND date >= date(?, 'start of month') AND date <= date(?) "
+        "WHERE pending=0 AND date >= date(:as_of, 'start of month') AND date <= date(:as_of) "
         f"AND {SPEND} AND {MATCH}",
-        (as_of, as_of, budget_id)).fetchone()
+        {"as_of": as_of, "bid": budget_id}).fetchone()
     return float(r[0] or 0), float(r[1] or 0)
 
 

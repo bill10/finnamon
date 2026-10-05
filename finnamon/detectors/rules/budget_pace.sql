@@ -18,7 +18,9 @@ spend AS (
   LEFT JOIN tx t ON t.date >= month.start AND t.date <= date(:as_of) AND t.pending = 0
                 AND t.flow IN ('expense','refund','mortgage')   -- budgets.SPEND
                 AND EXISTS (SELECT 1 FROM budget_selectors s WHERE s.budget_id = b.id     -- budgets.MATCH: any selector, counted once
-                              AND ((s.kind = 'category' AND s.value IN (t.category, t.category_primary)) OR (s.kind = 'merchant' AND s.value = t.canonical)))
+                              AND ((s.kind = 'category' AND (s.value IN (t.category, t.category_primary)
+                                   OR (t.flow = 'mortgage' AND s.value IN ('LOAN_PAYMENTS_MORTGAGE_PAYMENT', 'LOAN_PAYMENTS'))))   -- paired with the loan, whatever Plaid filed it under
+                                OR (s.kind = 'merchant' AND s.value = t.canonical)))
   WHERE b.active = 1
   GROUP BY b.id
 ),
