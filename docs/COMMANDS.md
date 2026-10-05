@@ -16,7 +16,7 @@ alert wrote. Each covers every alert on that alert's transaction: when two detec
 (the other under `folded`), one message and one Dismiss.
 "Costco is groceries" is a rule, `finnamon category costco groceries`: every Costco charge, past and future. "That one
 charge was groceries" is a one-time edit of that charge only, `finnamon category --tx <transaction_id> groceries` (`--clear`
-undoes it; it wins over the rule); the assistant asks which you mean when it can't tell.
+undoes it; it wins over the rule). `finnamon category costco --clear` deletes the rule (charges fall back to the bank's category; one-time edits stay) and `finnamon category --rules` lists the rules and one-time edits; the assistant asks which you mean when it can't tell.
 It can start adding a bank ("add my Chase account" → `finnamon link --start` gives you the Plaid link; you
 log in, the daemon finishes), and send a broken bank's re-login link to the chat (reply "fix Chase" to a re-login or
 expiring-connection alert → `finnamon link --update <item_id> --telegram`; when two logins share a bank the alert says

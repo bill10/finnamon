@@ -1569,8 +1569,17 @@ def cmd_category(a) -> None:
         except (budgets.ResolveError, ValueError) as e:
             die(str(e))
         return
-    if a.merchant is None or a.clear:
-        die("usage: finnamon category <merchant> <category> | --tx <transaction_id> <category> | list | resolve <text>")
+    if a.rules:
+        if a.merchant or a.category or a.clear:
+            die("usage: finnamon category --rules")
+        out(budgets.category_rules(conn)); return
+    if a.clear:
+        if not a.merchant or a.category or a.merchant in ("list", "resolve"):
+            die("usage: finnamon category <merchant> --clear")
+        _triage_read_only()
+        out(budgets.category_clear(conn, a.merchant)); return
+    if a.merchant is None:
+        die("usage: finnamon category <merchant> <category> | <merchant> --clear | --rules | --tx <transaction_id> <category> | list | resolve <text>")
     if a.merchant == "list":
         print(taxonomy.listing()); return
     if a.merchant == "resolve":
@@ -1842,7 +1851,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sp.add_parser("threshold"); s.add_argument("account"); s.add_argument("amount", type=float); s.set_defaults(fn=cmd_threshold)
     s = sp.add_parser("settings"); s.add_argument("action", choices=["list", "get", "set"], nargs="?", default="list"); s.add_argument("key", nargs="?"); s.add_argument("value", nargs="?"); s.add_argument("--account"); s.add_argument("--ops", action="store_true", help="operational keys (daemon interval, timeouts); not for Claude"); s.set_defaults(fn=cmd_settings)
     s = sp.add_parser("category", help="<merchant> <category> (a rule: every past and future charge) | --tx <transaction_id> <category> (one charge, a one-time edit; --clear undoes it) | list | resolve <text>")
-    s.add_argument("merchant", nargs="?"); s.add_argument("category", nargs="?"); s.add_argument("--tx", metavar="TRANSACTION_ID"); s.add_argument("--clear", action="store_true"); s.set_defaults(fn=cmd_category)
+    s.add_argument("merchant", nargs="?"); s.add_argument("category", nargs="?"); s.add_argument("--tx", metavar="TRANSACTION_ID"); s.add_argument("--clear", action="store_true"); s.add_argument("--rules", action="store_true"); s.set_defaults(fn=cmd_category)
     s = sp.add_parser("alias", help="raw bank string -> canonical merchant; a %% makes it a pattern (%% any run of characters, then _ one; every match becomes one merchant)"); s.add_argument("name"); s.add_argument("canonical"); s.set_defaults(fn=cmd_alias)
     s = sp.add_parser("normal", help="suppress a pattern. No --kind = every alert kind except recurring_changed (a merchant charging is normal; its subscription "
                      "changing or stopping is still news). --alert on a recurring_changed alert acknowledges that one stream. --list shows ids; --remove ID deletes one"); s.add_argument("merchant", nargs="?"); s.add_argument("--kind"); s.add_argument("--account"); s.add_argument("--max-amount", type=float)

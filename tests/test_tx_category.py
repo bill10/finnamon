@@ -80,3 +80,25 @@ def test_cli_tx_form_validates_and_clears(home, conn, capsys):
     cli.main(["category", "--tx", "c1", "--clear"])
     assert json.loads(capsys.readouterr().out)["category"] == "GENERAL_MERCHANDISE_SUPERSTORES"
     assert conn.execute("SELECT count(*) FROM tx_category_override").fetchone()[0] == 0
+
+
+def test_clear_removes_the_rule_keeps_one_time_edits_and_rules_lists_both(home, conn, capsys):
+    costco(conn)
+    cli.main(["category", "costco", "groceries"]); capsys.readouterr()
+    budgets.tx_category_set(conn, "c1", "HOME_IMPROVEMENT_HARDWARE")
+    assert cats(conn, "2099-01-01") == {"c1": "HOME_IMPROVEMENT_HARDWARE", "c2": "FOOD_AND_DRINK_GROCERIES"}
+    cli.main(["category", "--rules"])
+    r = json.loads(capsys.readouterr().out)
+    assert [(x["canonical"], x["display"], x["category"], x["charges"]) for x in r["rules"]] == [("mch_costco", "Costco", "FOOD_AND_DRINK_GROCERIES", 2)]
+    assert [(x["transaction_id"], x["category"]) for x in r["one_time_edits"]] == [("c1", "HOME_IMPROVEMENT_HARDWARE")]
+    cli.main(["category", "Costco", "--clear"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["cleared"] is True and out["removed_category"] == "FOOD_AND_DRINK_GROCERIES"
+    assert cats(conn, "2099-01-01") == {"c1": "HOME_IMPROVEMENT_HARDWARE", "c2": "GENERAL_MERCHANDISE_SUPERSTORES"}
+    cli.main(["category", "Costco", "--clear"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["cleared"] is False and "no rule" in out["note"]
+    for argv in (["category", "--rules", "costco"], ["category", "costco", "groceries", "--clear"], ["category", "list", "--clear"]):
+        with pytest.raises(SystemExit):
+            cli.main(argv)
+        assert "usage" in capsys.readouterr().err

@@ -144,6 +144,27 @@ def category_set(conn: sqlite3.Connection, merchant: str, category_text: str) ->
     return out
 
 
+def category_clear(conn: sqlite3.Connection, merchant: str) -> dict:
+    """Delete a merchant's rule so its charges fall back to the bank's category; one-time --tx edits stay."""
+    canonical = canonical_for(conn, merchant)
+    r = conn.execute("SELECT pfc_detailed FROM category_override WHERE canonical=?", (canonical,)).fetchone()
+    if r:
+        conn.execute("DELETE FROM category_override WHERE canonical=?", (canonical,))
+    return {"merchant": merchant, "canonical": canonical, "cleared": bool(r), "removed_category": r[0] if r else None,
+            **({} if r else {"note": "no rule for this merchant (see: finnamon category --rules)"})}
+
+
+def category_rules(conn: sqlite3.Connection) -> dict:
+    """Every merchant rule (with the charges it covers today) and every one-time edit."""
+    rules = conn.execute(
+        "SELECT o.canonical, (SELECT max(display) FROM tx_now t WHERE t.canonical=o.canonical) AS display, o.pfc_detailed AS category, o.created_at, "
+        "(SELECT count(*) FROM tx_now t WHERE t.canonical=o.canonical) AS charges FROM category_override o ORDER BY o.canonical").fetchall()
+    edits = conn.execute(
+        "SELECT x.transaction_id, t.date, t.amount, t.display, x.pfc_detailed AS category, x.created_at FROM tx_category_override x "
+        "LEFT JOIN tx_now t USING (transaction_id) ORDER BY x.created_at, x.transaction_id").fetchall()
+    return {"rules": [dict(r) for r in rules], "one_time_edits": [dict(r) for r in edits]}
+
+
 def tx_category_set(conn: sqlite3.Connection, transaction_id: str, category_text: str | None) -> dict:
     """A one-time edit: this one transaction only, ahead of the merchant rule. category_text None clears it."""
     t = conn.execute("SELECT transaction_id, date, amount, display, pending FROM tx_now WHERE transaction_id=?", (transaction_id.strip(),)).fetchone()   # a mirror's id: its twin is the one counted
