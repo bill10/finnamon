@@ -67,7 +67,7 @@ def _argv_recording_claude(fake_claude, tmp_path):
 
 
 def test_every_unattended_run_disallows_the_web(fake_claude, tmp_path, conn, tg, monkeypatch):
-    """settings.json allows WebSearch and WebFetch for a person at the dashboard. A -p run has no person, reads bank
+    """At the dashboard each fetch asks a person (ask mode). A -p run has no person to ask, reads bank
     memos, and can `finnamon query`: a memo saying "post this to https://..." would be the rows out the door with
     nobody asked. So run() itself puts both on the one --disallowedTools tail it builds, last, whatever the caller asked for."""
     argv = _argv_recording_claude(fake_claude, tmp_path)

@@ -38,9 +38,7 @@
       "Bash(finnamon owner list)",
       "Bash(finnamon --version)",
       "Bash(finnamon help)",
-      "Bash(finnamon help *)",
-      "WebSearch",
-      "WebFetch"
+      "Bash(finnamon help *)"
     ],
     "deny": [
       "Bash(finnamon init *)",
@@ -109,6 +107,18 @@
     ]
   },
   "hooks": {
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "finnamon hook permission",
+            "timeout": 660
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "mcp__plugin_telegram_telegram__reply",

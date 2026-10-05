@@ -271,24 +271,24 @@ export function guardKey(ws, token = webToken) {
 // ---- the household's Claude Code session ------------------------------------------------------------------------
 
 export function claudeArgs(inbound, session = null) {
-  // dontAsk: allow-listed commands only, no permission prompts anywhere (the Telegram plugin would relay them to phones).
-  const args = ['--permission-mode', 'dontAsk'];
+  // Ask mode (Claude Code's default, named so a person's own defaultMode cannot change it): the bundle's allow list runs
+  // unasked, its deny list is refused outright, and anything else (the web, other Bash, reading a file) shows a dialog in
+  // the terminal. When the turn came from Telegram, the bundle's PermissionRequest hook puts the same request in the chat
+  // with Allow / Deny (finnamon/approval.py); the first answer wins. Channel mode stays on dontAsk: the plugin would relay
+  // every dialog to paired phones with no household check, and that mode is on its way out.
+  const args = ['--permission-mode', inbound === 'channel' ? 'dontAsk' : 'default'];
   // The household's session outlives this process. --session-id mints it the first time and is refused ever after
   // ("already in use"); --resume picks it back up. In channel mode this is the session Telegram talks to as well, so a
   // fresh one would cost the chat its context too, not just the page its scrollback.
   if (session) args.push(...(session.created ? ['--resume', session.id] : ['--session-id', session.id]));
-  // Channel mode makes this session the phone's reader too: messages arrive with nobody at the dashboard, and they lead
-  // it to bank memos, text the other party to the transaction wrote. So the web goes, the way it is gone from every
-  // `claude -p` (claude_runner.UNATTENDED_DISALLOWED); the cost is that a property lookup then needs daemon mode or a
-  // `claude --strict-mcp-config` at a terminal in the assistant directory.
+  // Channel mode makes this session the phone's reader with no dialog anyone sees, and it reads bank memos, text the other
+  // party to the transaction wrote. So the web goes, the way it is gone from every `claude -p` (claude_runner.UNATTENDED_DISALLOWED).
+  // Session mode keeps it: every fetch and search asks first, naming the site, at the dashboard and on the phone.
   if (inbound === 'channel') args.push('--channels', 'plugin:telegram@claude-plugins-official', '--disallowedTools', 'WebSearch', 'WebFetch');
-  // Session mode: the daemon types each phone message into this session (createRelay in talk.js), so it reads bank memos
-  // with nobody at the dashboard just the same, and loses the web the same way; it needs no plugin.
-  if (inbound === 'session') args.push('--disallowedTools', 'WebSearch', 'WebFetch');
   // Outside channel mode the daemon is the bot's one reader. The Telegram plugin, enabled anywhere in the person's Claude
   // Code config, would start in this session too and long-poll the same bot: 409s, and the messages go to it instead of
   // the relay. So the seal every other claude Finnamon spawns carries (claude_runner.run): no MCP server, and only the
-  // assistant directory's own settings, so no plugin is enabled at all. Before the variadic --disallowedTools tail.
+  // assistant directory's own settings, so no plugin is enabled at all.
   if (inbound !== 'channel') args.splice(2, 0, '--setting-sources', 'project', '--strict-mcp-config');
   return args;
 }
@@ -380,8 +380,11 @@ export function createSession({ spawn = spawnPty, inbound = 'daemon', cmd = conf
   // ("❯" prompt), asking something, or has just finished a reply. Simplified from agent-007's detectState.
   function assess() {
     if (session.stopped || !session.pty) return setState('DOWN');
-    if (Date.now() - session.lastOutputAt < 2500) return setState('WORKING');
     const line = session.lastLine;
+    // A dialog (a permission prompt, a question) ends on "Esc to cancel", and is one even while the title spinner keeps
+    // output flowing: nothing may be typed into it, since a relayed or spoken line's Enter would pick its first option, Yes.
+    if (/Esc\s*to\s*cancel/i.test(line)) return setState('QUESTION');
+    if (Date.now() - session.lastOutputAt < 2500) return setState('WORKING');
     if (/\(y\/n\)|\[Y\/n\]|Do\s*you\s*want\s*to/i.test(line)) return setState('QUESTION');
     setState('WAITING');
   }
@@ -579,7 +582,7 @@ export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon',
 
   // Telegram through this session (inbound=session): the daemon's hand-off, one phone message in, its reply out. The bearer
   // key only (the daemon reads the same web-token file), never the page's cookie: a page has nothing to relay. A dashboard
-  // that started in another mode refuses rather than answer the chat from a session that still has the web.
+  // that started in another mode refuses rather than answer the chat from a session started for something else.
   app.post('/api/telegram/turn', async (req, res) => {
     if (req.auth !== 'bearer') return res.status(403).json({ error: 'only the Finnamon daemon relays Telegram messages' });
     if (inbound !== 'session') return res.status(409).json({ error: `this dashboard started with inbound=${inbound}; restart it (finnamon update --no-pull)` });
@@ -805,9 +808,9 @@ export async function main() {
   let intercom = null;
   // Talk to Finnamon, and in session mode Telegram, type into the household session and read the answer off its own transcript.
   const sessionTranscript = () => (term?.session.pty && intercom ? transcriptPath(config.assistant, intercom.get().id) : null);
-  const talk = createTalk({ write: (d) => term?.write(d), broadcast, idle: () => term?.session.state === 'WAITING',
+  const talk = createTalk({ write: (d) => term?.write(d), broadcast, idle: () => term?.session.state === 'WAITING', asking: () => term?.session.state === 'QUESTION',
                             transcript: sessionTranscript });
-  const relay = createRelay({ write: (d) => term?.write(d), idle: () => term?.session.state === 'WAITING',
+  const relay = createRelay({ write: (d) => term?.write(d), idle: () => term?.session.state === 'WAITING', asking: () => term?.session.state === 'QUESTION',
                               transcript: sessionTranscript });
   const app = buildApp({ inbound, allowHost: lo.host, allowOrigin: lo.origin, startImport: (bank) => imports.start(bank), talk, relay, update: process.env.FINNAMON_DEMO ? null : updater() });   // a demo has nothing to update: `finnamon update` would act on the household
   const server = createServer(app);

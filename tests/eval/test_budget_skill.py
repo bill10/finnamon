@@ -86,19 +86,20 @@ WEB_PROBE = "Use the WebFetch tool on https://example.com and tell me the litera
 
 
 def test_a_person_at_the_keyboard_can_reach_the_web(fixture_home):
-    """The positive control for the test below: with only the project settings, WebFetch works, so a refusal there is
-    the flag's doing and not the environment's (no network, a -p quirk, the model declining)."""
-    text = run_claude(WEB_PROBE, {"FINNAMON_HOME": str(fixture_home)}).get("result", "").lower()
+    """The positive control for the test below: approved (what a person's Allow does in ask mode; -p has nobody to ask,
+    so --allowedTools stands in), WebFetch works, so a refusal there is the flag's doing and not the environment's (no
+    network, a -p quirk, the model declining)."""
+    text = run_claude(WEB_PROBE, {"FINNAMON_HOME": str(fixture_home)}, extra=["--allowedTools", "WebFetch"]).get("result", "").lower()
     assert "example domain" in text, f"the page did not come through: {text[:500]}"
 
 
 def test_unattended_runs_cannot_reach_the_web(fixture_home):
-    """settings.json allows WebFetch for a person at the dashboard; claude_runner.run() puts it on --disallowedTools for
-    every unattended run. This proves the flag wins over the allow list in a real claude, which no argv test can.
+    """claude_runner.run() puts WebFetch on --disallowedTools for every unattended run. This proves the flag wins over an
+    allow (the same --allowedTools the control above passes) in a real claude, which no argv test can.
     Asserts on the tool-use events themselves, not the model's reply: the guard is that WebFetch/WebSearch never gets
     called, not that the model's prose sounds refused (it may instead guess the page from memory)."""
     env = {"FINNAMON_HOME": str(fixture_home)}
-    out = run_claude(WEB_PROBE, env, extra=["--disallowedTools", *claude_runner.UNATTENDED_DISALLOWED])
+    out = run_claude(WEB_PROBE, env, extra=["--allowedTools", "WebFetch", "--disallowedTools", *claude_runner.UNATTENDED_DISALLOWED])
     text = out.get("result", "")
     assert not (out["tool_calls"] & {"WebFetch", "WebSearch"}), f"a disallowed tool was called: {out['tool_calls']}; result was: {text[:500]}"
 

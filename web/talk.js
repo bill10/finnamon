@@ -179,11 +179,38 @@ export function readNew(t) {
   } finally { closeSync(fd); }
 }
 
+// Whether the transcript's newest tool call is still open (no result yet): the session is running it, or showing its
+// permission dialog, which a typed line's Enter would answer Yes. The QUESTION state reads the screen; this reads the
+// record, so a redraw that hides the dialog footer cannot open the way. Only the tail is read (the household's transcript
+// only grows), and a call older than OPEN_CALL_MS is one a crash left behind, not one a dialog is waiting on.
+export const OPEN_CALL_MS = 11 * 60_000;   // past the permission hook's own ten-minute wait (finnamon/approval.py WAIT_S)
+export function openToolCall(path, now = Date.now(), tailBytes = 512 * 1024) {
+  let fd;
+  try { fd = openSync(path, 'r'); } catch { return false; }
+  try {
+    const size = statSync(path).size, start = Math.max(0, size - tailBytes);
+    const b = Buffer.alloc(size - start);
+    readSync(fd, b, 0, b.length, start);
+    const lines = b.toString('utf8').split('\n');
+    if (start) lines.shift();   // cut mid-line
+    const open = new Map();
+    for (const l of lines) {
+      let e; try { e = JSON.parse(l); } catch { continue; }
+      for (const blk of Array.isArray(e?.message?.content) ? e.message.content : []) {
+        if (blk?.type === 'tool_use' && e.type === 'assistant') open.set(blk.id, Date.parse(e.timestamp) || now);
+        if (blk?.type === 'tool_result') open.delete(blk.tool_use_id);
+      }
+      if (e?.message?.stop_reason === 'end_turn') open.clear();   // a turn that ended has nothing left waiting
+    }
+    return [...open.values()].some(at => now - at < OPEN_CALL_MS);
+  } finally { closeSync(fd); }
+}
+
 // The server side of every call: the routes in server.js are thin wrappers over this.
 // write: into the household session's pty; transcript(): its transcript's path, or null while there is no session;
-// idle(): the session has gone quiet (its WAITING state);
+// idle(): the session has gone quiet (its WAITING state); asking(): it shows a dialog (QUESTION), which a typed line would answer;
 // broadcast: to every page (the same channel the terminal's output already takes).
-export function createTalk({ write, transcript, broadcast, idle = () => false, env = process.env, platform = process.platform, pollMs = 500, now = Date.now,
+export function createTalk({ write, transcript, broadcast, idle = () => false, asking = () => false, env = process.env, platform = process.platform, pollMs = 500, now = Date.now,
                              stt = transcribe, tts = synthesize, type = typeInto } = {}) {
   const turns = new Map();   // utterance id → { prompt, offset, buf, entries, status, said, pieces, text, at, done }
   const results = new Map();   // utterance id → its answer, so a retry is the line already typed, never a second one
@@ -216,6 +243,9 @@ export function createTalk({ write, transcript, broadcast, idle = () => false, e
     if (playing && overPlaybackEcho(text, [playing.text, ...playing.said])) return remember(utterance, { ok: true, echo: true });
     const path = transcript();
     if (!path) return { error: 'The assistant is not running yet; try again in a moment.' };
+    // A quiet session with an open tool call is a dialog whose footer a redraw hid; a running tool keeps output coming,
+    // and a line typed then is queued by Claude Code as before.
+    if (asking() || (idle() && openToolCall(path, now()))) return { error: 'The assistant is asking something on the screen; answer it there first.' };
     const prompt = `${VOICE_TAG} ${text}`;
     let offset = 0;
     try { offset = statSync(path).size; } catch {}   // a session that has not written yet starts at 0
@@ -290,26 +320,33 @@ export function createTalk({ write, transcript, broadcast, idle = () => false, e
 // file) and read() (its event shapes); everything else here stays.
 export const TELEGRAM_TAG = 'telegram';   // the bundle's CLAUDE.md: `[telegram · <owner>] ...` is a phone message, answered for a phone
 export const RELAY_TIMEOUT_MS = 5 * 60_000;   // the most a caller may ask to wait; the daemon asks for claude_timeout_seconds
+export const PERMISSION_WAIT_MS = OPEN_CALL_MS;   // added at most, for time a turn spends on a permission dialog (finnamon/daemon.py waits as long)
 const clean = (s, max) => squash(String(s ?? '').replace(/[\x00-\x1f\x7f-\x9f]/g, ' ')).slice(0, max);
 export const telegramPrompt = ({ from, text, note }) => {
   const who = clean(from, 40).replace(/[\[\]·;]/g, ''), why = clean(note, 200).replace(/[\[\]]/g, '');   // the tag's own punctuation cannot come from the caller
   return `[${TELEGRAM_TAG} · ${who || 'someone'}${why ? `; ${why}` : ''}] ${clean(text, 4096)}`;
 };
 
-export function createRelay({ write, transcript, idle = () => true, type = typeInto, read = readTurn, pollMs = 500, now = Date.now } = {}) {
+export function createRelay({ write, transcript, idle = () => true, asking = () => false, type = typeInto, read = readTurn, pollMs = 500, now = Date.now, open = openToolCall } = {}) {
   let chain = Promise.resolve();
   const turn = (prompt, timeoutMs) => new Promise((resolve) => {
     const path = transcript();
     if (!path) return resolve({ status: 503, error: 'The assistant session is not running yet.' });
     const t = { path, offset: 0, buf: '', entries: [] };
-    const at = now();
+    let at = now(), paused = 0, last = now();
     let typed = false;
     // Typed only once the session is quiet: a turn an earlier message timed out on, or one typed at the dashboard, may
     // still be running, and a line typed into it can land inside that turn, whose answer would then be read as this one's.
     // ponytail: idle is the session's WAITING state, so a person who starts typing in the same instant can still interleave.
+    // A permission dialog waits on a person (here or on the phone), not on the model: its time is not the turn's, up to
+    // PERMISSION_WAIT_MS more. A dialog left open (a session that typed nothing in) also blocks the next phone message:
+    // the open tool call keeps it from being typed into the dialog.
     const timer = setInterval(() => {
+      const ts = now();
+      if (asking() && paused < PERMISSION_WAIT_MS) { const d = Math.min(ts - last, PERMISSION_WAIT_MS - paused); paused += d; at += d; }
+      last = ts;
       if (!typed) {
-        if (!idle()) { if (now() - at > timeoutMs) { clearInterval(timer); resolve({ status: 504, error: 'timeout', started: false }); } return; }
+        if (!idle() || open(path, ts)) { if (ts - at > timeoutMs) { clearInterval(timer); resolve({ status: 504, error: 'timeout', started: false }); } return; }
         try { t.offset = statSync(path).size; } catch {}
         type(write, prompt); typed = true; return;
       }

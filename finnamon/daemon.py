@@ -40,7 +40,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from . import assistant, claude_runner, config, link, notify, owners, run, store, telegram
+from . import approval, assistant, claude_runner, config, link, notify, owners, run, store, telegram
 from .telegram import esc
 
 log = logging.getLogger("finnamon.daemon")
@@ -61,6 +61,7 @@ DEAF_AFTER_S = 300       # ... and how long a backlog may sit before the househo
 DEAF_REPEAT_H = 6        # ... and the floor between two tellings, however many outages there were
 STABLE_S = 600           # up this long and the start is not part of a crash loop: state.daemon_starts is cleared
 INTERCOM_MAX_S = 300     # session mode: the longest turn the dashboard waits for (web/talk.js RELAY_TIMEOUT_MS)
+INTERCOM_PERMISSION_S = 660   # session mode: the most a turn's clock is stopped for a permission dialog (web/talk.js PERMISSION_WAIT_MS)
 INTERCOM_SLACK_S = 30    # session mode: past the turn's own timeout, how long the dashboard has to say so before we give up on it
 STARTS_KEPT = 10         # state.daemon_starts keeps this many; heartbeat.CRASH_STARTS of them is a crash loop
 
@@ -296,6 +297,14 @@ class Daemon:
         return ok
 
     def handle_update(self, conn: sqlite3.Connection, u: dict) -> None:
+        if u.get("callback_query"):   # an Allow / Deny press on a permission prompt (finnamon/approval.py)
+            cq = u["callback_query"]
+            note = approval.press(conn, cq)
+            try:
+                telegram.answer_callback(cq.get("id"), note)
+            except telegram.TelegramError as e:
+                log.warning("answerCallbackQuery: %s", e)
+            return
         m = u.get("message")
         if not m or not m.get("text"):
             return  # service messages, photos, etc.
@@ -403,7 +412,8 @@ class Daemon:
         try:
             req = urllib.request.Request(f"{dashboard_base()}/api/telegram/turn", data=body, method="POST",
                                          headers={"Authorization": f"Bearer {config.web_token()}", "Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=timeout + INTERCOM_SLACK_S) as r:
+            # + the permission wait: the dashboard stops a turn's clock while a dialog waits on a person (web/talk.js PERMISSION_WAIT_MS)
+            with urllib.request.urlopen(req, timeout=timeout + INTERCOM_PERMISSION_S + INTERCOM_SLACK_S) as r:
                 reply = str(json.load(r).get("reply") or "")
             if not reply.strip():   # the turn ended on a tool call, or someone typed at the dashboard mid-turn and cut it short
                 return "", "🩺 The assistant finished that without an answer for the chat (it may have been interrupted at the dashboard); ask again."
