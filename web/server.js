@@ -25,7 +25,7 @@ import { homedir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { createTalk, createRelay, transcriptPath, MAX_UTTERANCE_BYTES } from './talk.js';
+import { createTalk, createRelay, transcriptPath, readTurn, MAX_UTTERANCE_BYTES } from './talk.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const run = promisify(execFile);
@@ -78,7 +78,7 @@ const cli = async (...args) => JSON.parse(await exec(...args));
 // The session must look like a person's terminal, not a Claude tool call: the CLI's human-only gates read these.
 function env() {
   const e = { ...process.env, TERM: 'xterm-256color', FINNAMON_HOME: config.home };
-  delete e.CLAUDECODE; delete e.FINNAMON_FROM_CLAUDE; delete e.FINNAMON_TRIAGE;
+  delete e.CLAUDECODE; delete e.FINNAMON_FROM_AGENT; delete e.FINNAMON_FROM_CLAUDE; delete e.FINNAMON_TRIAGE;
   delete e.FINNAMON_WEB_TOKEN;   // the dashboard's key, if the server's own environment carries it: the household session must not inherit it
   return e;
 }
@@ -293,6 +293,19 @@ export function claudeArgs(inbound, session = null) {
   return args;
 }
 
+// The runner seam: what each CLI the household may run (the `assistant` setting; `finnamon status` reports it as `agent`)
+// brings to the session in the corner: its binary and argv, whether we mint the session id (claude takes --session-id; codex
+// names its own, so the store holds null until it is read off the rollout), and its transcript and turn reader for Talk and
+// the relay. Claude is the only one yet: codex arrives with the dashboard card (5 of 6).
+export const AGENTS = {
+  claude: { cmd: config.claude, args: claudeArgs, mintsId: true, transcriptPath, readTurn },
+};
+export function agentArgs(kind, inbound, session = null) {
+  const a = AGENTS[kind];
+  if (!a) throw new Error(`assistant ${kind}: Codex support is being built`);
+  return a.args(inbound, session);
+}
+
 // The id lives in a file rather than the database: the page's own writes all go through the CLI, and this one is the
 // server's own bookkeeping, read and written before any CLI call could run.
 export const INTERCOM_FILE = 'intercom.json';
@@ -301,7 +314,8 @@ const STARTUP_OK_MS = 15_000;   // a session that dies sooner than this never go
 // consumed as that value and would be read as a flag of its own on the household's session. Only a uuid is an id.
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Which id to start with, and what to do when a start does not take. `created` is our record that the id exists;
+// Which id to start with, and what to do when a start does not take: { id | null, created }. `created` is our record that the id exists;
+// a CLI that names its own sessions passes uuid: () => null, so there is no id until one is learnt.
 // claude refuses --session-id on an id it already knows and --resume on one it does not, so a wrong guess is
 // recoverable but must not be repeated: an exit inside STARTUP_OK_MS flips or replaces the id rather than looping.
 export function intercomSession({ home = config.home, read = null, write = null, uuid = randomUUID } = {}) {
@@ -824,8 +838,11 @@ export function frame(msg, { term, imports, reply }) {
 
 export async function main() {
   mkdirSync(chartsDir, { recursive: true });
-  let inbound = 'daemon';
+  let inbound = 'daemon', kind = 'claude';
   try { inbound = (await cli('channel', 'status')).inbound; } catch (e) { console.warn(`finnamon channel status: ${e.message}`); }
+  try { const v = (await cli('settings', 'get', 'assistant')).value; if (['claude', 'codex'].includes(v)) kind = v; }   // store.assistant_kind: anything else is claude
+  catch (e) { console.warn(`finnamon settings get assistant: ${e.message}; assuming claude`); }
+  const agent = AGENTS[kind];   // none: the setting names a CLI this release cannot drive; the page runs with no session
 
   const lo = loopback(config.port);
   const clients = new Set();
@@ -842,11 +859,11 @@ export async function main() {
   let term = null;   // created once the port is ours: a port we cannot take must never spawn Claude
   let intercom = null;
   // Talk to Finnamon, and in session mode Telegram, type into the household session and read the answer off its own transcript.
-  const sessionTranscript = () => (term?.session.pty && intercom ? transcriptPath(config.assistant, intercom.get().id) : null);
+  const sessionTranscript = () => (term?.session.pty && intercom?.get().id ? agent.transcriptPath(config.assistant, intercom.get().id) : null);
   const talk = createTalk({ write: (d) => term?.write(d), broadcast, idle: () => term?.session.state === 'WAITING', asking: () => term?.session.state === 'QUESTION',
-                            since: () => term?.session.startedAt || 0, transcript: sessionTranscript });
+                            since: () => term?.session.startedAt || 0, transcript: sessionTranscript, read: agent?.readTurn });
   const relay = createRelay({ write: (d) => term?.write(d), idle: () => term?.session.state === 'WAITING', asking: () => term?.session.state === 'QUESTION',
-                              since: () => term?.session.startedAt || 0, transcript: sessionTranscript });
+                              since: () => term?.session.startedAt || 0, transcript: sessionTranscript, read: agent?.readTurn });
   const app = buildApp({ inbound, allowHost: lo.host, allowOrigin: lo.origin, startImport: (bank) => imports.start(bank), talk, relay, update: process.env.FINNAMON_DEMO ? null : updater() });   // a demo has nothing to update: `finnamon update` would act on the household
   const server = createServer(app);
   // A browser sends the page's Origin; a non-browser client on this machine (wscat, a test) sends none. Any other origin
@@ -888,11 +905,12 @@ export async function main() {
     setTimeout(() => process.exit(1), 30_000);
   });
   server.listen(config.port, config.host, () => {
-    intercom = intercomSession();   // the household's assistant survives this process: `finnamon update` restarts us, not the conversation
+    intercom = intercomSession({ uuid: agent?.mintsId === false ? () => null : randomUUID });   // the household's assistant survives this process: `finnamon update` restarts us, not the conversation
     // The same gate the daemon has before its first `claude -p`: the assistant directory must hold the bundle and be trusted,
     // or the session would run with no allow list and no deny list, under the person's own settings alone. Under the first
     // `finnamon update` across the bundle release the daemon restarting beside us writes it within seconds; until then, wait.
     const startTerm = async () => {
+      if (!agent) { console.warn(`assistant ${kind}: Codex support is being built; no session started (finnamon settings set assistant claude)`); return; }
       try {
         const st = await cli('status');
         if (Array.isArray(st.assistant_problems) && st.assistant_problems.length) {
@@ -900,11 +918,11 @@ export async function main() {
           setTimeout(startTerm, 30_000); return;
         }
       } catch (e) { console.warn(`finnamon status: ${e.message}; retrying in 30s`); setTimeout(startTerm, 30_000); return; }
-      console.log(`finnamon web on http://${config.host}:${config.port}, key in ${join(config.home, TOKEN_FILE)}: \`finnamon open\` opens it (${intercom.get().created ? 'resuming' : 'new'} session in ${config.assistant}: claude ${claudeArgs(inbound, intercom.get()).join(' ')})`);
+      console.log(`finnamon web on http://${config.host}:${config.port}, key in ${join(config.home, TOKEN_FILE)}: \`finnamon open\` opens it (${intercom.get().created ? 'resuming' : 'new'} session in ${config.assistant}: ${agent.cmd} ${agentArgs(kind, inbound, intercom.get()).join(' ')})`);
       restartNotice({ inbound, intercom, send: () => cli('notify', '--restarted') })
         .catch((e) => console.warn(`restart notice not sent: ${e.message}`));
       term = createSession({
-        inbound, args: () => claudeArgs(inbound, intercom.get()),
+        inbound, cmd: agent.cmd, args: () => agentArgs(kind, inbound, intercom.get()),
         onStart: () => intercom.started(), onExit: ({ uptimeMs }) => intercom.noteExit(uptimeMs),
         onOutput: (data) => broadcast({ type: 'output', data }), onState: (state) => broadcast({ type: 'state', state }),
       });

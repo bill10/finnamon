@@ -51,7 +51,7 @@ test('Update spawns `finnamon update` detached, as the person, and a lock refuse
     assert.equal(s.cmd, '/bin/sh');
     assert.deepEqual(s.args.slice(-1), ['update'], 'the whole of `finnamon update`, no flags');
     assert.equal(s.opts.detached, true, 'it restarts this server, so it must not die with it');
-    assert.equal(s.opts.env.CLAUDECODE, undefined); assert.equal(s.opts.env.FINNAMON_FROM_CLAUDE, undefined);
+    assert.equal(s.opts.env.CLAUDECODE, undefined); assert.equal(s.opts.env.FINNAMON_FROM_CLAUDE, undefined); assert.equal(s.opts.env.FINNAMON_FROM_AGENT, undefined);
     assert.deepEqual(JSON.parse(readFileSync(join(r.home, UPDATE_LOCK), 'utf8')).pid, 4243);
     assert.throws(() => r.u.start(), /already running/);
     assert.equal(r.spawned.length, 1);

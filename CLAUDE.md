@@ -9,7 +9,7 @@
   directory and restarts the daemon and the dashboard (both read it at startup).
 - Developing the code: `python3 -m pytest tests -q -m "not eval"`; evals (real Claude, spends tokens,
   required after touching any prompt file) `python3 -m pytest tests/eval -q -m eval`. tests/conftest.py
-  clears `CLAUDECODE` and `FINNAMON_FROM_CLAUDE` so the suite runs from a Claude session; the human-only
+  clears `CLAUDECODE` and `FINNAMON_FROM_AGENT` (and its old name `FINNAMON_FROM_CLAUDE`) so the suite runs from a Claude session; the human-only
   gates still hold outside pytest.
 - **If the Telegram channel plugin is still registered against this checkout** (it was, before the assistant
   moved; `finnamon update` registers it for `~/.finnamon/assistant/` instead), a plain `claude` here loads a

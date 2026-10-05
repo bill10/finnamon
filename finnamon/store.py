@@ -147,9 +147,12 @@ SETTINGS: dict[str, tuple[float, float]] = {
 OPS_SETTINGS: dict[str, tuple[float, float]] = {
     "sync_interval_hours": (1, 48), "claude_timeout_seconds": (30, 900), "health_max_age_hours": (1, 168), "lookback_days": (1, 90),
 }
+# key → the words it takes, the first being the default. Household-wide only, and set by a person (cli.cmd_settings).
+CHOICE_SETTINGS: dict[str, tuple[str, ...]] = {"assistant": ("claude", "codex")}
 
 
 SETTING_HELP = {   # what each key does, in the words `finnamon settings` prints
+    "assistant": "which assistant CLI runs the household's chat, triage and dashboard session: claude (the default) or codex",
     "dup_min_amount": "smallest charge ($) the duplicate-charge check looks at",
     "dup_window_days": "days apart two identical charges can be and still count as a possible duplicate",
     "budget_min_day": "day of the month before budget pace alerts start (early in the month a projection is noise)",
@@ -167,12 +170,19 @@ SETTING_HELP = {   # what each key does, in the words `finnamon settings` prints
 
 
 def validate_setting(key: str, value, ops: bool = False) -> str:
-    """Numeric, in range, and known. Raises ValueError otherwise. Returns the canonical string."""
+    """Numeric, in range, and known (or one of a choice key's words). Raises ValueError otherwise. Returns the canonical string."""
+    if key in CHOICE_SETTINGS:
+        v = str(value).strip().lower()
+        if v not in CHOICE_SETTINGS[key]:
+            raise ValueError(f"{key} must be one of {', '.join(CHOICE_SETTINGS[key])}")
+        if v == "codex":   # ponytail: refused until the dashboard card (5 of 6) lands; then this line goes
+            raise ValueError("Codex support is being built; the assistant stays claude for now")
+        return v
     spec = SETTINGS.get(key) or (OPS_SETTINGS.get(key) if ops else None)
     if key in OPS_SETTINGS and not ops:
         raise ValueError(f"{key} is an operational setting; use `finnamon settings set {key} <value> --ops` at a terminal")
     if not spec:
-        raise ValueError(f"unknown setting {key}; one of {', '.join([*SETTINGS, *OPS_SETTINGS])}")
+        raise ValueError(f"unknown setting {key}; one of {', '.join([*SETTINGS, *OPS_SETTINGS, *CHOICE_SETTINGS])}")
     try:
         v = parse_amount(value, key)
     except ValueError:
@@ -189,6 +199,8 @@ def validate_setting(key: str, value, ops: bool = False) -> str:
 def set_setting(conn: sqlite3.Connection, key: str, value, account_id: str = "*", ops: bool = False) -> None:
     if key in OPS_SETTINGS and not ops:
         raise ValueError(f"{key} is an operational setting; use `finnamon settings set {key} <value> --ops` at a terminal")
+    if key in CHOICE_SETTINGS and account_id != "*":
+        raise ValueError(f"{key} is household-wide; it has no per-account value")
     if value is None:
         # None means "unset the per-account override": the global row is the default and must always exist.
         if account_id == "*":
@@ -201,6 +213,12 @@ def set_setting(conn: sqlite3.Connection, key: str, value, account_id: str = "*"
         "ON CONFLICT(account_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
         (account_id, key, None if value is None else str(value)),
     )
+
+
+def assistant_kind(conn: sqlite3.Connection) -> str:
+    """claude | codex: which CLI agent_runner and the dashboard drive. Unset, or a value this version does not know, is claude."""
+    v = setting(conn, "assistant")
+    return v if v in CHOICE_SETTINGS["assistant"] else CHOICE_SETTINGS["assistant"][0]
 
 
 def settings_list(conn: sqlite3.Connection) -> list[sqlite3.Row]:

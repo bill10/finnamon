@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+"""A stand-in for `codex` in tests, like scripts/demo/bin/claude: it never calls a model. `exec --json` prints the events a
+real Codex 0.157 run printed (../exec.jsonl, recorded in the card-1 spike); CODEX_FAKE_EXIT makes it fail instead."""
+import os
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+if args[:1] in (["--version"], ["-V"]):
+    print("codex-cli 0.157.0")
+elif args[:2] == ["login", "status"]:
+    print("Logged in using ChatGPT")
+elif args[:1] == ["exec"] and "--json" in args:
+    if os.environ.get("CODEX_FAKE_EXIT"):
+        print(os.environ.get("CODEX_FAKE_STDERR", "error"), file=sys.stderr)
+        sys.exit(int(os.environ["CODEX_FAKE_EXIT"]))
+    sys.stdout.write((Path(__file__).resolve().parent.parent / "exec.jsonl").read_text())
+else:
+    print(f"stub codex: unsupported {args}", file=sys.stderr)
+    sys.exit(2)

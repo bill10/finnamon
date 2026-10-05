@@ -12,6 +12,10 @@ import tempfile
 import tomllib
 from pathlib import Path
 
+# Set on every assistant run Finnamon starts (agent_runner.run); the CLI's human-only gates refuse a command that carries
+# either. FINNAMON_FROM_CLAUDE is the old name, still honoured so a run started by an older release is still caught.
+AGENT_MARKERS = ("FINNAMON_FROM_AGENT", "FINNAMON_FROM_CLAUDE")
+
 
 def home() -> Path:
     return Path(os.environ.get("FINNAMON_HOME", Path.home() / ".finnamon"))
