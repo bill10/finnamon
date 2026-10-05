@@ -359,6 +359,12 @@ def _setup_codex(conn) -> str:
         print(f"  ! Codex {'.'.join(map(str, v)) if v else '(version unknown)'} is older than {'.'.join(map(str, codex.MIN_VERSION))}: {codex.INSTALL_HINT}. Claude Code stays the assistant.")
         _check_claude_code()
         return "claude"
+    try:   # first, so a Codex that cannot be selected yet leaves no FINNAMON_HOME/codex behind: a Claude household stays as it was
+        store.validate_setting("assistant", "codex")
+    except ValueError as e:   # until the dashboard card lands (store.validate_setting)
+        print(f"  Claude Code stays the assistant for now: {e}")
+        _check_claude_code()
+        return "claude"
     res = codex.install(exe)
     if res["auth"] in ("linked", "relinked"):
         print(f"  ✓ sharing your Codex login: {codex.home() / 'auth.json'} → {codex.user_auth()}")
@@ -370,12 +376,7 @@ def _setup_codex(conn) -> str:
     print(f"  {'✓' if ok else '!'} Codex: {msg}")
     print(f"  ✓ wrote {codex.home() / codex.CONFIG} ({res['pinned']} hook(s) trusted)" if res["pinned"] else
           f"  ! wrote {codex.home() / codex.CONFIG}, but Codex did not report its hooks; `finnamon doctor` says more")
-    try:
-        store.set_setting(conn, "assistant", "codex")
-    except ValueError as e:   # until the dashboard card lands (store.validate_setting)
-        print(f"  Claude Code stays the assistant for now: {e}")
-        _check_claude_code()
-        return "claude"
+    store.set_setting(conn, "assistant", "codex")
     print("  ✓ Codex runs the household's assistant")
     return "codex"
 

@@ -77,7 +77,7 @@ def denied() -> list[str]:
     and data, which the assistant reaches only through `finnamon`, and the login the sealed home shares."""
     h, real = config.home(), Path.home()
     paths = [h / "secrets.toml", h / "finnamon.db", h / "finnamon.db-wal", h / "finnamon.db-shm", h / "finnamon.db-journal",
-             config.web_token_path(), h / "web-hosts", h / config.INTERCOM_FILE, h / "imports", h / "chrome",
+             h / "backups", config.web_token_path(), h / "web-hosts", h / config.INTERCOM_FILE, h / "imports", h / "chrome",
              home() / "sessions", home() / "auth.json", user_auth(), real / ".agent-browser", real / ".claude" / "channels"]
     return list(dict.fromkeys(str(p) for p in paths))
 
@@ -145,26 +145,32 @@ def render_config(d: Path | None = None, state: dict[str, str] | None = None) ->
 def app_server(exe: str, method: str, params: dict, timeout: float = TIMEOUT_S) -> dict:
     """One request to `codex app-server` (stdio JSON-RPC) under Finnamon's CODEX_HOME. No model call, no login needed."""
     p = subprocess.Popen([exe, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                         text=True, env=env(), cwd=assistant.dir() if assistant.dir().is_dir() else None)
+                         text=True, bufsize=1, env=env(), cwd=assistant.dir() if assistant.dir().is_dir() else None)
     try:
         for msg in ({"id": 0, "method": "initialize", "params": {"clientInfo": {"name": "finnamon", "version": "1"}}},
                     {"method": "initialized"}, {"id": 1, "method": method, "params": params}):
             p.stdin.write(json.dumps(msg) + "\n")
         p.stdin.flush()   # stdin stays open: the server exits on EOF before it answers
-        deadline = time.monotonic() + timeout
-        while (left := deadline - time.monotonic()) > 0 and select.select([p.stdout], [], [], left)[0]:
-            line = p.stdout.readline()
-            if not line:
-                break
-            try:
-                m = json.loads(line)
-            except ValueError:
-                continue
-            if m.get("id") == 1:
-                if "error" in m:
-                    raise RuntimeError(f"codex app-server {method}: {m['error'].get('message', m['error'])}")
-                return m.get("result") or {}
-        raise RuntimeError(f"codex app-server gave no answer to {method} within {timeout:.0f}s")
+        deadline, buf, fd = time.monotonic() + timeout, b"", p.stdout.fileno()
+        while True:
+            while b"\n" in buf:   # every whole line read so far, before waiting on the pipe again
+                line, buf = buf.split(b"\n", 1)
+                try:
+                    m = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(m, dict) and m.get("id") == 1:
+                    if "error" in m:
+                        err = m["error"]
+                        raise RuntimeError(f"codex app-server {method}: {err.get('message', err) if isinstance(err, dict) else err}")
+                    return m.get("result") if isinstance(m.get("result"), dict) else {}
+            left = deadline - time.monotonic()
+            if left <= 0 or not select.select([fd], [], [], left)[0]:
+                raise RuntimeError(f"codex app-server gave no answer to {method} within {timeout:.0f}s")
+            chunk = os.read(fd, 65536)   # raw reads: a buffered readline would hide a second reply from select
+            if not chunk:
+                raise RuntimeError(f"codex app-server exited before answering {method}")
+            buf += chunk
     finally:
         p.kill()
         p.wait()
@@ -174,13 +180,15 @@ def hooks(exe: str) -> list[dict]:
     """The hooks Codex sees for the assistant directory, from our config.toml only."""
     cfg = str(home() / CONFIG)
     res = app_server(exe, "hooks/list", {"cwds": [str(assistant.dir())]})
-    return [h for e in res.get("data") or [] for h in e.get("hooks") or [] if h.get("sourcePath") == cfg]
+    return [h for e in res.get("data") or [] if isinstance(e, dict) for h in e.get("hooks") or []
+            if isinstance(h, dict) and h.get("sourcePath") == cfg and h.get("key") and h.get("currentHash")]
 
 
 def leaked_skills(exe: str) -> list[str]:
     """Skills a sealed session would load from outside the bundle and Codex's own system set: the person's, if the seal leaks."""
     res = app_server(exe, "skills/list", {"cwds": [str(assistant.dir())], "forceReload": True})
-    return sorted(s["path"] for e in res.get("data") or [] for s in e.get("skills") or [] if s.get("scope") in ("user", "admin"))
+    return sorted(str(s.get("path")) for e in res.get("data") or [] if isinstance(e, dict) for s in e.get("skills") or []
+                  if isinstance(s, dict) and s.get("scope") in ("user", "admin"))
 
 
 def version(exe: str) -> tuple[int, ...] | None:
@@ -247,6 +255,15 @@ def pin(exe: str | None) -> dict[str, str]:
         return {}
 
 
+def pinned_state() -> dict[str, str]:
+    """The [hooks.state] pins in config.toml now, as {key: hash}."""
+    try:
+        state = tomllib.loads((home() / CONFIG).read_text()).get("hooks", {}).get("state", {})
+        return {k: v["trusted_hash"] for k, v in state.items() if isinstance(v, dict) and isinstance(v.get("trusted_hash"), str)}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
 def install(exe: str | None = None) -> dict:
     """Write CODEX_HOME's config.toml (the household's edited copy to .bak), pin the hooks' trust, link the login.
     Returns assistant.install()'s report plus {"auth": link_auth(), "pinned": n}."""
@@ -266,9 +283,11 @@ def install(exe: str | None = None) -> dict:
         return {x["key"]: x["currentHash"] for x in hs} if hs and all(x.get("trustStatus") == "trusted" for x in hs) else None
 
     # The hashes of what is on disk are the release's when the hook definitions are unchanged: then a steady state writes nothing.
-    res = write(pin(exe) if exe and configured() else {})
-    if exe and trusted() is None:   # new or changed hooks: ask Codex for their hashes now that they are written, and pin those
-        again = write(pin(exe))
+    # When Codex cannot answer (not on this shell's PATH, an app-server failure) the pins on file stay: dropping them would
+    # leave every hook untrusted and the household's sessions refused until the next update.
+    res = write((pin(exe) if exe else {}) or pinned_state())
+    if exe and trusted() is None and (fresh := pin(exe)):   # new or changed hooks: their hashes, now that they are written
+        again = write(fresh)
         res = again | {k: res[k] + again[k] for k in ("written", "backed_up", "kept", "orphaned", "removed")} | {"changed": res["changed"] or again["changed"], "first": res["first"]}
     state = trusted() if exe else None
     return res | {"auth": link_auth(), "pinned": len(state or {})}
@@ -322,5 +341,5 @@ def problems(exe: str | None = None) -> list[str]:
         return [f"could not list Codex's hooks: {e}"]
     if not hs:
         return [f"Codex sees none of the hooks in {home() / CONFIG}"]
-    bad = [h["key"].rsplit(":", 3)[-3] for h in hs if h.get("trustStatus") != "trusted"]
+    bad = [h["key"].split(":")[-3] if h["key"].count(":") >= 3 else h["key"] for h in hs if h.get("trustStatus") != "trusted"]
     return [f"Codex does not trust the {', '.join(sorted(set(bad)))} hook(s) (their pinned hash is out of date): run `finnamon update`"] if bad else []

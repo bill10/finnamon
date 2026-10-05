@@ -83,7 +83,7 @@ def test_config_toml_is_generated_from_settings_json(home):
     assert cfg["default_permissions"] == "finnamon" and cfg["permissions"]["finnamon"]["extends"] == ":workspace"
     fs = cfg["permissions"]["finnamon"]["filesystem"]
     assert fs[":workspace_roots"] == "read" and fs[str(assistant.dir())] == "read", "the assistant directory is read-only"
-    for p in (config.secrets_path(), config.db_path(), config.web_token_path(), home / "imports", home / "codex" / "sessions",
+    for p in (config.secrets_path(), config.db_path(), home / "backups", config.web_token_path(), home / "imports", home / "codex" / "sessions",
               home / "codex" / "auth.json", Path.home() / ".agent-browser", Path.home() / ".claude" / "channels"):
         assert fs[str(p)] == "deny", p
     assert cfg["web_search"] == "disabled" and cfg["approval_policy"] == "on-request" and cfg["cli_auth_credentials_store"] == "file"
@@ -205,15 +205,15 @@ def test_init_offers_codex_and_keeps_claude_until_card_5(home, tg, stub, user_lo
     monkeypatch.setenv("CLAUDE_FAKE_RESULT", json.dumps({"loggedIn": True, "email": "a@b"}))
     init(monkeypatch, ["cid", "prod-sec", "", "123:token", "codex", "n"])
     out = capsys.readouterr().out
-    assert "sharing your Codex login" in out and "2 hook(s) trusted" in out and "Claude Code stays the assistant for now" in out
-    assert store.assistant_kind(store.connect()) == "claude" and codex.configured()
+    assert "Claude Code stays the assistant for now" in out
+    assert store.assistant_kind(store.connect()) == "claude" and not (home / "codex").exists(), "a refused Codex leaves the Claude household as it was"
 
 
 def test_init_codex_path_selects_codex_and_forces_session(home, tg, stub, fake_claude, monkeypatch, capsys):
     monkeypatch.setattr(store, "validate_setting", lambda k, v, ops=False: str(v))   # card 5 lifts the refusal
     init(monkeypatch, ["cid", "prod-sec", "", "123:token", "codex", "n"])
     out = capsys.readouterr().out
-    assert "logging in for Finnamon alone" in out and (home / "codex" / "auth.json").read_text() == '{"fake": true}', "no login to share: codex login under Finnamon's home"
+    assert "2 hook(s) trusted" in out and "logging in for Finnamon alone" in out and (home / "codex" / "auth.json").read_text() == '{"fake": true}', "no login to share: codex login under Finnamon's home"
     conn = store.connect()
     assert store.assistant_kind(conn) == "codex" and store.get_state(conn, "inbound") == "session"
 
@@ -279,3 +279,26 @@ def test_real_codex_profile_denies_the_households_secrets(home, monkeypatch):
                        capture_output=True, text=True, env=codex.env(), timeout=60)
     assert r.stderr.count("Operation not permitted") == 3 and "[plaid]" not in r.stdout and "db" not in r.stdout.split("HOME=")[0]
     assert f"HOME={Path.home()}" in r.stdout, "tool commands get the real HOME back"
+
+
+def test_install_keeps_the_pins_when_codex_cannot_answer(home, stub, monkeypatch):
+    codex.install()
+    pins = codex.pinned_state()
+    assert len(pins) == 2
+    monkeypatch.setenv("FINNAMON_CODEX_BIN", str(home / "gone"))   # an update from a shell without codex on PATH
+    codex.install()
+    assert codex.pinned_state() == pins
+    monkeypatch.setenv("FINNAMON_CODEX_BIN", str(STUB))
+    monkeypatch.setattr(codex, "app_server", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("crashed")))
+    codex.install()
+    assert codex.pinned_state() == pins
+
+
+def test_app_server_reads_replies_that_arrive_together(home, tmp_path):
+    fake = tmp_path / "codex"
+    fake.write_text('#!/bin/sh\nread a; read b; read c\nprintf \'{"id":0,"result":{}}\\n{"id":1,"result":{"data":[]}}\\n\'\nsleep 30\n')
+    fake.chmod(0o755)
+    assert codex.app_server(str(fake), "hooks/list", {}, timeout=5) == {"data": []}
+    fake.write_text('#!/bin/sh\nread a; read b; read c\necho \'"not an object"\'\necho \'{"id":1,"error":"boom"}\'\nsleep 30\n')
+    with pytest.raises(RuntimeError, match="boom"):
+        codex.app_server(str(fake), "hooks/list", {}, timeout=5)
