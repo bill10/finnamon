@@ -112,7 +112,7 @@ brew install uv node                           # Python 3.11+ via uv, Node 20.12
 git clone <repo> ~/finnamon && cd ~/finnamon
 uv tool install -e .                           # puts `finnamon` on PATH
 uv tool update-shell                           # if `finnamon` is "not found"; then open a new terminal
-finnamon init                                  # Plaid keys → Telegram bot → Claude Code → dashboard → always-on jobs
+finnamon init                                  # Plaid keys → Telegram bot → assistant (Claude Code, or Codex) → dashboard → always-on jobs
 finnamon open                                  # link a bank, then ask the intercom to "set up my budgets"
 finnamon doctor                                # checks every piece and prints the fix for each problem
 ```
