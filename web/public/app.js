@@ -875,7 +875,7 @@ function chartOpts() {
   return { actions: false, renderer: 'svg', mode: 'vega-lite', ast: true, expr: vega.expressionInterpreter, loader: Object.assign(vega.loader(), { load: nothing, sanitize: nothing }),
     config: { background: 'transparent', font: 'Geist, -apple-system, system-ui, sans-serif',
     title: { anchor: 'start', fontSize: 13, fontWeight: 600, color: muted, offset: 12 },
-    axis: { labelColor: muted, titleColor: muted, gridColor: grid, domainColor: grid, tickColor: grid, tickCount: narrow ? 3 : 6, labelOverlap: true, labelFontSize: narrow ? 10 : 11, titlePadding: narrow ? 4 : 6 }, view: { stroke: null },
+    axis: { labelColor: muted, titleColor: muted, gridColor: grid, domainColor: grid, tickColor: grid, tickCount: narrow ? 3 : 6, labelOverlap: true, labelSeparation: narrow ? 10 : 0, labelFontSize: narrow ? 10 : 11, titlePadding: narrow ? 4 : 6 }, view: { stroke: null },
     // a legend never takes plot width (#97): a row above the plot; a spec's own legend.orient still wins over this config
     legend: { orient: 'top', direction: 'horizontal', labelColor: muted, titleColor: muted, labelLimit: 120 },
     // budgets: limit (track) then spent (mint); in/out: in (mint) then out (cinnamon); balances: one per account
