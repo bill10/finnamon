@@ -86,3 +86,16 @@ def test_list_folds_and_resolution_covers_the_transaction(conn, tg, capsys):
 def test_every_transaction_candidate_records_its_transaction():
     for p in (RULES[n] for n in RULES if detect.kind_of(RULES[n])[0] == "anomaly" and n != "recurring_changed"):   # a stream has no transaction
         assert "t.transaction_id AS key, t.transaction_id," in p.read_text().replace("\n", " "), p.name
+
+
+def test_a_rule_on_the_same_transaction_is_still_told(conn, tg):
+    hsa(conn)
+    a, b = fire(conn, "no_source", "unmatched_transfer")
+    triage.set_verdict(conn, "hsa", "promote", "high", "Money in with no source I know.")
+    notify.send_pending(conn)
+    budgets.dismiss(conn, a)
+    rid = conn.execute("INSERT INTO alerts (tier, kind, key, account_id, transaction_id, payload_json, as_of) VALUES ('rule','duplicate_charge','dup:x:hsa','chk','hsa',?,?)",
+                       (json.dumps({"merchant": "HSA", "amount": -2090, "date_a": "2026-09-16", "date_b": "2026-09-17"}), AS_OF)).lastrowid
+    detect.join_family(conn, rid)   # a duplicate charge is not muted by the anomaly dismissed on it, nor folded into that old message
+    assert conn.execute("SELECT resolved_at FROM alerts WHERE id=?", (rid,)).fetchone()[0] is None
+    assert notify.send_pending(conn) == 1 and len(tg.sent) == 2 and "duplicate" in tg.sent[1]["text"]

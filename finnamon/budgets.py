@@ -256,8 +256,8 @@ def undo(conn: sqlite3.Connection, alert_id: int) -> dict:
     if a["resolution"] not in ("normal", "dismissed"):
         raise ValueError(f"alert {alert_id} was resolved by Finnamon or before it recorded how; nothing to undo "
                          "(`finnamon normal --list` and `--remove` for a rule)")
-    removed = normal_remove(conn, a["suppression_id"])["removed"] if a["suppression_id"] is not None else None
-    ids = store.alert_group(conn, alert_id)   # the whole transaction reopens, as it was resolved
+    ids = store.alert_group(conn, alert_id)   # the transaction reopens as it was resolved: the members this same action resolved
     conn.execute(f"UPDATE alerts SET resolved_at=NULL, resolution=NULL, suppression_id=NULL WHERE id IN ({','.join('?' * len(ids))}) "
-                 "AND (id=? OR resolution IN ('normal','dismissed'))", (*ids, alert_id))
+                 "AND (id=? OR (resolution=? AND suppression_id IS ?))", (*ids, alert_id, a["resolution"], a["suppression_id"]))
+    removed = normal_remove(conn, a["suppression_id"])["removed"] if a["suppression_id"] is not None else None
     return {"id": alert_id, "undone": a["resolution"], "removed_rule": removed}

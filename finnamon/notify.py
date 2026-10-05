@@ -140,7 +140,7 @@ def pending(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 def best(rows: list) -> sqlite3.Row:
     """The one to show for a transaction several alerts fired on: a rule's own words first, then the surest verdict,
     then the fullest reason, then the oldest."""
-    return min(rows, key=lambda a: (a["tier"] != "rule", a["confidence"] != "high", -len(a["reason"] or ""), a["id"]))
+    return min(rows, key=lambda a: (a["tier"] != "rule", a["verdict"] != "promote", a["confidence"] != "high", -len(a["reason"] or ""), a["id"]))
 
 
 def _stamp(conn: sqlite3.Connection, ids: list[int], chat_id, mid) -> None:
@@ -186,7 +186,9 @@ def send_one(conn: sqlite3.Connection, alert, chat_id: int | str | None = None) 
     q = ",".join("?" * len(ids))
     family = [alert] + [r for r in conn.execute(f"SELECT * FROM alerts WHERE id IN ({q}) AND sent_at IS NULL AND resolved_at IS NULL "
                                                 "AND (tier = 'rule' OR verdict = 'promote')", ids) if r["id"] != alert["id"]]   # a low one rides along too
-    told = conn.execute(f"SELECT telegram_chat_id, telegram_message_id FROM alerts WHERE id IN ({q}) AND sent_at IS NOT NULL ORDER BY sent_at, id LIMIT 1", ids).fetchone()
+    rule = any(a["tier"] == "rule" for a in family)   # a rule is never folded into an anomaly's line or a roundup: it is the stronger news
+    told = conn.execute(f"SELECT telegram_chat_id, telegram_message_id FROM alerts WHERE id IN ({q}) AND sent_at IS NOT NULL AND (tier = 'rule' OR NOT ?) "
+                        "ORDER BY sent_at, id LIMIT 1", (*ids, rule)).fetchone()
     if told:
         _stamp(conn, [a["id"] for a in family], told[0], told[1])
         return told[1]
