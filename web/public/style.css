@@ -223,6 +223,7 @@ details.bank .note button.link { font-size: 13px; margin-left: 4px; }   /* Recon
 .erow.merged { grid-template-columns: 1fr auto; font-size: 14px; color: var(--ink-2); }
 details.mergebox { margin-top: 6px; }
 details.mergebox > summary { cursor: pointer; font-size: 14px; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
+details.mergebox > summary { flex-wrap: wrap; column-gap: 8px; } details.mergebox > summary .hint { font-weight: 400; font-size: 13px; color: var(--muted); }
 details.mergebox p.muted { margin: 0 0 8px; font-size: 13px; }
 .erow.imp input[type=file] { padding: 5px; }
 .prev { margin-top: 10px; font-size: 14px; }

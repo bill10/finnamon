@@ -593,7 +593,7 @@ function mergePanel(s) {
   if (live.length < 2 && !copies.length) return '';
   const opts = `<option value="">Choose an account</option>` + live.map(a => `<option value="${esc(a.account_id)}">${esc(acctLabel(a))}</option>`).join('');
   const byId = new Map(all.map(a => [a.account_id, a]));
-  return `<details class="mergebox"><summary>Same account seen twice?</summary>` +
+  return `<details class="mergebox"><summary>Same account seen twice?<span class="hint">${copies.length ? `${plural(copies.length, 'pair')} marked as one` : 'a bank linked from two logins: mark them as one'}</span></summary>` +
     (live.length > 1 ? `<p class="muted">A joint account linked from both logins shows up twice. Pick the copy: it is hidden, and both are counted once, as joint.</p>` +
       `<div class="erow add merge"><select id="m-keep" aria-label="The account to keep">${opts}</select><select id="m-copy" aria-label="Its copy, to hide">${opts}</select></div>` +
       `<div class="eactions"><span class="err" id="m-err" role="alert"></span><button class="quiet" id="m-go" type="button">Mark as joint</button></div>` : '') +
