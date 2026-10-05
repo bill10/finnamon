@@ -201,7 +201,14 @@ tests, `finnamon demo`, and `finnamon install`'s systemd units with the dashboar
 6. **Keep the PC and WSL running.** The daemon only watches while Ubuntu runs, and Windows stops a WSL distribution
    some time after its last terminal closes, systemd or not. Keep an Ubuntu window open, or have Task Scheduler run
    `wsl.exe -d Ubuntu-24.04 --exec sleep infinity` at log on, and set Windows not to sleep. CI cannot test this
-   part; `finnamon doctor` shows a stale heartbeat if WSL was stopped.
+   part; `finnamon doctor` shows a stale heartbeat if WSL was stopped, and on WSL it also checks systemd and repeats this
+   advice. To stop Windows idling the distro down, put `[wsl2]` and `vmIdleTimeout=-1` in `%UserProfile%\.wslconfig`, then
+   `wsl --shutdown`. Nothing inside Ubuntu can notice that it was stopped, so for an alarm, add a second Task Scheduler task
+   (every 15 minutes) running `wsl.exe -d Ubuntu-24.04 --exec finnamon doctor`: a non-zero exit (doctor exits 1 on any
+   problem, a stopped daemon included) is the alarm. Untested in CI.
+
+Spoken replies: Talk uses macOS `say` on a Mac; on Linux and WSL the dashboard speaks them with the browser's own speech
+synthesis (the Windows browser on WSL), and the Talk note says so. Nothing needs installing for that.
 
 The dashboard opens in the Windows browser: WSL2 forwards `localhost`, so `http://localhost:8888` works there, and
 `finnamon open` hands the address to Windows (`wslview`, else `explorer.exe`, which also prints it). Tested on WSL only
