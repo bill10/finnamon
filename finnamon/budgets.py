@@ -39,19 +39,20 @@ def _positive(amount, what: str) -> float:
 def budget_set(conn: sqlite3.Connection, name: str, amount: float, categories: list[str] | str | None = None,
                merchants: list[str] | None = None, fixed: bool | None = None) -> dict:
     """Categories and merchants given replace the budget's selectors; none given keeps an existing budget's (the
-    dashboard's limit edit) and a new or removed one takes its name as the category. fixed None keeps what it was (a
-    removed budget starts over). A merchant reply carries how many past charges it matches, so a zero shows at once."""
+    dashboard's limit edit, or re-adding a removed one) and a new one takes its name as the category. fixed None keeps
+    what it was, except that a removed budget comes back not fixed. A merchant reply carries how many past charges it
+    matches, so a zero shows at once."""
     name = name.strip().lower()
     amount = _positive(amount, "monthly limit")
     categories = [categories] if isinstance(categories, str) else list(categories or [])
     merchants = [m.strip() for m in merchants or []]
     if any(not m for m in merchants):
         raise ValueError("a merchant needs a name")
-    old = conn.execute("SELECT id FROM budgets WHERE name=? AND active=1", (name,)).fetchone()
-    keep = not (categories or merchants) and old and conn.execute("SELECT 1 FROM budget_selectors WHERE budget_id=?", (old[0],)).fetchone()
-    codes = [] if keep else list(dict.fromkeys(resolve_category(c) for c in categories or ([] if merchants else [name])))
-    sel = [("category", c, None) for c in codes] + [("merchant", canonical_for(conn, m), m) for m in merchants]
-    with store.tx(conn):   # one write: a crash between the DELETE and the INSERT would leave a budget counting nothing
+    with store.tx(conn):   # one write, read and all: a crash or a concurrent edit mid-way would leave a budget counting nothing
+        old = conn.execute("SELECT id FROM budgets WHERE name=?", (name,)).fetchone()
+        keep = not (categories or merchants) and old and conn.execute("SELECT 1 FROM budget_selectors WHERE budget_id=?", (old[0],)).fetchone()
+        codes = [] if keep else list(dict.fromkeys(resolve_category(c) for c in categories or ([] if merchants else [name])))
+        sel = [("category", c, None) for c in codes] + [("merchant", canonical_for(conn, m), m) for m in merchants]
         conn.execute(
             "INSERT INTO budgets (name, category, monthly_limit, active, fixed) VALUES (?,?,?,1,?) "
             "ON CONFLICT(name) DO UPDATE SET category=CASE WHEN ? THEN category ELSE excluded.category END, monthly_limit=excluded.monthly_limit, "
@@ -63,7 +64,7 @@ def budget_set(conn: sqlite3.Connection, name: str, amount: float, categories: l
             conn.executemany("INSERT OR IGNORE INTO budget_selectors (budget_id, kind, value, label) VALUES (?,?,?,?)", [(bid, *s) for s in sel])
     out = next(b for b in _budgets(conn, "WHERE id=?", (bid,)))
     if merchants:
-        out["matches"] = {label: conn.execute(f"SELECT count(*) FROM tx_now t WHERE {MERCHANT}", {"v": v}).fetchone()[0]
+        out["matches"] = {label: conn.execute(f"SELECT count(*) FROM tx_now t WHERE {SPEND} AND {MERCHANT}", {"v": v, "l": label}).fetchone()[0]
                           for kind, v, label in sel if kind == "merchant"}
     return out
 
@@ -103,19 +104,21 @@ def budget_list(conn: sqlite3.Connection, as_of: str | None = None) -> list[dict
 SPEND = "flow IN ('expense','refund','mortgage')"
 # KEEP IN STEP WITH detectors/rules/budget_pace.sql. A budget counts a transaction any of its selectors matches, once.
 # A payment paired with the mortgage loan is a mortgage whatever Plaid filed it under (often a transfer). A merchant is
-# its canonical (canonical_for) or, case-insensitively, the name `display` shows, so an alias or entity id added later still matches.
-MERCHANT = "lower(:v) IN (lower(t.canonical), lower(t.display))"
+# its canonical (canonical_for) or the name as typed, either one case-insensitively against canonical or `display`: an
+# alias added later, or a charge Plaid sent without the entity id the others carry, still matches.
+MERCHANT = "(lower(:v) IN (lower(t.canonical), lower(t.display)) OR lower(:l) IN (lower(t.canonical), lower(t.display)))"
 MATCH = ("EXISTS (SELECT 1 FROM budget_selectors s WHERE s.budget_id = :bid AND ((s.kind = 'category' AND (s.value IN (t.category, t.category_primary) "
          "OR (t.flow = 'mortgage' AND s.value IN ('LOAN_PAYMENTS_MORTGAGE_PAYMENT', 'LOAN_PAYMENTS')))) "
-         "OR (s.kind = 'merchant' AND " + MERCHANT.replace(":v", "s.value") + ")))")
+         "OR (s.kind = 'merchant' AND " + MERCHANT.replace(":v", "s.value").replace(":l", "COALESCE(s.label, s.value)") + ")))")
 # A charge of one of Plaid's live recurring streams (a bill, a subscription), or its refund: pace counts it once, never
-# projects it. A weekly, biweekly or semi-monthly stream recurs within the month, so it stays projected. Same merchant and within 25%
+# projects it. Monthly and annual streams only: one that recurs within the month (weekly, semi-monthly) or irregularly
+# (Plaid's UNKNOWN, a restaurant) stays projected. Same merchant (a bare description: on the stream's account) and within 25%
 # (the tolerance, four times here and in budget_pace.sql) of the stream's amount, so a one-off at a merchant that also
 # bills monthly stays variable. Not scoped to :as_of: a run takes as_of before its sync stamps a new stream's first_seen_at.
 # ponytail: merchant + amount, not Plaid's transaction_ids per stream (not stored); store them if this misfiles.
 RECURRING = ("EXISTS (SELECT 1 FROM recurring r WHERE r.direction = 'outflow' AND COALESCE(r.is_active, 1) = 1 "
-             "AND COALESCE(r.status, '') NOT IN ('TOMBSTONED', 'EARLY_DETECTION') AND COALESCE(r.frequency, '') NOT IN ('WEEKLY', 'BIWEEKLY', 'SEMI_MONTHLY') "
-             "AND (r.merchant_entity_id = t.merchant_entity_id OR lower(r.merchant_name) = lower(t.merchant_name) OR r.description = t.name) "
+             "AND COALESCE(r.status, '') NOT IN ('TOMBSTONED', 'EARLY_DETECTION') AND r.frequency IN ('MONTHLY', 'ANNUALLY') "
+             "AND (r.merchant_entity_id = t.merchant_entity_id OR lower(r.merchant_name) = lower(t.merchant_name) OR (r.description = t.name AND r.account_id = t.account_id)) "
              "AND (abs(abs(t.amount) - r.avg_amount) <= 0.25 * abs(r.avg_amount) OR abs(abs(t.amount) - r.last_amount) <= 0.25 * abs(r.last_amount)))")
 
 

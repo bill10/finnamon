@@ -21,7 +21,7 @@ A budget covers one or more categories and merchants: `finnamon budget set dinin
 --category "fast food" --category coffee`, `finnamon budget set "water and trash" 90 --merchant "Seattle Public Utilities"
 --merchant Recology` (each flag repeats; given, they replace the budget's list; a charge several of them match counts once;
 two budgets may share a category). The mortgage counts toward a budget on its category (the checking-side payment, once);
-transfers and card payments never do. Pace counts a recurring charge (a bill or subscription Plaid sees as recurring)
+transfers and card payments never do. Pace counts a charge of a monthly or yearly bill or subscription Plaid sees as recurring
 once at its amount and projects only the rest; `--fixed` (`--no-fixed` undoes it) marks a budget that is one bill a
 month, so it is compared to its limit and never projected. A dashboard limit edit keeps the categories and merchants.
 It can start adding a bank ("add my Chase account" → `finnamon link --start` gives you the Plaid link; you

@@ -11,8 +11,8 @@ spend AS (
          COALESCE(SUM(t.amount), 0) AS mtd,
          COALESCE(SUM(CASE WHEN EXISTS (   -- budgets.RECURRING (not :as_of-scoped: the run's as_of predates its sync)
                 SELECT 1 FROM recurring r WHERE r.direction = 'outflow' AND COALESCE(r.is_active, 1) = 1
-                  AND COALESCE(r.status, '') NOT IN ('TOMBSTONED', 'EARLY_DETECTION') AND COALESCE(r.frequency, '') NOT IN ('WEEKLY', 'BIWEEKLY', 'SEMI_MONTHLY')
-                  AND (r.merchant_entity_id = t.merchant_entity_id OR lower(r.merchant_name) = lower(t.merchant_name) OR r.description = t.name)
+                  AND COALESCE(r.status, '') NOT IN ('TOMBSTONED', 'EARLY_DETECTION') AND r.frequency IN ('MONTHLY', 'ANNUALLY')
+                  AND (r.merchant_entity_id = t.merchant_entity_id OR lower(r.merchant_name) = lower(t.merchant_name) OR (r.description = t.name AND r.account_id = t.account_id))
                   AND (abs(abs(t.amount) - r.avg_amount) <= 0.25 * abs(r.avg_amount) OR abs(abs(t.amount) - r.last_amount) <= 0.25 * abs(r.last_amount)))
              THEN t.amount END), 0) AS recurring
   FROM budgets b, month
@@ -21,7 +21,8 @@ spend AS (
                 AND EXISTS (SELECT 1 FROM budget_selectors s WHERE s.budget_id = b.id     -- budgets.MATCH: any selector, counted once
                               AND ((s.kind = 'category' AND (s.value IN (t.category, t.category_primary)
                                    OR (t.flow = 'mortgage' AND s.value IN ('LOAN_PAYMENTS_MORTGAGE_PAYMENT', 'LOAN_PAYMENTS'))))   -- paired with the loan, whatever Plaid filed it under
-                                OR (s.kind = 'merchant' AND lower(s.value) IN (lower(t.canonical), lower(t.display)))))
+                                OR (s.kind = 'merchant' AND (lower(s.value) IN (lower(t.canonical), lower(t.display))
+                                                             OR lower(COALESCE(s.label, s.value)) IN (lower(t.canonical), lower(t.display))))))
   WHERE b.active = 1
   GROUP BY b.id
 ),

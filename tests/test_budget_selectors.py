@@ -66,7 +66,7 @@ def test_recurring_needs_a_live_monthly_stream_and_a_refund_never_projects_below
     assert pace_alerts(conn, "2026-09-06 12:00:00") == []
     txn(conn, "rv", "chk", "2026-09-05", -1500, "LITTLE SPROUTS REVERSAL", "Little Sprouts", None, "GENERAL_SERVICES", "GENERAL_SERVICES_CHILDCARE")
     assert budgets.budget_list(conn, "2026-09-06 12:00:00")[0]["recurring"] == 0   # the bill's reversal nets in the recurring part, not projected
-    for change in ("is_active=0", "status='TOMBSTONED'", "frequency='WEEKLY'", "frequency='SEMI_MONTHLY'"):   # stopped, or recurring within the month: projected
+    for change in ("is_active=0", "status='TOMBSTONED'", "frequency='WEEKLY'", "frequency='SEMI_MONTHLY'", "frequency='UNKNOWN'"):   # stopped, or recurring within the month: projected
         conn.execute(f"UPDATE recurring SET is_active=1, status='MATURE', frequency='MONTHLY'"); conn.execute(f"UPDATE recurring SET {change}")
         conn.execute("DELETE FROM transactions WHERE transaction_id IN ('rf','rv')")
         assert budgets.budget_list(conn, "2026-09-06 12:00:00")[0]["recurring"] == 0, change
@@ -103,13 +103,18 @@ def test_several_categories_and_merchants_count_each_transaction_once(conn):
     assert conn.execute("SELECT value FROM budget_selectors WHERE label='Blue Bottle'").fetchone()[0] == "mch_bb"   # canonical_for, as category rules
     # typed in another case, or as `display` shows it after an alias: still matched, and the reply says how many charges
     assert budgets.budget_set(conn, "trash", 50, merchants=["recology"])["matches"] == {"recology": 1}
+    txn(conn, "c2", "cc", "2026-09-13", 5, "BLUE BOTTLE #2", "Blue Bottle", None, "FOOD_AND_DRINK", "FOOD_AND_DRINK_COFFEE")   # Plaid sent no entity id
+    assert budgets.budget_set(conn, "bb", 50, merchants=["Blue Bottle"])["matches"] == {"Blue Bottle": 2}
     budgets.alias_set(conn, "BLUE BOTTLE", "my coffee place")
     assert budgets.budget_set(conn, "cafe", 50, merchants=["My Coffee Place"])["matches"] == {"My Coffee Place": 1}   # display, entity id kept
     a = {a["budget"]: a for a in pace_alerts(conn, AS_OF)}["water and trash"]   # 165 * 30/19 = 260 >= 200
     assert (a["spent"], a["category"]) == (165, None)
     budgets.budget_remove(conn, "dining")
-    budgets.budget_set(conn, "dining", 300)                                    # re-added from the dashboard: starts over
-    assert [b["covers"] for b in budgets.budget_list(conn, AS_OF) if b["name"] == "dining"] == [["Restaurant"]]
+    budgets.budget_set(conn, "water and trash", 200, fixed=True); budgets.budget_remove(conn, "water and trash")
+    budgets.budget_set(conn, "dining", 300)                                    # re-added from the dashboard: what it covered comes back
+    budgets.budget_set(conn, "water and trash", 200)                           # a merchant-only name resolves to no category: no error
+    back = {b["name"]: b for b in budgets.budget_list(conn, AS_OF)}
+    assert back["dining"]["covers"] == ["Restaurant", "Coffee", "Blue Bottle"] and back["water and trash"]["fixed"] is False   # but not fixed
 
 
 def test_cli_repeats_flags(home, conn, capsys):

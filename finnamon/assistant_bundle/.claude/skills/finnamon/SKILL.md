@@ -135,7 +135,7 @@ daemon's `[Telegram, …]` runs and `/triage`.
 | "normal 3" on a roundup | `finnamon normal --roundup-item <message_id> 3` (message_id from `finnamon alerts`, field telegram_message_id) |
 | "set groceries 650", "raise dining to 400" | `finnamon budget set groceries 650` (a limit alone keeps the budget's categories, merchants and `--fixed`) |
 | "dining should include fast food and coffee", "a water and trash budget for SPU and Recology" | `finnamon budget set dining 400 --category restaurants --category "fast food" --category coffee`; `finnamon budget set "water and trash" 90 --merchant "Seattle Public Utilities" --merchant Recology` (each flag repeats, a primary or detailed category or a merchant as `display` shows it; the lists given replace the budget's, so repeat the ones it keeps: `finnamon budget` shows `categories` and `merchants`) |
-| "childcare is one bill a month", "the HOA is fixed" | `finnamon budget set childcare 1500 --fixed`: compared to its limit, never projected (`--no-fixed` undoes it). Without it, a charge Plaid sees as recurring already counts once and only the rest of the month is projected |
+| "childcare is one bill a month", "the HOA is fixed" | `finnamon budget set childcare 1500 --fixed`: compared to its limit, never projected (`--no-fixed` undoes it). Without it, a charge of a monthly or yearly stream Plaid sees as recurring already counts once and only the rest of the month is projected |
 | "be stricter about duplicates" | `finnamon settings set dup_min_amount 5` (numeric detector knobs only; daemon timing is not yours) |
 | "drop the pets budget" | `finnamon budget remove pets` |
 | "the house is worth 850k", "add the car at 12,000" | `finnamon property set "House" 850000` (an existing name updates the value) |
