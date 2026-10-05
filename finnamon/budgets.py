@@ -40,19 +40,18 @@ def budget_set(conn: sqlite3.Connection, name: str, amount: float, categories: l
                merchants: list[str] | None = None, fixed: bool | None = None) -> dict:
     """Categories and merchants given replace the budget's selectors; none given keeps an existing budget's (the
     dashboard's limit edit, or re-adding a removed one) and a new one takes its name as the category. fixed None keeps
-    what it was, except that a removed budget comes back not fixed. A merchant reply carries how many past charges it
-    matches, so a zero shows at once."""
+    what it was, except that a removed budget comes back not fixed. A merchant is any name the household sees for it
+    (resolve_merchant: all its canonicals; a name with no charge is refused with suggestions); the reply carries how many
+    past spending charges each one matches."""
     name = name.strip().lower()
     amount = _positive(amount, "monthly limit")
     categories = [categories] if isinstance(categories, str) else list(categories or [])
     merchants = list({m.strip().lower(): m.strip() for m in merchants or []}.values())   # "Recology" and "recology" are one
-    if any(not m for m in merchants):
-        raise ValueError("a merchant needs a name")
     with store.tx(conn):   # one write, read and all: a crash or a concurrent edit mid-way would leave a budget counting nothing
         old = conn.execute("SELECT id FROM budgets WHERE name=?", (name,)).fetchone()
         keep = not (categories or merchants) and old and conn.execute("SELECT 1 FROM budget_selectors WHERE budget_id=?", (old[0],)).fetchone()
         codes = [] if keep else list(dict.fromkeys(resolve_category(c) for c in categories or ([] if merchants else [name])))
-        sel = [("category", c, None) for c in codes] + [("merchant", canonical_for(conn, m), m) for m in merchants]
+        sel = [("category", c, None) for c in codes] + [("merchant", c, m) for m in merchants for c in resolve_merchant(conn, m)["canonicals"]]
         conn.execute(
             "INSERT INTO budgets (name, category, monthly_limit, active, fixed) VALUES (?,?,?,1,?) "
             "ON CONFLICT(name) DO UPDATE SET category=CASE WHEN ? THEN category ELSE excluded.category END, monthly_limit=excluded.monthly_limit, "
@@ -64,8 +63,10 @@ def budget_set(conn: sqlite3.Connection, name: str, amount: float, categories: l
             conn.executemany("INSERT OR IGNORE INTO budget_selectors (budget_id, kind, value, label) VALUES (?,?,?,?)", [(bid, *s) for s in sel])
     out = next(b for b in _budgets(conn, "WHERE id=?", (bid,)))
     if merchants:
-        out["matches"] = {label: conn.execute(f"SELECT count(*) FROM tx_now t WHERE pending=0 AND {SPEND} AND {MERCHANT}", {"v": v, "l": label}).fetchone()[0]
-                          for kind, v, label in sel if kind == "merchant"}
+        one = MERCHANT.replace(":v", "s.value").replace(":l", "s.label")
+        out["matches"] = {m: conn.execute(f"SELECT count(*) FROM tx_now t WHERE pending=0 AND {SPEND} AND EXISTS (SELECT 1 FROM budget_selectors s "
+                                          f"WHERE s.budget_id=:bid AND s.kind='merchant' AND s.label=:l AND {one})", {"bid": bid, "l": m}).fetchone()[0]
+                          for m in merchants}
     return out
 
 
@@ -78,7 +79,7 @@ def _budgets(conn: sqlite3.Connection, where: str, args: tuple = ()) -> list[dic
     for b in conn.execute(f"SELECT id, name, category, monthly_limit, fixed FROM budgets {where} ORDER BY name", args).fetchall():
         sel = conn.execute("SELECT kind, value, label FROM budget_selectors WHERE budget_id=? ORDER BY rowid", (b["id"],)).fetchall()
         cats = [s["value"] for s in sel if s["kind"] == "category"]
-        merchants = [s["label"] or s["value"] for s in sel if s["kind"] == "merchant"]
+        merchants = list(dict.fromkeys(s["label"] or s["value"] for s in sel if s["kind"] == "merchant"))   # one name, maybe several canonicals
         out.append({"id": b["id"], "name": b["name"], "category": cats[0] if cats else None,   # the first, as before selectors
                     "categories": cats, "merchants": merchants, "covers": [taxonomy.label(c) for c in cats] + merchants,   # covers: the dashboard's line
                     "fixed": bool(b["fixed"]), "monthly_limit": b["monthly_limit"]})
@@ -104,7 +105,7 @@ def budget_list(conn: sqlite3.Connection, as_of: str | None = None) -> list[dict
 SPEND = "flow IN ('expense','refund','mortgage')"
 # KEEP IN STEP WITH detectors/rules/budget_pace.sql. A budget counts a transaction any of its selectors matches, once.
 # A payment paired with the mortgage loan is a mortgage whatever Plaid filed it under (often a transfer), and only a mortgage. A merchant is
-# its canonical (canonical_for) or the name as typed, either one case-insensitively against canonical or `display`: an
+# a canonical resolve_merchant found or the name as typed, either one case-insensitively against canonical or `display`: an
 # alias added later (the raw bank name stays a candidate), or a charge Plaid sent without the entity id, still matches.
 MERCHANT = "(lower(:v) IN (lower(t.canonical), lower(t.display), lower(t.name)) OR lower(:l) IN (lower(t.canonical), lower(t.display), lower(t.name)))"
 MATCH = ("EXISTS (SELECT 1 FROM budget_selectors s WHERE s.budget_id = :bid AND ((s.kind = 'category' AND ((t.flow <> 'mortgage' AND s.value IN (t.category, t.category_primary)) "

@@ -132,9 +132,27 @@ def test_several_categories_and_merchants_count_each_transaction_once(conn):
 def test_cli_repeats_flags(home, conn, capsys):
     seed(conn)
     assert budgets.budget_list(conn, "2026-10") == []                         # no budgets: nothing to compute, no crash
+    txn(conn, "c", "cc", "2026-09-11", 6, "BLUE BOTTLE", "Blue Bottle", "mch_bb", "FOOD_AND_DRINK", "FOOD_AND_DRINK_COFFEE")
     cli.main(["budget", "set", "dining", "300", "--category", "restaurant", "--category", "coffee", "--merchant", "Blue Bottle", "--fixed"])
     out = json.loads(capsys.readouterr().out)
     assert (out["categories"], out["merchants"], out["fixed"]) == (["FOOD_AND_DRINK_RESTAURANT", "FOOD_AND_DRINK_COFFEE"], ["Blue Bottle"], True)
+    # a merchant with no charge is refused with what it probably meant, and nothing is written
+    with pytest.raises(SystemExit):
+        cli.main(["budget", "set", "dining", "300", "--merchant", "Blue Botle"])
+    assert "did you mean Blue Bottle" in capsys.readouterr().err
+    assert budgets.budget_list(conn, AS_OF)[0]["merchants"] == ["Blue Bottle"]
+
+
+def test_a_merchant_is_every_canonical_behind_its_name(conn):
+    seed(conn)
+    txn(conn, "c", "cc", "2026-09-11", 6, "BLUE BOTTLE", "Blue Bottle", "mch_bb", "FOOD_AND_DRINK", "FOOD_AND_DRINK_COFFEE")
+    txn(conn, "c2", "cc", "2026-09-13", 5, "BLUE BOTTLE #2", "Blue Bottle", None, "FOOD_AND_DRINK", "FOOD_AND_DRINK_COFFEE")   # Plaid sent no entity id
+    b = budgets.budget_set(conn, "cafe", 50, merchants=["blue bottle"])     # the name both charges show: both canonicals
+    assert (b["merchants"], b["matches"]) == (["blue bottle"], {"blue bottle": 2})
+    assert sorted(r[0] for r in conn.execute("SELECT value FROM budget_selectors")) == ["Blue Bottle", "mch_bb"]
+    assert budgets.budget_list(conn, AS_OF)[0]["spent"] == 11
+    b = budgets.budget_set(conn, "cafe", 50, merchants=["BLUE BOTTLE #2"])  # the raw bank text names the merchant too
+    assert b["matches"] == {"BLUE BOTTLE #2": 2} and budgets.budget_list(conn, AS_OF)[0]["spent"] == 11
 
 
 def test_migration_moves_each_budgets_category_into_a_selector():
@@ -154,6 +172,7 @@ def test_migration_moves_each_budgets_category_into_a_selector():
 # Value: protects=the dashboard's covers line (taxonomy.label: detailed code -> its leaf, primary -> itself, merchants as typed); fails_when=label drops the primary prefix wrongly or covers loses merchants/order; why_new=nothing asserted covers or taxonomy.label; seam=none
 def test_covers_labels_categories_for_people_then_merchants(conn):
     seed(conn)
+    txn(conn, "c", "cc", "2026-09-11", 6, "BLUE BOTTLE", "Blue Bottle", "mch_bb", "FOOD_AND_DRINK", "FOOD_AND_DRINK_COFFEE")
     b = budgets.budget_set(conn, "dining", 300, ["FOOD_AND_DRINK_COFFEE", "FOOD_AND_DRINK"], ["Blue Bottle"])
     assert b["covers"] == ["Coffee", "Food and drink", "Blue Bottle"]
 
@@ -175,6 +194,7 @@ def test_new_selectors_replace_old_and_blank_merchant_is_refused(conn):
 # Value: protects=the dashboard's limit edit (`budget set -- name amount`, no flags) keeps merchants and fixed; --no-fixed clears it; fails_when=--fixed defaults to False or a None --category/--merchant is read as "clear"; why_new=the CLI test only covers the all-flags path; seam=none
 def test_cli_limit_edit_keeps_selectors_and_fixed(home, conn, capsys):
     seed(conn)
+    txn(conn, "dc", "chk", "2026-09-03", 1500, "LITTLE SPROUTS", "Little Sprouts", None, "GENERAL_SERVICES", "GENERAL_SERVICES_CHILDCARE")
     cli.main(["budget", "set", "daycare", "1500", "--merchant", "Little Sprouts", "--fixed"])
     capsys.readouterr()
     cli.main(["budget", "set", "--", "daycare", "1600"])

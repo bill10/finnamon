@@ -5,7 +5,7 @@
 CREATE TABLE IF NOT EXISTS budget_selectors (
   budget_id INTEGER NOT NULL,                    -- budgets.id
   kind      TEXT NOT NULL CHECK (kind IN ('category', 'merchant')),
-  value     TEXT NOT NULL,                       -- a pfc_primary or pfc_detailed; for a merchant, tx_now.canonical (budgets.canonical_for)
+  value     TEXT NOT NULL,                       -- a pfc_primary or pfc_detailed; for a merchant, a tx_now.canonical (budgets.resolve_merchant: one row each)
   label     TEXT,                                -- the merchant as the person typed it
   PRIMARY KEY (budget_id, kind, value)
 );

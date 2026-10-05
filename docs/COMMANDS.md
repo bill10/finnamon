@@ -19,7 +19,7 @@ charge was groceries" is a one-time edit of that charge only, `finnamon category
 undoes it; it wins over the rule). `finnamon category costco --clear` deletes the rule (charges fall back to the bank's category; one-time edits stay) and `finnamon category --rules` lists the rules and one-time edits; the assistant asks which you mean when it can't tell.
 A budget covers one or more categories and merchants: `finnamon budget set dining 400 --category restaurants
 --category "fast food" --category coffee`, `finnamon budget set "water and trash" 90 --merchant "Seattle Public Utilities"
---merchant Recology` (each flag repeats; either one given replaces all of the budget's categories and merchants; a charge
+--merchant Recology` (each flag repeats; a merchant is any name its charges show, as for `finnamon category`, and a name with no charge is refused with suggestions; either one given replaces all of the budget's categories and merchants; a charge
 several of them match counts once; two budgets may share a category). The mortgage counts (the checking-side payment, once,
 even when the bank filed it as a transfer) toward a budget on the mortgage category (`LOAN_PAYMENTS_MORTGAGE_PAYMENT`, or all
 of `LOAN_PAYMENTS`) or on its merchant, and never toward any other category; transfers and card payments never count.

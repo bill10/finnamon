@@ -4,7 +4,7 @@ bump: minor
 ### Added
 - **A budget can cover several categories and merchants.** `finnamon budget set dining 400 --category restaurants --category "fast food" --category coffee`, or `--merchant "Seattle Public Utilities" --merchant Recology` for a "water and trash" budget; each flag repeats and a charge several of them match counts once. `finnamon budget` keeps its `category` field and adds `categories`, `merchants` and `fixed`; the dashboard's budget card shows what each one covers. Existing budgets move over as they are.
 - **`budget set … --fixed`** marks a budget that is one bill a month (childcare, the HOA): it is compared to its limit and never projected.
-- **A merchant budget counts every charge of that merchant**, typed in any case, as the dashboard shows it, and on charges Plaid sent without its merchant id; `budget set --merchant` says how many past charges each one matches.
+- **A merchant budget counts every charge of that merchant**: `--merchant` takes any name its charges show (as `finnamon category` does), typed in any case, covers the charges Plaid sent with and without its merchant id, refuses a name no charge has with what you probably meant, and says how many past charges each one matches.
 
 ### Fixed
 - **A mortgage budget counts the mortgage.** It reported $0 after the payment posted; now the checking-side payment counts once (the loan account's side never doubles it), even when the bank filed it as a transfer, it is never projected, and `budget suggest` shows it as the mortgage. A budget on `LOAN_PAYMENTS` (all loan payments) now counts the mortgage too. Transfers and card payments still never count.
