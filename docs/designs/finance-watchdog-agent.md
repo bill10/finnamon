@@ -401,7 +401,7 @@ finnamon/
   imports.py       manual accounts (items.source = 'manual', a bank Plaid can't reach; `finnamon account add`) and `finnamon import`:
                    any bank's CSV export, deterministic ids so a file imports once; `import --browser <bank>` execs a Claude session on
                    the import-browser skill with its own permission set (browser_command_ok, `hook browser-guard`)
-  mcp_server.py    (m4/5) read-only tools over the DB
+  mcp_server.py    (m4/5) read-only tools over the DB, and finnamon(argv), the Codex assistant's way to run the CLI (allow-listed)
   scheduler.py     writes and loads the daemon (KeepAlive), the heartbeat timer and, when web/ is npm-installed, the dashboard job for launchd or systemd;
                    on macOS rotates ~/Library/Logs/finnamon past 5 MB (heartbeat and daemon start; journald covers Linux)
   backup.py        weekly VACUUM INTO ~/.finnamon/backups/finnamon-YYYY-MM-DD.db (0600, newest 8), called at the end of run.py; never raises
@@ -599,7 +599,7 @@ Specified in User Workflow Step 7 and the daemon entry above. Summary: the daemo
 
 ### MCP server (milestone 5)
 
-Read-only tools over the same functions the CLI exposes, for clients that aren't Claude Code (Claude Desktop, a phone app). Optional; Claude Code itself uses the CLI through Bash. `net_worth_history` arrives with milestone 6 when `holdings` exists.
+Read-only tools over the same functions the CLI exposes, for clients that aren't Claude Code (Claude Desktop, a phone app). Optional; Claude Code itself uses the CLI through Bash. Codex card 3 adds one more tool, `finnamon(argv, stdin)`: the CLI run outside Codex's sandbox, refused unless argv is on the bundle's `Bash(finnamon …)` allow list and off its deny list, with `FINNAMON_FROM_AGENT` set (docs/DEVELOPMENT.md, the `codex.py` row). `net_worth_history` arrives with milestone 6 when `holdings` exists.
 
 ### Plaid Link
 
