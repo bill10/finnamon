@@ -5,7 +5,8 @@ liabilities with each one's share (click the Property row to state what the hous
 3, 6 or 12-month trend, an **Add account** menu (Link account: Plaid Link runs in
 the page, the bank's login opens in the same tab, nothing to copy; or Import CSV for a bank Plaid can't reach, a window that adds the manual account and takes its file, with a Fetch by AI option that runs the browser import in its own session, shown as an Import tab in the intercom), budgets as an overall bar plus the categories
 that matter (a line under one says what it covers when its name doesn't: several categories, a merchant, or `fixed`) with a **Manage** mode to change, add or remove them (each shows what it counts; its pencil opens a picker of categories
-from the taxonomy and merchants the household has seen; the Overall bar counts a charge two budgets share once, and an
+from the taxonomy and merchants the household has seen, and the new-budget row has one too, for a budget whose name is
+no category, like "subscriptions" made of its merchants; the Overall bar counts a charge two budgets share once, and an
 "Uncategorized (N)" line opens the transactions with no category, an import's mostly, which count toward no budget), the alerts sent to the household lately, or about
 to be (open or unsent, each with **It's normal** and **Dismiss**, except a bank that needs a re-login or whose connection
 is expiring, which gets **Reconnect** in place of It's normal, as it does beside "needs a new login" in the accounts list:
