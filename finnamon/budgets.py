@@ -109,12 +109,12 @@ MATCH = ("EXISTS (SELECT 1 FROM budget_selectors s WHERE s.budget_id = :bid AND 
          "OR (t.flow = 'mortgage' AND s.value IN ('LOAN_PAYMENTS_MORTGAGE_PAYMENT', 'LOAN_PAYMENTS')))) "
          "OR (s.kind = 'merchant' AND " + MERCHANT.replace(":v", "s.value") + ")))")
 # A charge of one of Plaid's live recurring streams (a bill, a subscription), or its refund: pace counts it once, never
-# projects it. A weekly or biweekly stream recurs within the month, so it stays projected. Same merchant and within 25%
+# projects it. A weekly, biweekly or semi-monthly stream recurs within the month, so it stays projected. Same merchant and within 25%
 # (the tolerance, four times here and in budget_pace.sql) of the stream's amount, so a one-off at a merchant that also
 # bills monthly stays variable. Not scoped to :as_of: a run takes as_of before its sync stamps a new stream's first_seen_at.
 # ponytail: merchant + amount, not Plaid's transaction_ids per stream (not stored); store them if this misfiles.
 RECURRING = ("EXISTS (SELECT 1 FROM recurring r WHERE r.direction = 'outflow' AND COALESCE(r.is_active, 1) = 1 "
-             "AND COALESCE(r.status, '') NOT IN ('TOMBSTONED', 'EARLY_DETECTION') AND COALESCE(r.frequency, '') NOT IN ('WEEKLY', 'BIWEEKLY') "
+             "AND COALESCE(r.status, '') NOT IN ('TOMBSTONED', 'EARLY_DETECTION') AND COALESCE(r.frequency, '') NOT IN ('WEEKLY', 'BIWEEKLY', 'SEMI_MONTHLY') "
              "AND (r.merchant_entity_id = t.merchant_entity_id OR lower(r.merchant_name) = lower(t.merchant_name) OR r.description = t.name) "
              "AND (abs(abs(t.amount) - r.avg_amount) <= 0.25 * abs(r.avg_amount) OR abs(abs(t.amount) - r.last_amount) <= 0.25 * abs(r.last_amount)))")
 

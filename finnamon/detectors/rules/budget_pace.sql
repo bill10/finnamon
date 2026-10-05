@@ -11,7 +11,7 @@ spend AS (
          COALESCE(SUM(t.amount), 0) AS mtd,
          COALESCE(SUM(CASE WHEN EXISTS (   -- budgets.RECURRING (not :as_of-scoped: the run's as_of predates its sync)
                 SELECT 1 FROM recurring r WHERE r.direction = 'outflow' AND COALESCE(r.is_active, 1) = 1
-                  AND COALESCE(r.status, '') NOT IN ('TOMBSTONED', 'EARLY_DETECTION') AND COALESCE(r.frequency, '') NOT IN ('WEEKLY', 'BIWEEKLY')
+                  AND COALESCE(r.status, '') NOT IN ('TOMBSTONED', 'EARLY_DETECTION') AND COALESCE(r.frequency, '') NOT IN ('WEEKLY', 'BIWEEKLY', 'SEMI_MONTHLY')
                   AND (r.merchant_entity_id = t.merchant_entity_id OR lower(r.merchant_name) = lower(t.merchant_name) OR r.description = t.name)
                   AND (abs(abs(t.amount) - r.avg_amount) <= 0.25 * abs(r.avg_amount) OR abs(abs(t.amount) - r.last_amount) <= 0.25 * abs(r.last_amount)))
              THEN t.amount END), 0) AS recurring

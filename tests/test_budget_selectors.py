@@ -66,7 +66,7 @@ def test_recurring_needs_a_live_monthly_stream_and_a_refund_never_projects_below
     assert pace_alerts(conn, "2026-09-06 12:00:00") == []
     txn(conn, "rv", "chk", "2026-09-05", -1500, "LITTLE SPROUTS REVERSAL", "Little Sprouts", None, "GENERAL_SERVICES", "GENERAL_SERVICES_CHILDCARE")
     assert budgets.budget_list(conn, "2026-09-06 12:00:00")[0]["recurring"] == 0   # the bill's reversal nets in the recurring part, not projected
-    for change in ("is_active=0", "status='TOMBSTONED'", "frequency='WEEKLY'"):   # stopped, or recurring within the month: projected
+    for change in ("is_active=0", "status='TOMBSTONED'", "frequency='WEEKLY'", "frequency='SEMI_MONTHLY'"):   # stopped, or recurring within the month: projected
         conn.execute(f"UPDATE recurring SET is_active=1, status='MATURE', frequency='MONTHLY'"); conn.execute(f"UPDATE recurring SET {change}")
         conn.execute("DELETE FROM transactions WHERE transaction_id IN ('rf','rv')")
         assert budgets.budget_list(conn, "2026-09-06 12:00:00")[0]["recurring"] == 0, change
