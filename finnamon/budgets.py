@@ -36,47 +36,84 @@ def _positive(amount, what: str) -> float:
     return v
 
 
-def budget_set(conn: sqlite3.Connection, name: str, amount: float, category: str | None = None) -> dict:
+def budget_set(conn: sqlite3.Connection, name: str, amount: float, categories: list[str] | str | None = None,
+               merchants: list[str] | None = None, fixed: bool | None = None) -> dict:
+    """Categories and merchants given replace the budget's selectors; none given keeps an existing budget's (the
+    dashboard's limit edit) and a new one takes its name as the category. fixed None keeps what it was."""
     name = name.strip().lower()
     amount = _positive(amount, "monthly limit")
-    code = resolve_category(category or name)
+    categories = [categories] if isinstance(categories, str) else list(categories or [])
+    merchants = [m.strip() for m in merchants or []]
+    if any(not m for m in merchants):
+        raise ValueError("a merchant needs a name")
+    old = conn.execute("SELECT id FROM budgets WHERE name=?", (name,)).fetchone()
+    keep = not (categories or merchants) and old and conn.execute("SELECT 1 FROM budget_selectors WHERE budget_id=?", (old[0],)).fetchone()
+    codes = [] if keep else list(dict.fromkeys(resolve_category(c) for c in categories or ([] if merchants else [name])))
+    sel = [("category", c, None) for c in codes] + [("merchant", canonical_for(conn, m), m) for m in merchants]
     conn.execute(
-        "INSERT INTO budgets (name, category, monthly_limit, active) VALUES (?,?,?,1) "
-        "ON CONFLICT(name) DO UPDATE SET category=excluded.category, monthly_limit=excluded.monthly_limit, active=1",
-        (name, code, float(amount)),
-    )
-    return {"name": name, "category": code, "monthly_limit": float(amount)}
+        "INSERT INTO budgets (name, category, monthly_limit, active, fixed) VALUES (?,?,?,1,?) "
+        "ON CONFLICT(name) DO UPDATE SET category=CASE WHEN ? THEN category ELSE excluded.category END, monthly_limit=excluded.monthly_limit, active=1, "
+        "fixed=COALESCE(?, fixed)",
+        (name, codes[0] if codes else "", amount, int(bool(fixed)), bool(keep), None if fixed is None else int(fixed)))
+    bid = conn.execute("SELECT id FROM budgets WHERE name=?", (name,)).fetchone()[0]
+    if not keep:
+        conn.execute("DELETE FROM budget_selectors WHERE budget_id=?", (bid,))
+        conn.executemany("INSERT OR IGNORE INTO budget_selectors (budget_id, kind, value, label) VALUES (?,?,?,?)", [(bid, *s) for s in sel])
+    return next(b for b in _budgets(conn, "WHERE id=?", (bid,)))
 
 
 def budget_remove(conn: sqlite3.Connection, name: str) -> bool:
     return conn.execute("UPDATE budgets SET active=0 WHERE name=?", (name.strip().lower(),)).rowcount > 0
 
 
+def _budgets(conn: sqlite3.Connection, where: str, args: tuple = ()) -> list[dict]:
+    out = []
+    for b in conn.execute(f"SELECT id, name, category, monthly_limit, fixed FROM budgets {where} ORDER BY name", args).fetchall():
+        sel = conn.execute("SELECT kind, value, label FROM budget_selectors WHERE budget_id=? ORDER BY rowid", (b["id"],)).fetchall()
+        cats = [s["value"] for s in sel if s["kind"] == "category"]
+        merchants = [s["label"] or s["value"] for s in sel if s["kind"] == "merchant"]
+        out.append({"id": b["id"], "name": b["name"], "category": cats[0] if cats else None,   # the first, as before selectors
+                    "categories": cats, "merchants": merchants, "covers": [taxonomy.label(c) for c in cats] + merchants,   # covers: the dashboard's line
+                    "fixed": bool(b["fixed"]), "monthly_limit": b["monthly_limit"]})
+    return out
+
+
 def budget_list(conn: sqlite3.Connection, as_of: str | None = None) -> list[dict]:
     as_of = as_of or store.now_local()
-    rows = conn.execute("SELECT id, name, category, monthly_limit FROM budgets WHERE active=1 ORDER BY name").fetchall()
+    day = int(as_of[8:10])
+    days = conn.execute("SELECT CAST(strftime('%d', date(?, 'start of month', '+1 month', '-1 day')) AS INTEGER)", (as_of,)).fetchone()[0]
     out = []
-    for b in rows:
-        mtd = month_to_date(conn, b["category"], as_of)
-        day = int(as_of[8:10])
-        days = conn.execute("SELECT CAST(strftime('%d', date(?, 'start of month', '+1 month', '-1 day')) AS INTEGER)", (as_of,)).fetchone()[0]
-        out.append({"id": b["id"], "name": b["name"], "category": b["category"], "monthly_limit": b["monthly_limit"],
-                    "spent": round(mtd, 2), "day": day, "pace": round(mtd * days / day, 2) if day else None})
+    for b in _budgets(conn, "WHERE active=1"):
+        mtd, rec = month_to_date(conn, b["id"], as_of)
+        pace = mtd if b["fixed"] else rec + (mtd - rec) * days / day
+        out.append({**b, "spent": round(mtd, 2), "recurring": round(rec, 2), "day": day, "pace": round(pace, 2)})
     return out
 
 
 # tx_now (migration 005): transactions with the alias and the category override resolved, mirrors excluded --
 # the prelude's `tx` without the :as_of scoping. Everything here reads categories and merchants through it.
-SPEND = "flow IN ('expense','refund')"   # tx_now's flow (migration 008): not a transfer between the household's own accounts, not a payment onto a linked card, not money in; the mortgage is fixed, not budgeted
+# tx_now's flow (migration 008): not a transfer between the household's own accounts, not a payment onto a linked card,
+# not money in. The mortgage counts, once: its checking-side payment is 'mortgage', the loan account's mirror 'skipped'.
+SPEND = "flow IN ('expense','refund','mortgage')"
+# KEEP IN STEP WITH detectors/rules/budget_pace.sql. A budget counts a transaction any of its selectors matches, once.
+MATCH = ("EXISTS (SELECT 1 FROM budget_selectors s WHERE s.budget_id = ? AND ((s.kind = 'category' AND s.value IN (t.category, t.category_primary)) "
+         "OR (s.kind = 'merchant' AND s.value = t.canonical)))")
+# A charge of one of Plaid's recurring streams (a bill, a subscription): pace counts it once, never projects it.
+# Same merchant and within 25% of the stream's amount, so a one-off at a merchant that also bills monthly stays variable.
+# ponytail: merchant + amount, not Plaid's transaction_ids per stream (not stored); store them if this misfiles.
+RECURRING = ("EXISTS (SELECT 1 FROM recurring r WHERE r.direction = 'outflow' "
+             "AND (r.merchant_entity_id = t.merchant_entity_id OR lower(r.merchant_name) = lower(t.merchant_name) OR r.description = t.name) "
+             "AND (abs(t.amount - r.avg_amount) <= 0.25 * abs(r.avg_amount) OR abs(t.amount - r.last_amount) <= 0.25 * abs(r.last_amount)))")
 
 
-def month_to_date(conn: sqlite3.Connection, category: str, as_of: str) -> float:
+def month_to_date(conn: sqlite3.Connection, budget_id: int, as_of: str) -> tuple[float, float]:
+    """(spent, the part of it that is recurring charges)."""
     r = conn.execute(
-        "SELECT COALESCE(SUM(amount),0) FROM tx_now "
+        f"SELECT COALESCE(SUM(amount),0), COALESCE(SUM(CASE WHEN amount > 0 AND {RECURRING} THEN amount END),0) FROM tx_now t "
         "WHERE pending=0 AND date >= date(?, 'start of month') AND date <= date(?) "
-        f"AND {SPEND} AND (category = ? OR category_primary = ?)",
-        (as_of, as_of, category, category)).fetchone()
-    return float(r[0] or 0)
+        f"AND {SPEND} AND {MATCH}",
+        (as_of, as_of, budget_id)).fetchone()
+    return float(r[0] or 0), float(r[1] or 0)
 
 
 def suggest(conn: sqlite3.Connection, months: int = 6, as_of: str | None = None) -> dict:

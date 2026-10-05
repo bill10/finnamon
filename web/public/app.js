@@ -322,7 +322,9 @@ const CAT_ICONS = [[/grocer/, 'shopping-cart'], [/restaurant|dining|coffee|food/
   [/auto|car|vehicle/, 'car'], [/subscri|stream|entertain|tv|music/, 'television'], [/travel|flight|hotel|airline/, 'airplane'],
   [/rent|mortgage|home|util|electric|water|internet/, 'house'], [/medic|health|pharm|dental|doctor/, 'first-aid'], [/pet/, 'dog'],
   [/gift|charit|donat/, 'heart'], [/shop|merch|general|clothing|amazon/, 'storefront']];
-const catIcon = (b) => (CAT_ICONS.find(([re]) => re.test(`${b.name} ${b.category || ''}`.toLowerCase())) || [null, 'tag'])[1];
+const catIcon = (b) => (CAT_ICONS.find(([re]) => re.test(`${b.name} ${(b.covers || []).join(' ')} ${b.category || ''}`.toLowerCase())) || [null, 'tag'])[1];
+// what a budget counts, when its name doesn't say it all: several categories, a merchant, a fixed bill
+const covers = (b) => (b.covers || []).length > 1 || (b.merchants || []).length || b.fixed ? [...(b.covers || []), ...(b.fixed ? ['fixed'] : [])].join(' · ') : '';
 const barState = (b) => b.spent > b.monthly_limit ? 'over' : (b.pace > b.monthly_limit || b.spent / b.monthly_limit > 0.8) ? 'warn' : '';
 const pctOf = (b) => Math.min(100, Math.round(100 * b.spent / b.monthly_limit));
 
@@ -340,14 +342,15 @@ function renderBudgets(s) {
     `<div class="bar"><div class="fill ${left < 0 ? 'over' : pct > 80 ? 'warn' : ''}" style="width:${pct}%"></div></div><div class="note ${left < 0 ? 'over' : ''}">${note}</div></div>` +
     `<h3>${bs.length > 4 ? 'Top categories' : 'Categories'}</h3><div class="cats">` + top.map(b =>
       `<div class="cat"><span class="ic">${icon(catIcon(b))}</span><span class="name">${esc(b.name)}</span><span class="amt num">${money(b.spent)} / ${money(b.monthly_limit)}</span>` +
-      `<div class="bar"><div class="fill ${barState(b)}" style="width:${pctOf(b)}%"></div></div></div>`).join('') + '</div>';
+      `<div class="bar"><div class="fill ${barState(b)}" style="width:${pctOf(b)}%"></div></div>${covers(b) ? `<span class="covers" title="${esc(covers(b))}">${esc(covers(b))}</span>` : ''}</div>`).join('') + '</div>';
 }
 
 let managing = false;
 function renderManage(s) {
   const m = $('budgets-manage');
   m.innerHTML = s.budgets.map(b =>
-    `<div class="erow" data-name="${esc(b.name)}"><span class="name"><span class="ic">${icon(catIcon(b))}</span>${esc(b.name)} <span class="pace num">${money(b.spent)} so far</span></span>` +
+    `<div class="erow" data-name="${esc(b.name)}"><span class="name"><span class="ic">${icon(catIcon(b))}</span><span class="lbl">${esc(b.name)} <span class="pace num">${money(b.spent)} so far</span>` +
+    `${covers(b) ? `<span class="covers" title="${esc(covers(b))}">${esc(covers(b))}</span>` : ''}</span></span>` +
     `<input class="num" value="${b.monthly_limit}" inputmode="decimal" aria-label="Monthly limit for ${esc(b.name)}"><button class="del" aria-label="Remove ${esc(b.name)}" data-del="${esc(b.name)}">${icon('trash')}</button></div>`).join('') +
     `<div class="erow add"><input id="b-new-name" placeholder="New category, e.g. travel"><input id="b-new-amt" class="num" placeholder="$ per month" inputmode="decimal"><span></span></div>` +
     `<div class="eactions"><span class="err" id="b-err"></span><button class="quiet" id="b-cancel">Cancel</button><button class="primary" id="b-save">Save</button></div>`;

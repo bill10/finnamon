@@ -56,9 +56,9 @@ def test_prelude_time_scopes_the_one_time_edit(conn):
 
 def test_a_one_time_transfer_edit_makes_that_row_a_transfer_and_counts_in_budgets(conn):
     costco(conn)
-    budgets.budget_set(conn, "groceries", 500, "FOOD_AND_DRINK_GROCERIES")
+    bid = budgets.budget_set(conn, "groceries", 500, "FOOD_AND_DRINK_GROCERIES")["id"]
     budgets.tx_category_set(conn, "c1", "FOOD_AND_DRINK_GROCERIES")
-    assert budgets.month_to_date(conn, "FOOD_AND_DRINK_GROCERIES", AS_OF) == 80
+    assert budgets.month_to_date(conn, bid, AS_OF)[0] == 80
     budgets.tx_category_set(conn, "c2", "TRANSFER_OUT_ACCOUNT_TRANSFER")
     assert dict(conn.execute("SELECT transaction_id, flow FROM tx_now"))["c2"] == "transfer"
 

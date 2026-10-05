@@ -70,6 +70,12 @@ def primary_of(code: str) -> str | None:
     return CODES.get(code)
 
 
+def label(code: str) -> str:
+    """FOOD_AND_DRINK_FAST_FOOD → "Fast food", FOOD_AND_DRINK → "Food and drink": for people, not for matching."""
+    p = CODES.get(code)
+    return (code[len(p) + 1:] if p else code).replace("_", " ").capitalize()
+
+
 def resolve(text: str) -> tuple[str | None, list[str]]:
     """Returns (code, candidates). code is set when exactly one match; candidates lists options otherwise."""
     t = text.strip()

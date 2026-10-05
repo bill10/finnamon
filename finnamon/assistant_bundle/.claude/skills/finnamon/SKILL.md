@@ -133,7 +133,9 @@ daemon's `[Telegram, …]` runs and `/triage`.
 | "undo that" on an alert just resolved (here or on the dashboard) | `finnamon alerts --undo <id>`: reopens it and removes only the rule its `normal --alert` wrote |
 | "stop ignoring Acme" | `finnamon normal --list` for the rule's id, then `finnamon normal --remove <id>` |
 | "normal 3" on a roundup | `finnamon normal --roundup-item <message_id> 3` (message_id from `finnamon alerts`, field telegram_message_id) |
-| "set groceries 650", "raise dining to 400" | `finnamon budget set groceries 650` |
+| "set groceries 650", "raise dining to 400" | `finnamon budget set groceries 650` (a limit alone keeps the budget's categories, merchants and `--fixed`) |
+| "dining should include fast food and coffee", "a water and trash budget for SPU and Recology" | `finnamon budget set dining 400 --category restaurants --category "fast food" --category coffee`; `finnamon budget set "water and trash" 90 --merchant "Seattle Public Utilities" --merchant Recology` (each flag repeats, a primary or detailed category or a merchant as `display` shows it; the lists given replace the budget's, so repeat the ones it keeps: `finnamon budget` shows `categories` and `merchants`) |
+| "childcare is one bill a month", "the HOA is fixed" | `finnamon budget set childcare 1500 --fixed`: compared to its limit, never projected (`--no-fixed` undoes it). Without it, a charge Plaid sees as recurring already counts once and only the rest of the month is projected |
 | "be stricter about duplicates" | `finnamon settings set dup_min_amount 5` (numeric detector knobs only; daemon timing is not yours) |
 | "drop the pets budget" | `finnamon budget remove pets` |
 | "the house is worth 850k", "add the car at 12,000" | `finnamon property set "House" 850000` (an existing name updates the value) |
@@ -162,8 +164,10 @@ to you as a reply. For how to run it (what it needs, what comes next), read `fin
 1. `finnamon budget suggest` gives per-category monthly spend for the last 6 months (median, min,
    max, top merchants), recurring streams, lowest balances, existing budgets.
 2. Propose 4 to 7 budgets in a short table: name, proposed limit (round up a little from the
-   median), the range, one note. Never propose budgets for INCOME, TRANSFER_*, LOAN_PAYMENTS, or
-   for fixed costs (rent, insurance, mortgage); say you'll watch those instead. Point out where a
+   median), the range, one note. A budget can group categories ("Dining" = restaurants + fast food
+   + coffee) and merchants (`--merchant`, for a bill Plaid files oddly), so propose groups where the
+   household thinks of them as one. Never propose budgets for INCOME or TRANSFER_*. Fixed costs
+   (rent, insurance, mortgage, childcare) only when they ask; then `--fixed`. Point out where a
    merchant's Plaid category is wrong for this household (Costco as "superstore" when it's their
    grocery run) and offer `finnamon category`.
 3. Ask what to adjust. Apply each edit with `finnamon budget set` / `finnamon category` /
@@ -198,7 +202,7 @@ candidate already has, so pick another. Tell the person it is not live until the
 - `accounts(account_id, item_id, name, mask, type, subtype, owner, mirror_of)`. Always add `AND mirror_of IS NULL` to avoid double-counting joint accounts (`tx_now` already has).
 - `items(item_id, institution, owner, status, source, first_synced_at, last_synced_at)` (`source`: `plaid` or `manual`); `balances(account_id, as_of, current, available)`. Imported rows have `transaction_id` starting `import:`, no `merchant_name`, and a category only when the same `name` already had one on a Plaid account (`finnamon category` fixes the rest).
 - `recurring(stream_id, account_id, direction, merchant_name, frequency, avg_amount, last_amount, last_date, predicted_next_date, status)`.
-- `properties(name, value, updated_at)` (stated assets, counted into net worth); `budgets(name, category, monthly_limit, active)`; `category_override(canonical, pfc_primary, pfc_detailed)` (the merchant rule); `tx_category_override(transaction_id, pfc_primary, pfc_detailed)` (one-time edits, ahead of the rule); `merchant_alias(name, canonical)` (a `name` holding `%` is a LIKE pattern); `suppressions(kind, canonical, account_id, max_amount, note, stream_id)` (kind NULL = every kind except `anomaly:recurring_changed`, which needs its own kind; `stream_id` scopes one to a single subscription); `settings(account_id, key, value)`.
+- `properties(name, value, updated_at)` (stated assets, counted into net worth); `budgets(id, name, category, monthly_limit, active, fixed)` (`category` is the first only) and `budget_selectors(budget_id, kind, value, label)` (kind `category`: a pfc code; `merchant`: `tx_now.canonical`); a budget counts `flow IN ('expense','refund','mortgage')` rows any selector matches; `category_override(canonical, pfc_primary, pfc_detailed)` (the merchant rule); `tx_category_override(transaction_id, pfc_primary, pfc_detailed)` (one-time edits, ahead of the rule); `merchant_alias(name, canonical)` (a `name` holding `%` is a LIKE pattern); `suppressions(kind, canonical, account_id, max_amount, note, stream_id)` (kind NULL = every kind except `anomaly:recurring_changed`, which needs its own kind; `stream_id` scopes one to a single subscription); `settings(account_id, key, value)`.
 - `alerts(id, tier, kind, key, transaction_id, payload_json, verdict, confidence, reason, sent_at, telegram_message_id, resolved_at, resolution, suppression_id)` (resolution: `normal`, rule `suppression_id`, `dismissed`, or `reconnected` (Finnamon resolved it once the bank logged back in; nothing to undo)); `roundup_items(telegram_message_id, n, alert_id)`; `feedback`.
 - Categories are Plaid's: `finnamon category list` prints the taxonomy.
 

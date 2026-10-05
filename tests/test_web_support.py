@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from finnamon import charts, config, link, plaid_api, scheduler, secrets, store, sync
+from finnamon import budgets, charts, config, link, plaid_api, scheduler, secrets, store, sync
 from finnamon.plaid_api import PlaidError
 from tests.conftest import AS_OF, REAL_UNIT_DIR, seed, txn
 
@@ -23,7 +23,7 @@ def test_every_chart_has_a_spec(conn):
     for i in range(6):
         txn(conn, f"c{i}", "chk", f"2026-0{4 + i % 5}-1{i}", 40 + i, "COSTCO WHSE", "Costco")
     conn.execute("INSERT INTO balances VALUES ('chk', ?, 1000, 900)", (AS_OF,))
-    conn.execute("INSERT INTO budgets (name, category, monthly_limit) VALUES ('groceries','FOOD_AND_DRINK_GROCERIES',600)")
+    budgets.budget_set(conn, "groceries", 600, "FOOD_AND_DRINK_GROCERIES")
     for name in charts.CHARTS:
         s = charts.spec(conn, name, "costco" if name == "merchant_history" else None, 12)
         assert s["$schema"].startswith("https://vega.github.io/schema/vega-lite/") and s["title"] and "values" in s["data"]

@@ -74,10 +74,11 @@ def test_tx_now_view_matches_prelude_and_every_read_path(conn):
            sorted(map(tuple, conn.execute(f"SELECT {sel} FROM tx_now")))
 
     rent = [b for b in budgets.budget_list(conn, as_of) if b["name"] == "rent"][0]
-    assert rent["spent"] == 1800.0                                       # the mortgage payment is no longer rent, and a loan payment is not spend
-    assert budgets.suggest(conn, 6, as_of)["categories"] == [{"category": "RENT_AND_UTILITIES_RENT", "primary": "RENT_AND_UTILITIES", "months": {last[:7]: 1800.0},
+    assert rent["spent"] == 1800.0                                       # the mortgage payment is no longer rent
+    assert budgets.suggest(conn, 6, as_of)["categories"][1:] == [{"category": "RENT_AND_UTILITIES_RENT", "primary": "RENT_AND_UTILITIES", "months": {last[:7]: 1800.0},
                                                               "months_seen": 1, "min": 1800.0, "max": 1800.0, "median": 1800.0, "variance_ratio": 0.0,
                                                               "top_merchants": [{"merchant": "Sunset Apartments", "total": 1800.0}]}]   # same relation and same months as the totals, so they add up
+    assert budgets.suggest(conn, 6, as_of)["categories"][0]["category"] == "LOAN_PAYMENTS_MORTGAGE_PAYMENT"   # a mortgage is budgetable, so suggest shows it
     by_cat = {v["category"]: v["amount"] for v in charts.spec(conn, "spend_by_category")["data"]["values"]}
     assert by_cat == {"Rent And Utilities": 3600}                        # moved out of rent and, being a loan payment, out of the chart
     assert [v["merchant"] for v in charts.spec(conn, "merchant_history", "1st Security bank MORTGAGE")["data"]["values"]] == ["1st Security Bank mortgage"] * 2
@@ -323,7 +324,7 @@ def test_low_balance_weekly_key(conn):
 
 def test_budget_pace_and_over_are_exclusive_and_net(conn):
     seed(conn)
-    conn.execute("INSERT INTO budgets (name, category, monthly_limit) VALUES ('groceries','FOOD_AND_DRINK_GROCERIES',600)")
+    budgets.budget_set(conn, "groceries", 600, "FOOD_AND_DRINK_GROCERIES")
     txn(conn, "a", "chk", "2026-09-05", 300, "WF", "Whole Foods", "mch_wf")
     txn(conn, "b", "chk", "2026-09-10", 100, "WF", "Whole Foods", "mch_wf")
     txn(conn, "r", "chk", "2026-09-11", -50, "WF refund", "Whole Foods", "mch_wf")            # refund nets out
@@ -342,7 +343,7 @@ def test_budget_pace_and_over_are_exclusive_and_net(conn):
 
 def test_budget_pace_silent_before_min_day_and_primary_budget(conn):
     seed(conn)
-    conn.execute("INSERT INTO budgets (name, category, monthly_limit) VALUES ('food','FOOD_AND_DRINK',100)")
+    budgets.budget_set(conn, "food", 100, "FOOD_AND_DRINK")
     txn(conn, "a", "chk", "2026-09-02", 90, "Chipotle", "Chipotle", "mch_c", "FOOD_AND_DRINK", "FOOD_AND_DRINK_RESTAURANT")
     assert run(conn, "budget_pace", "2026-09-03 12:00:00") == []          # day 3 < budget_min_day
     ids = run(conn, "budget_pace", "2026-09-06 12:00:00")                # day 6: 90*30/6 = 450 pace; primary matches detailed child
@@ -351,7 +352,7 @@ def test_budget_pace_silent_before_min_day_and_primary_budget(conn):
 
 def test_budget_uses_category_override(conn):
     seed(conn)
-    conn.execute("INSERT INTO budgets (name, category, monthly_limit) VALUES ('groceries','FOOD_AND_DRINK_GROCERIES',100)")
+    budgets.budget_set(conn, "groceries", 100, "FOOD_AND_DRINK_GROCERIES")
     txn(conn, "a", "chk", "2026-09-06", 400, "COSTCO", "Costco", "mch_costco", "GENERAL_MERCHANDISE", "GENERAL_MERCHANDISE_SUPERSTORES")
     assert run(conn, "budget_pace", "2026-09-10 12:00:00") == []
     conn.execute("INSERT INTO category_override (canonical, pfc_primary, pfc_detailed, created_at) VALUES ('mch_costco','FOOD_AND_DRINK','FOOD_AND_DRINK_GROCERIES','2026-09-01')")

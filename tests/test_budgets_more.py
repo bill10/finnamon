@@ -39,7 +39,7 @@ def test_budget_remove_category_guard_alias_and_resolve_errors(conn):
     alert_id = conn.execute("SELECT max(id) FROM alerts").fetchone()[0]
     assert budgets.normal(conn, alert_id=alert_id)["canonical"] == "Bank of America mortgage"   # "it is normal" on the alert lands on the pattern's canonical
     budgets.category_set(conn, "Bank of America mortgage", "HOME_IMPROVEMENT_REPAIR_AND_MAINTENANCE")   # a spend category, so month_to_date counts it
-    assert budgets.month_to_date(conn, "HOME_IMPROVEMENT_REPAIR_AND_MAINTENANCE", AS_OF) == 2400
+    assert budgets.month_to_date(conn, budgets.budget_set(conn, "repairs", 3000, "HOME_IMPROVEMENT_REPAIR_AND_MAINTENANCE")["id"], AS_OF)[0] == 2400
     txn(conn, "m0", "chk", "2026-08-11", 2400, "Loan Payment Confirmation# 112233", None, None, "LOAN_PAYMENTS", "LOAN_PAYMENTS_OTHER_PAYMENT")
     sug = {c["category"]: c for c in budgets.suggest(conn, 3, AS_OF)["categories"]}
     assert sug["HOME_IMPROVEMENT_REPAIR_AND_MAINTENANCE"]["months"]["2026-08"] == 2400

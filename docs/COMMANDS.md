@@ -17,6 +17,13 @@ alert wrote. Each covers every alert on that alert's transaction: when two detec
 "Costco is groceries" is a rule, `finnamon category costco groceries`: every Costco charge, past and future. "That one
 charge was groceries" is a one-time edit of that charge only, `finnamon category --tx <transaction_id> groceries` (`--clear`
 undoes it; it wins over the rule). `finnamon category costco --clear` deletes the rule (charges fall back to the bank's category; one-time edits stay) and `finnamon category --rules` lists the rules and one-time edits; the assistant asks which you mean when it can't tell.
+A budget covers one or more categories and merchants: `finnamon budget set dining 400 --category restaurants
+--category "fast food" --category coffee`, `finnamon budget set "water and trash" 90 --merchant "Seattle Public Utilities"
+--merchant Recology` (each flag repeats; given, they replace the budget's list; a charge several of them match counts once;
+two budgets may share a category). The mortgage counts toward a budget on its category (the checking-side payment, once);
+transfers and card payments never do. Pace counts a recurring charge (a bill or subscription Plaid sees as recurring)
+once at its amount and projects only the rest; `--fixed` (`--no-fixed` undoes it) marks a budget that is one bill a
+month, so it is compared to its limit and never projected. A dashboard limit edit keeps the categories and merchants.
 It can start adding a bank ("add my Chase account" → `finnamon link --start` gives you the Plaid link; you
 log in, the daemon finishes), and send a broken bank's re-login link to the chat (reply "fix Chase" to a re-login or
 expiring-connection alert → `finnamon link --update <item_id> --telegram`; when two logins share a bank the alert says
