@@ -12,6 +12,9 @@ SELECT
               'last_error', i.last_error, 'last_synced_at', i.last_synced_at, 'as_of', :as_of, 'owner', i.owner,
               'duplicate', EXISTS (SELECT 1 FROM items j WHERE j.institution = i.institution AND j.item_id <> i.item_id AND j.source = 'plaid')) AS payload
 FROM items i
-WHERE i.status <> 'good'
+WHERE NOT EXISTS (   -- the same error still open: a sync that applies a page and then fails moves last_synced_at, and must not re-alert
+    SELECT 1 FROM alerts a WHERE a.kind = 'sync_health' AND a.resolved_at IS NULL AND i.status <> 'good'
+      AND json_extract(a.payload_json, '$.item_id') = i.item_id AND json_extract(a.payload_json, '$.status') = i.status)
+  AND (i.status <> 'good'
    OR (i.source = 'plaid' AND COALESCE(i.last_synced_at, i.created_at) < datetime(:as_of, '-' || (SELECT text FROM g WHERE key='health_max_age_hours') || ' hours'))
-   OR (i.source = 'manual' AND COALESCE(i.last_synced_at, i.created_at) < datetime(:as_of, '-' || (SELECT text FROM g WHERE key='import_max_age_days') || ' days'));
+   OR (i.source = 'manual' AND COALESCE(i.last_synced_at, i.created_at) < datetime(:as_of, '-' || (SELECT text FROM g WHERE key='import_max_age_days') || ' days')));

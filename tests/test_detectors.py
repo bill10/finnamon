@@ -278,10 +278,23 @@ def test_duplicate_charge_three_identical_charges_are_one_alert(conn, tg):
     assert len(run(conn, "duplicate_charge")) == 1 and alerts(conn, "duplicate_charge")[-1]["payload"]["count"] == 4
 
 
-def test_duplicate_charge_uses_index_for_self_join(conn):
+def test_duplicate_charge_reads_transactions_once(conn):
+    # The quadratic case (8s at 30k rows) was a pair self-join; runs are one windowed pass over an index range.
     seed(conn)
-    plan = " ".join(detect.explain(conn, RULES["duplicate_charge"], AS_OF))
-    assert "USING INDEX" in plan or "USING COVERING INDEX" in plan, plan
+    plan = detect.explain(conn, RULES["duplicate_charge"], AS_OF)
+    reads = [p for p in plan if p.startswith(("SEARCH t ", "SCAN t"))]
+    assert len(reads) == 1 and "USING INDEX" in reads[0], plan
+
+
+def test_duplicate_charge_a_chained_run_is_counted_whole(conn):
+    """Codex review: charges 3 days apart with a 3-day window are one run of three, not a hidden pair and a pair."""
+    seed(conn)
+    for tid, d in (("a", "2026-09-12"), ("b", "2026-09-15"), ("c", "2026-09-18")):
+        txn(conn, tid, "chk", d, 52.18, "SHELL OIL", "Shell", "mch_shell")
+    txn(conn, "far", "chk", "2026-09-02", 52.18, "SHELL OIL", "Shell", "mch_shell")   # 10 days before: its own (single) charge
+    assert len(run(conn, "duplicate_charge")) == 1
+    a = alerts(conn, "duplicate_charge")[0]
+    assert (a["key"], a["payload"]["count"], a["payload"]["date_a"], a["payload"]["txn_a"]) == ("dup:a:c:3", 3, "2026-09-12", "a")
 
 
 def test_sync_health_stale_and_error(conn):
@@ -550,13 +563,6 @@ def test_run_all_and_detector_error_is_loud(conn, tmp_path, monkeypatch):
     assert detect.run(conn, AS_OF) == []  # once per day
 
 
-def test_self_join_uses_a_date_range_on_the_index(conn):
-    # The quadratic case: the inner leg must be a range search on (account_id, date), not a scan per outer row.
-    seed(conn)
-    plan = detect.explain(conn, RULES["duplicate_charge"], AS_OF)
-    assert any("SEARCH t USING INDEX idx_txn_account_date (account_id=? AND date>? AND date<?)" in p for p in plan), plan
-
-
 def test_recurring_changed_cancelled_acknowledges_one_stream_and_kindless_normal_never_covers_it(conn):
     """#64: "yes, I cancelled it" mutes that stream only; another stream at the merchant, and a later new one, still
     alert. A merchant-level "normal" with no kind means its charges are normal, not that its subscriptions stopping is."""
@@ -667,3 +673,13 @@ def test_mortgage_and_a_card_payment_with_history_raise_no_outlier(conn):
     txn(conn, "pay", "chk", "2026-09-17", 2400, "CHASE CREDIT CRD EPAY", None, None, "GENERAL_SERVICES", "GENERAL_SERVICES_OTHER_GENERAL_SERVICES")
     conn.execute("DELETE FROM transactions WHERE transaction_id='payin'")
     assert [a["kind"] for a in alerts(conn) if a["transaction_id"] == "pay"] == [] and run(conn, "amount_outlier")   # unpaired, it is an outlier again
+
+
+def test_sync_health_an_error_that_returns_every_sync_is_one_alert(conn):
+    # Value: protects=one alert while the same bank error persists; fails_when=the open-same-status guard is dropped; why_new=apply_page moves last_synced_at before a later step fails; seam=none
+    seed(conn)
+    conn.execute("UPDATE items SET status='ADDITIONAL_CONSENT_REQUIRED'")
+    assert len(detect.run(conn, AS_OF, only=["sync_health"])) == 1
+    conn.execute("UPDATE items SET last_synced_at='2026-09-19 18:00:00'")   # a page applied, then recurring failed again
+    assert detect.run(conn, "2026-09-19 18:05:00", only=["sync_health"]) == []
+    assert [a["resolved_at"] for a in alerts(conn, "sync_health")] == [None]

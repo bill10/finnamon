@@ -105,8 +105,11 @@ def run(conn: sqlite3.Connection, as_of: str, only: list[str] | None = None) -> 
             )
             if cur.rowcount:
                 new_ids.append(cur.lastrowid)
-    with store.tx(conn):
-        resolve_recovered(conn)
+    try:
+        with store.tx(conn):
+            resolve_recovered(conn)
+    except sqlite3.Error:   # closing old alerts must never cost the new ones their delivery; the next run tries again
+        log.exception("resolving recovered sync_health alerts failed")
     return new_ids
 
 

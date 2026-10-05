@@ -441,8 +441,9 @@ def _remove(conn: sqlite3.Connection, item_id: str) -> dict:
             _drop_rows(conn, a)
         # its open alerts are about accounts that no longer exist: an unsent one would go out, a sent one stays open on the page
         now = store.now_local()
-        conn.execute(f"UPDATE alerts SET {UNLINKED} WHERE resolved_at IS NULL AND (account_id IN (SELECT account_id FROM accounts WHERE item_id=?) OR key LIKE ?)",
-                     (now, now, item_id, f"health:{item_id}:%"))
+        prefix = f"health:{item_id}:"   # not LIKE: an _ in the id would match another bank's
+        conn.execute(f"UPDATE alerts SET {UNLINKED} WHERE resolved_at IS NULL AND (account_id IN (SELECT account_id FROM accounts WHERE item_id=?) OR substr(key, 1, ?) = ?)",
+                     (now, now, item_id, len(prefix), prefix))
         conn.execute("DELETE FROM accounts WHERE item_id=?", (item_id,))
         conn.execute("DELETE FROM items WHERE item_id=?", (item_id,))
     if token:
@@ -476,7 +477,8 @@ def remove_account(conn: sqlite3.Connection, ref: str) -> dict:
             conn.execute("DELETE FROM accounts WHERE account_id=?", (r["account_id"],))
             last = not conn.execute("SELECT 1 FROM accounts WHERE item_id=?", (r["item_id"],)).fetchone()
             if last:
-                conn.execute(f"UPDATE alerts SET {UNLINKED} WHERE resolved_at IS NULL AND key LIKE ?", (now, now, f"health:{r['item_id']}:%"))
+                prefix = f"health:{r['item_id']}:"
+                conn.execute(f"UPDATE alerts SET {UNLINKED} WHERE resolved_at IS NULL AND substr(key, 1, ?) = ?", (now, now, len(prefix), prefix))
                 conn.execute("DELETE FROM items WHERE item_id=?", (r["item_id"],))
     finally:
         lock.close()
