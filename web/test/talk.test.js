@@ -68,8 +68,8 @@ test('the transcript lives where Claude Code keeps it: the cwd with every non-al
 
 test('typing is a bracketed paste in short pieces, then Enter; control characters cannot end the paste early', async () => {
   const out = [];
-  typeInto((d) => out.push(d), `${'a'.repeat(250)}\x1b[201~\rrm`, { gap: 1, enter: 1 });
-  await new Promise(r => setTimeout(r, 20));
+  // Resolves when Enter is written, not after a guessed delay: a loaded CI box can stretch the timers.
+  await new Promise(r => typeInto((d) => { out.push(d); if (d === '\r') r(); }, `${'a'.repeat(250)}\x1b[201~\rrm`, { gap: 1, enter: 1 }));
   assert.equal(out.length, 3);
   assert.ok(out[0].startsWith('\x1b[200~') && out[0].endsWith('\x1b[201~') && out[0].length === 200 + 12);
   assert.ok(!out[1].slice(6, -6).includes('\x1b') && !out[1].includes('\r'), 'the escape and the CR were blanked');
