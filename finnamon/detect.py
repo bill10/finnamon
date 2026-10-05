@@ -105,7 +105,21 @@ def run(conn: sqlite3.Connection, as_of: str, only: list[str] | None = None) -> 
             )
             if cur.rowcount:
                 new_ids.append(cur.lastrowid)
+    with store.tx(conn):
+        resolve_recovered(conn)
     return new_ids
+
+
+def resolve_recovered(conn: sqlite3.Connection) -> int:
+    """Close an open sync_health alert once its bank has synced since the alert saw it (status good, last_synced_at moved
+    on), or once a newer problem at the same bank has its own alert: one open alert per bank problem, never a pile."""
+    return conn.execute(
+        "UPDATE alerts SET resolved_at=datetime('now','localtime'), resolution='recovered' "
+        "WHERE kind='sync_health' AND resolved_at IS NULL AND ("
+        " EXISTS (SELECT 1 FROM items i WHERE i.item_id = json_extract(alerts.payload_json, '$.item_id') AND i.status = 'good'"
+        "         AND COALESCE(i.last_synced_at, '') > COALESCE(json_extract(alerts.payload_json, '$.last_synced_at'), ''))"
+        " OR EXISTS (SELECT 1 FROM alerts n WHERE n.kind = 'sync_health' AND n.id > alerts.id"
+        "            AND json_extract(n.payload_json, '$.item_id') = json_extract(alerts.payload_json, '$.item_id')))").rowcount
 
 
 def explain(conn: sqlite3.Connection, sql_file: Path, as_of: str) -> list[str]:

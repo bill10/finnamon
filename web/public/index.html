@@ -75,6 +75,7 @@
     <div class="empty" id="alerts-empty" style="display:none"><span class="ic"><svg class="ic" aria-hidden="true"><use href="#i-fill-check-circle"/></svg></span><b>Nothing to flag</b>Finnamon checks every sync and writes here when a charge looks off, a budget runs hot, or a bank needs attention.</div>
     <div class="empty" id="alerts-nolink" style="display:none"><span class="ic"><svg class="ic" aria-hidden="true"><use href="#i-regular-plug"/></svg></span><b>Link a bank to start</b>Nothing is being watched yet. Link an account (or run <code>finnamon link</code> on this machine) and Finnamon starts checking every sync.<button class="primary" id="nolink-btn" style="margin-top:12px">Link account</button></div>
     <ul class="alerts" id="alerts-body"></ul>
+    <button class="quiet" id="alerts-more" type="button" hidden></button>
     <details class="resolved" id="alerts-resolved" hidden><summary>Resolved (<span id="alerts-resolved-n">0</span>)</summary><ul class="alerts" id="alerts-resolved-body"></ul></details>
   </section>
 

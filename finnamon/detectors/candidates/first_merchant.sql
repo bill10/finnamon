@@ -4,6 +4,8 @@ SELECT t.account_id, 'anomaly:first_merchant' AS kind, 'anom:first:' || t.transa
                    'category', t.category, 'confidence', t.pfc_confidence, 'as_of', :as_of) AS payload
 FROM tx t
 WHERE t.pending = 0 AND NOT t.suppressed
+  AND t.flow NOT IN ('card_payment', 'transfer', 'mortgage')   -- money moving between the household's own accounts is not news
   AND t.date >= date(:as_of, '-' || (SELECT text FROM g WHERE key='lookback_days') || ' days') AND t.date >= date(t.first_synced_at) AND t.date <= date(:as_of)
   AND t.amount >= (SELECT value FROM g WHERE key='outlier_min_amount')
-  AND NOT EXISTS (SELECT 1 FROM tx p WHERE p.canonical = t.canonical AND p.transaction_id <> t.transaction_id AND p.date < t.date);
+  AND NOT EXISTS (SELECT 1 FROM tx p WHERE p.canonical = t.canonical AND p.transaction_id <> t.transaction_id
+                  AND (p.date < t.date OR (p.date = t.date AND p.transaction_id < t.transaction_id)));   -- two on one day: the first is the first

@@ -410,6 +410,9 @@ def normal(conn: sqlite3.Connection, canonical: str | None = None, kind: str | N
             r = conn.execute("SELECT COALESCE(merchant_entity_id, merchant_name, description) FROM recurring WHERE stream_id=?", (stream_id,)).fetchone()
             found = (r and r[0]) or found   # the detector's own expression, so the rule matches what it sees
             account_id = account_id or a["account_id"]
+        if kind == "recurring_price" == a["kind"]:   # "that's expected" is this subscription's new price, not every price at the merchant
+            stream_id = p.get("stream_id")
+            account_id = account_id or a["account_id"]
         if kind == "duplicate_charge":   # "normal" means this charge twice is fine, not every duplicate at the merchant
             # ponytail: a cap, so a smaller duplicate there stays muted too; an exact-amount column if that bites
             account_id = account_id or a["account_id"]

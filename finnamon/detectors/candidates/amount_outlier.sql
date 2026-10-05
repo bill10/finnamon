@@ -16,6 +16,7 @@ SELECT t.account_id, 'anomaly:amount_outlier' AS kind, 'anom:outlier:' || t.tran
                    'date', t.date, 'account', t.account_name, 'mask', t.mask, 'as_of', :as_of) AS payload
 FROM tx t JOIN med m ON m.canonical = t.canonical
 WHERE t.pending = 0 AND NOT t.suppressed
+  AND t.flow NOT IN ('card_payment', 'transfer', 'mortgage')   -- money moving between the household's own accounts is not news
   AND t.date >= date(:as_of, '-' || (SELECT text FROM g WHERE key='lookback_days') || ' days') AND t.date >= date(t.first_synced_at) AND t.date <= date(:as_of)
   AND m.cnt >= 3
   AND t.amount >= (SELECT value FROM g WHERE key='outlier_min_amount')

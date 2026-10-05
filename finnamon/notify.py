@@ -88,16 +88,18 @@ def render(alert: sqlite3.Row, page: bool = False) -> str:
     k = alert["kind"]
     acct = f"{esc(p.get('account'))} …{esc(p.get('mask'))}" if p.get("mask") else esc(p.get("account"))
     if k == "sync_health":
-        if p.get("status") == "ITEM_LOGIN_REQUIRED":
+        if p.get("status") in RELOGIN:
             bank, fix = _fix(p)
             return (f"🔌 <b>{bank} needs a re-login.</b> " + ("" if page else f"Reply <i>{fix}</i> and I'll send the login link here. ")
                     + "Until then its accounts aren't updating.")
+        doctor = " Run <code>finnamon doctor</code> on the Finnamon box to see what to fix; this closes by itself once the bank syncs again."
         if p.get("status") not in (None, "good"):
-            return f"🔌 <b>{esc(p.get('institution') or p.get('item_id'))} sync error:</b> {esc(p.get('status'))}. {esc(p.get('last_error') or '')}"
+            err = esc(p.get("last_error") or "").rstrip(". ")
+            return f"🔌 <b>{esc(p.get('institution') or p.get('item_id'))} sync error:</b> {esc(p.get('status'))}." + (f" {err}." if err else "") + doctor
         if p.get("source") == "manual":
             return (f"🗂 <b>{esc(p.get('institution') or p.get('item_id'))} hasn't been imported since {esc(p.get('last_synced_at') or 'it was added')}.</b> "
                     f"Download its CSV and use Import CSV on the dashboard, or <code>finnamon import</code>.")
-        return f"🩺 <b>{esc(p.get('institution') or p.get('item_id'))} hasn't synced since {esc(p.get('last_synced_at') or 'link')}.</b>"
+        return f"🩺 <b>{esc(p.get('institution') or p.get('item_id'))} hasn't synced since {esc(p.get('last_synced_at') or 'link')}.</b>" + doctor
     if k == "consent_expiring":   # raised by sync.sync_accounts, once per expiry date
         bank, fix = _fix(p)
         if page:
@@ -105,11 +107,18 @@ def render(alert: sqlite3.Row, page: bool = False) -> str:
         return (f"⏳ <b>{bank}'s connection expires {esc(str(p.get('expires') or '')[:10])}.</b> Reply <i>{fix}</i> and I'll send a link "
                 f"to renew it here; after that date its accounts stop updating.")
     if k == "duplicate_charge":   # the bank sends no name at all for some charges: say so, the way the anomaly line does
+        if int(p.get("count") or 2) > 2:   # one alert for the whole run of repeats
+            span = f"all on {esc(p.get('date_b'))}" if p.get("date_a") == p.get("date_b") else f"{esc(p.get('date_a'))} to {esc(p.get('date_b'))}"
+            return (f"⚠️ <b>Charged {int(p['count'])} times:</b> {esc(tidy(p.get('merchant')) or 'an unnamed charge')} {money(p.get('amount'))} on {acct}, "
+                    f"{span}. Same merchant, same amount.")
         return (f"⚠️ <b>Possible duplicate:</b> {esc(tidy(p.get('merchant')) or 'an unnamed charge')} {money(p.get('amount'))} on {acct}, "
                 f"{esc(p.get('date_a'))} and {esc(p.get('date_b'))}. Same merchant, same amount.")
     if k == "new_recurring":
         return (f"🔁 <b>New recurring charge:</b> {esc(tidy(p.get('merchant')) or 'an unnamed payee')} {money(p.get('amount'))} "
                 f"{esc((p.get('frequency') or '').lower())} on {acct}, first seen {esc(p.get('first_date'))}.")
+    if k == "recurring_price":
+        return (f"🔁 <b>{esc(tidy(p.get('merchant')) or 'A subscription')} went from {money(p.get('old_amount'))} to {money(p.get('amount'))}</b> "
+                f"on {acct}, {esc(p.get('date'))}.")
     if k == "channel_deaf":
         n = int(p.get("pending") or 0)
         return (f"🔇 <b>I stopped hearing this chat.</b> {n} message{'' if n == 1 else 's'} {'is' if n == 1 else 'are'} waiting and nothing is collecting them, "

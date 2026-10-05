@@ -4,7 +4,7 @@ SELECT t.account_id, 'anomaly:no_source' AS kind, 'anom:nosrc:' || t.transaction
        json_object('name', t.name, 'amount', t.amount, 'date', t.date, 'category', t.category,
                    'account', t.account_name, 'mask', t.mask, 'as_of', :as_of) AS payload
 FROM tx t
-WHERE t.pending = 0 AND NOT t.suppressed AND t.source = 'plaid'
+WHERE t.pending = 0 AND NOT t.suppressed AND t.flow NOT IN ('card_payment', 'transfer', 'mortgage') AND t.source = 'plaid'
   AND t.date >= date(:as_of, '-' || (SELECT text FROM g WHERE key='lookback_days') || ' days') AND t.date >= date(t.first_synced_at) AND t.date <= date(:as_of)
   AND t.merchant_entity_id IS NULL AND t.merchant_name IS NULL
   AND t.alias_canonical IS NULL

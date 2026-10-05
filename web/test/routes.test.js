@@ -730,6 +730,26 @@ test('resolved alerts render apart, greyed, saying how; only an undoable one get
   assert.equal(els['alerts-resolved'].hidden, true);
 });
 
+test('more than 8 open alerts: the first 8 and a Show N more that lists the rest', () => {
+  const app = readFileSync(join(import.meta.dirname, '../public/app.js'), 'utf8');
+  const html = readFileSync(join(import.meta.dirname, '../public/index.html'), 'utf8');
+  assert.ok(html.includes('<button class="quiet" id="alerts-more" type="button" hidden>'));
+  const src = /\nconst KIND_ICONS[\s\S]*?\nfunction renderAlerts\(s\) \{[\s\S]*?\n\}\n/.exec(app)[0];
+  const els = {};
+  const $ = (id) => (els[id] ||= { style: {}, innerHTML: '' });
+  const [renderAlerts, showAll] = new Function('$', 'esc', 'icon', 'when', `${src}; return [renderAlerts, () => { alertsAll = true; }];`)($, String, () => '', String);
+  const alerts = Array.from({ length: 11 }, (_, i) => ({ id: i + 1, kind: 'duplicate_charge', text: `a${i}`, sent_at: 't' }));
+  renderAlerts({ status: { items: [{}] }, alerts, resolved: [] });
+  assert.equal(els['alerts-body'].innerHTML.split('</li>').length - 1, 8);
+  assert.equal(els['alerts-more'].hidden, false);
+  assert.equal(els['alerts-more'].textContent, 'Show 3 more');
+  showAll();
+  renderAlerts({ status: { items: [{}] }, alerts, resolved: [] });
+  assert.equal(els['alerts-body'].innerHTML.split('</li>').length - 1, 11);
+  assert.equal(els['alerts-more'].hidden, true);
+  assert.ok(app.includes("$('alerts-more').addEventListener('click', () => { alertsAll = true;"), 'the button shows them all');
+});
+
 test('removing a manual account: the name after --, --yes (the page asked), and only with the key from this page\'s origin', async () => {
   await withApp(async ({ base, calls }) => {
     const port = new URL(base).port, path = `/api/account/${encodeURIComponent('--HSBC Checking')}`;

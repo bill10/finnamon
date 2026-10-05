@@ -420,6 +420,10 @@ def remove(conn: sqlite3.Connection, item_id: str) -> dict:
         lock.close()
 
 
+# an unsent alert is never sent (stamped sent, an anomaly suppressed); a sent one leaves the open list
+UNLINKED = "resolved_at=?, resolution='unlinked', verdict=CASE WHEN sent_at IS NULL THEN COALESCE(verdict, 'suppress') ELSE verdict END, sent_at=COALESCE(sent_at, ?)"
+
+
 def _remove(conn: sqlite3.Connection, item_id: str) -> dict:
     token = config.item_token(item_id)
     inst = conn.execute("SELECT institution FROM items WHERE item_id=?", (item_id,)).fetchone()
@@ -435,10 +439,9 @@ def _remove(conn: sqlite3.Connection, item_id: str) -> dict:
         accts = [r[0] for r in conn.execute("SELECT account_id FROM accounts WHERE item_id=?", (item_id,))]
         for a in accts:
             _drop_rows(conn, a)
-        # unsent alerts about this Item would go out pointing at accounts that no longer exist
+        # its open alerts are about accounts that no longer exist: an unsent one would go out, a sent one stays open on the page
         now = store.now_local()
-        conn.execute("UPDATE alerts SET resolved_at=?, sent_at=COALESCE(sent_at, ?), verdict=COALESCE(verdict, 'suppress') "
-                     "WHERE sent_at IS NULL AND (account_id IN (SELECT account_id FROM accounts WHERE item_id=?) OR key LIKE ?)",
+        conn.execute(f"UPDATE alerts SET {UNLINKED} WHERE resolved_at IS NULL AND (account_id IN (SELECT account_id FROM accounts WHERE item_id=?) OR key LIKE ?)",
                      (now, now, item_id, f"health:{item_id}:%"))
         conn.execute("DELETE FROM accounts WHERE item_id=?", (item_id,))
         conn.execute("DELETE FROM items WHERE item_id=?", (item_id,))
@@ -469,13 +472,11 @@ def remove_account(conn: sqlite3.Connection, ref: str) -> dict:
                 raise ValueError(f"{r['name']} is synced from Plaid; unlink its bank with `finnamon link --remove {r['item_id']}`")
             _drop_rows(conn, r["account_id"])
             now = store.now_local()
-            conn.execute("UPDATE alerts SET resolved_at=?, sent_at=COALESCE(sent_at, ?), verdict=COALESCE(verdict, 'suppress') "
-                         "WHERE sent_at IS NULL AND account_id=?", (now, now, r["account_id"]))
+            conn.execute(f"UPDATE alerts SET {UNLINKED} WHERE resolved_at IS NULL AND account_id=?", (now, now, r["account_id"]))
             conn.execute("DELETE FROM accounts WHERE account_id=?", (r["account_id"],))
             last = not conn.execute("SELECT 1 FROM accounts WHERE item_id=?", (r["item_id"],)).fetchone()
             if last:
-                conn.execute("UPDATE alerts SET resolved_at=?, sent_at=COALESCE(sent_at, ?), verdict=COALESCE(verdict, 'suppress') "
-                             "WHERE sent_at IS NULL AND key LIKE ?", (now, now, f"health:{r['item_id']}:%"))
+                conn.execute(f"UPDATE alerts SET {UNLINKED} WHERE resolved_at IS NULL AND key LIKE ?", (now, now, f"health:{r['item_id']}:%"))
                 conn.execute("DELETE FROM items WHERE item_id=?", (r["item_id"],))
     finally:
         lock.close()
