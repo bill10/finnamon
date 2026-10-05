@@ -41,8 +41,11 @@ CALLBACK = re.compile(r"^perm:([0-9a-f]{16}):(allow|deny)$")
 
 
 def _hidden(s: str) -> str:
-    """Controls, format characters (bidi marks, zero-width) and separators shown escaped: what the phone shows is what runs."""
-    return "".join(f"\\u{ord(c):04x}" if unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") else c for c in s)
+    """Controls, format characters (bidi marks, zero-width), separators, private-use and unassigned code points and
+    variation selectors shown escaped: what the phone shows is what runs. A newline stays a line break (in Bash it
+    separates commands, so it must look like one, not like the six characters \\u000a a command could also contain)."""
+    return "".join(c if c == "\n" else f"\\u{ord(c):04x}" if unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp", "Co", "Cn")
+                   or 0xFE00 <= ord(c) <= 0xFE0F or 0xE0100 <= ord(c) <= 0xE01EF else c for c in s)
 
 
 def describe(tool: str, inp: dict) -> tuple[str, bool]:
@@ -51,7 +54,7 @@ def describe(tool: str, inp: dict) -> tuple[str, bool]:
     work after a harmless start, and a fetch can carry the rows out in its query string, so the person sees every
     character that would run, or the phone only offers Deny."""
     inp = inp if isinstance(inp, dict) else {}
-    if tool == "WebFetch":
+    if tool == "WebFetch" and set(inp) <= {"url", "prompt"}:
         detail = str(inp.get("url") or "")
         host = urlsplit(detail).hostname or ""
         if host and not host.isascii():   # a look-alike name (Cyrillic і for i) shows as the bytes DNS will resolve
@@ -59,16 +62,18 @@ def describe(tool: str, inp: dict) -> tuple[str, bool]:
                 detail += f" (host {host.encode('idna').decode()})"
             except UnicodeError:
                 detail += " (host not a valid name)"
-    elif tool == "WebSearch":
+        if inp.get("prompt"):
+            detail += f"\nasking it: {inp['prompt']}"
+    elif tool == "WebSearch" and set(inp) <= {"query"}:
         detail = str(inp.get("query") or "")
-    elif tool == "Bash":
+    elif tool == "Bash" and set(inp) <= {"command", "description", "timeout"}:
         detail = str(inp.get("command") or "")
     elif tool == "Read" and set(inp) <= {"file_path", "offset", "limit"}:
         detail = str(inp.get("file_path") or "")
     else:   # Write's content, Edit's old and new text, an agent's prompt: the whole input, or no Allow
         detail = json.dumps(inp, ensure_ascii=False, indent=1)
     shown = esc(_hidden(detail))
-    whole = len(shown) <= DETAIL_MAX
+    whole = len(shown.encode("utf-16-le")) // 2 <= DETAIL_MAX   # Telegram counts UTF-16 units
     if not whole:
         shown = f"{shown[:300].rsplit('&', 1)[0] if '&' in shown[290:300] else shown[:300]}… ({len(detail)} characters: too long to check on a phone)"
     what = {"WebFetch": "open", "WebSearch": "search the web for", "Bash": "run"}.get(tool, f"use {tool} on")
@@ -190,6 +195,8 @@ def ask(event: dict, conn: sqlite3.Connection, *, deny: list[str] | None = None,
     rule = denied_by(tool, inp, _settings_deny(str(event.get("cwd") or ".")) if deny is None else deny)
     if rule:
         return _decision("deny", f"{rule} is on the deny list")
+    if tool in ("AskUserQuestion", "ExitPlanMode"):
+        return None   # a question or a plan for the person at the screen: an Allow from the phone would answer it with nothing
     if env.get("FINNAMON_FROM_CLAUDE") or env.get("FINNAMON_IMPORT_SESSION") or env.get("FINNAMON_TRIAGE"):
         return None   # an unattended run or the import session: nobody on the phone answers for those
     path = str(event.get("transcript_path") or "")
@@ -220,10 +227,7 @@ def ask(event: dict, conn: sqlite3.Connection, *, deny: list[str] | None = None,
         print(f"finnamon: permission prompt not sent to Telegram: {e}", file=sys.stderr)
         conn.execute("DELETE FROM state WHERE key=?", (KEY + rid,))
         return None
-    with_mid = json.dumps({**row, "message_id": mid})
-    if _settle(conn, rid, waiting, json.loads(with_mid)):   # else a tap already settled it; the loop reads it
-        waiting = with_mid
-    deadline = clock() + wait_s
+    deadline, wall_deadline = clock() + wait_s, row["deadline"]   # wall: what press() checks, and it runs on through a sleep
 
     def finish(note: str) -> None:
         try:
@@ -250,6 +254,9 @@ def ask(event: dict, conn: sqlite3.Connection, *, deny: list[str] | None = None,
     settled = False
     parent = os.getppid()
     try:
+        with_mid = json.dumps({**row, "message_id": mid})
+        if _settle(conn, rid, waiting, json.loads(with_mid)):   # else a tap already settled it; the loop reads it
+            waiting = with_mid
         while True:
             if os.getppid() != parent:   # claude died under us (a SIGKILL forwards nothing): nobody would read a decision
                 raise SystemExit(1)
@@ -264,21 +271,26 @@ def ask(event: dict, conn: sqlite3.Connection, *, deny: list[str] | None = None,
                     finish(f"🖥 Answered at the dashboard first; {esc(row.get('by') or 'the household')}'s tap came too late.")
                     return None
                 return _decision(row["status"], f"Denied on Telegram by {row.get('by') or 'the household'}.")
-            if dashboard_answered() and _settle(conn, rid, waiting, {"status": "dashboard"}):
+            if dashboard_answered() and _settle(conn, rid, waiting, {"status": "dashboard", "deadline": wall_deadline}):
                 settled = True
                 finish("🖥 Answered at the dashboard.")
                 return None
-            if clock() >= deadline:
-                if _settle(conn, rid, waiting, {"status": "timeout"}):
+            if clock() >= deadline or time.time() >= wall_deadline:
+                if _settle(conn, rid, waiting, {"status": "timeout", "deadline": wall_deadline}):
                     settled = True
                     finish(f"⏱ No answer within {round(wait_s / 60)} minutes, so it was denied.")
                     return _decision("deny", f"Nobody answered on Telegram or at the dashboard within {round(wait_s / 60)} minutes.")
                 continue
             sleep(poll_s)   # a lost settle is a press landing in the same instant: read on the next pass
     finally:
-        if not settled and _settle(conn, rid, waiting, {"status": "gone"}):
-            finish("The assistant stopped before anyone answered.")
-        conn.execute("DELETE FROM state WHERE key=?", (KEY + rid,))
+        try:
+            if not settled and _settle(conn, rid, waiting, {"status": "gone", "deadline": wall_deadline}):
+                finish("The assistant stopped before anyone answered.")
+            conn.execute("DELETE FROM state WHERE key=?", (KEY + rid,))
+        except sqlite3.Error as e:   # a busy database: the sweep takes the row later, and press() refuses it past its deadline
+            print(f"finnamon: could not clear the permission request: {e}", file=sys.stderr)
+            if not settled:
+                finish("The assistant stopped before anyone answered.")
 
 
 def press(conn: sqlite3.Connection, cq: dict) -> str:
@@ -306,7 +318,7 @@ def press(conn: sqlite3.Connection, cq: dict) -> str:
         return "That request is no longer waiting."
     if behavior == "allow" and not row.get("whole", True):
         return "Too long to approve from the phone; answer it at the dashboard."
-    if not _settle(conn, rid, waiting, {"status": behavior, "by": owner[0]}):
+    if not _settle(conn, rid, waiting, {"status": behavior, "by": owner[0], "deadline": row.get("deadline")}):
         return "That request was just answered."
     note = f"✅ Allowed by {esc(owner[0])}." if behavior == "allow" else f"❌ Denied by {esc(owner[0])}."
     try:

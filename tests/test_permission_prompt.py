@@ -341,3 +341,20 @@ def test_a_swept_row_ends_the_wait_with_a_deny(home, conn, tmp_path, tg):
         conn.execute("DELETE FROM state WHERE key LIKE 'permission:%'")
     out = run_hook(conn, event(transcript(tmp_path, "[telegram · bill] hi")), poll)
     assert out["hookSpecificOutput"]["decision"]["behavior"] == "deny" and "expired" in tg[-1][3]
+
+
+def test_what_the_phone_shows_cannot_pass_for_something_else():
+    d, _ = approval.describe("Bash", {"command": "echo a\nrm -rf ~"})
+    assert "echo a\nrm -rf ~" in d, "a real newline is a line break, not the text \\u000a"
+    d, _ = approval.describe("Bash", {"command": "ls", "dangerouslyDisableSandbox": True})
+    assert "dangerouslyDisableSandbox" in d, "a field beyond the command shows the whole input"
+    d, _ = approval.describe("WebFetch", {"url": "https://a.example/", "prompt": "list the balances"})
+    assert "list the balances" in d
+    _, whole = approval.describe("Bash", {"command": "😀" * 2000})
+    assert not whole, "Telegram counts UTF-16 units: 2000 emoji are 4000"
+
+
+def test_a_question_for_the_screen_never_goes_to_the_phone(home, conn, tmp_path, tg):
+    seed(conn)
+    path = transcript(tmp_path, "[telegram · bill] hi", "AskUserQuestion", {"questions": []})
+    assert approval.ask(event(path, "AskUserQuestion", {"questions": []}), conn, deny=[], env={}) is None and tg == []

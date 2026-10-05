@@ -196,6 +196,8 @@ export function openToolCall(path, since = 0, tailBytes = 512 * 1024) {
     const open = new Map();
     for (const l of lines) {
       let e; try { e = JSON.parse(l); } catch { continue; }
+      const c = e?.message?.content;   // a new prompt starts a new turn: a call a stream error left without a result is not waiting
+      if (e?.type === 'user' && !e.isMeta && (typeof c === 'string' ? c.trim() && !c.startsWith('<') : Array.isArray(c) && c.some(b => b?.type === 'text' && !String(b.text).startsWith('<')))) open.clear();
       for (const blk of Array.isArray(e?.message?.content) ? e.message.content : []) {
         if (blk?.type === 'tool_use' && e.type === 'assistant') open.set(blk.id, Date.parse(e.timestamp) || Infinity);
         if (blk?.type === 'tool_result') open.delete(blk.tool_use_id);
@@ -343,7 +345,10 @@ export function createRelay({ write, transcript, idle = () => true, asking = () 
     // the open tool call keeps it from being typed into the dialog.
     const timer = setInterval(() => {
       const ts = now();
-      if (paused < PERMISSION_WAIT_MS && (asking() || (typed && idle() && open(path, since())))) { const d = Math.min(ts - last, PERMISSION_WAIT_MS - paused); paused += d; at += d; }
+      // only once typed: a dashboard dialog this line waited behind is not this turn's, and must not spend its allowance
+      // ponytail: an open call is a dialog or a tool still running (the screen cannot always tell them apart), so a slow tool
+      // also delays the "taking longer" line by up to PERMISSION_WAIT_MS; the hook's own row would tell them apart.
+      if (typed && paused < PERMISSION_WAIT_MS && (asking() || open(path, since()))) { const d = Math.min(ts - last, PERMISSION_WAIT_MS - paused); paused += d; at += d; }
       last = ts;
       if (!typed) {
         if (!idle() || open(path, since())) { if (ts - at > timeoutMs) { clearInterval(timer); resolve({ status: 504, error: 'timeout', started: false }); } return; }

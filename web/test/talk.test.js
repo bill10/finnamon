@@ -456,6 +456,10 @@ test('an open tool call is a dialog nothing may type into, until its result, the
     assert.equal(openToolCall(file, now), false, 'answered (run, or No at the dashboard)');
     put(user('hi'), call('a'), said('end_turn', text('done')));
     assert.equal(openToolCall(file, now), false, 'a turn that ended');
+    put(call('a'), user('[telegram · jane] next question'));
+    assert.equal(openToolCall(file, now), false, 'a new prompt: a call a stream error left without a result is not waiting');
+    put(call('a'), user('<system-reminder>x</system-reminder>'));
+    assert.equal(openToolCall(file, now), true, 'Claude Code\'s own tags are not a prompt');
     put(call('a', now - 1));
     assert.equal(openToolCall(file, now), false, 'from before this session started: left behind by a crash or restart');
     put(call('a', now - 6 * 3600_000));
