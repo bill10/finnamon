@@ -22,7 +22,7 @@ def call(endpoint: str, body: dict, env: str | None = None, timeout: int = 60) -
     env = env or config.plaid_env()
     auth = config.plaid_auth(env)
     if not auth["client_id"] or not auth["secret"]:
-        raise PlaidError({"error_code": "NO_CREDENTIALS", "error_message": f"no Plaid {env} keys yet: run `finnamon init` to add them"})
+        raise PlaidError({"error_code": "NO_CREDENTIALS", "error_message": f"no Plaid {env} keys yet: run `finnamon init --plaid` to add them"})
     req = urllib.request.Request(
         f"https://{env}.plaid.com{endpoint}",
         data=json.dumps({**auth, **body}).encode(),

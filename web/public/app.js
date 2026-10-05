@@ -628,7 +628,7 @@ function renderBanks(s) {
   const everyone = ownerPlan(accts, members);
   const row = (a, plan) => {
     const kind = kindOf(a), debt = DEBT.has(a.type), b = a.balance == null ? NaN : Math.round(Number(a.balance)) || 0;   // whole dollars, as money() shows them, so $0.40 owed is not a red -$0
-    const bal = !Number.isFinite(b) ? `<span class="bal none" title="No balance yet">—</span>`
+    const bal = !Number.isFinite(b) ? (a.source === 'manual' ? `<button type="button" class="bal none setbal" data-id="${esc(a.account_id)}" title="The file had no balance, so this account counts as nothing in net worth until you give it one">no balance yet: enter it</button>` : `<span class="bal none" title="No balance yet">—</span>`)
       : `<span class="bal num${debt && b > 0 ? ' owed' : ''}"${debt && b > 0 ? ' title="Owed"' : ''}>${esc(money(debt ? -b || 0 : b))}</span>`;
     const chip = plan.rows && plan.name(a) ? ` <span class="own">${esc(plan.name(a))}</span>` : '';
     const w = view !== 'bank' && warn.get(a.institution), mask = a.mask ? `<span class="num">···${esc(a.mask)}</span>` : '';
@@ -640,7 +640,7 @@ function renderBanks(s) {
   const sec = (key, name, note, rows) => {   // a native <details>: keyboard, screen reader and aria-expanded come with it
     const tot = bankTotal(rows), n = rows.length, plan = view === 'bank' ? ownerPlan(rows, members) : view === 'type' ? { rows: everyone.rows || members.length > 1, name: everyone.name } : { head: '', rows: false, name: () => '' };
     return `<details class="bank" data-key="${esc(k(key))}"${open.has(k(key)) ? ' open' : ''}><summary><svg class="ic chev" aria-hidden="true" viewBox="0 0 16 16"><path d="M6 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>` +
-      `<span class="bn">${esc(name)}${plan.head ? ` <span class="own">${esc(plan.head)}</span>` : ''}</span><span class="cnt">${esc(plural(n, 'account'))}</span><span class="bal num${tot < 0 ? ' owed' : ''}">${esc(money(tot))}</span>${note ? `<span class="note">${note}</span>` : ''}</summary>${list(rows, plan)}</details>`;
+      `<span class="bn">${esc(name)}${plan.head ? ` <span class="own">${esc(plan.head)}</span>` : ''}</span><span class="cnt">${esc(plural(n, 'account'))}</span>${rows.every(a => a.balance == null) ? '<span class="bal none" title="No balance yet">—</span>' : `<span class="bal num${tot < 0 ? ' owed' : ''}">${esc(money(tot))}</span>`}${note ? `<span class="note">${note}</span>` : ''}</summary>${list(rows, plan)}</details>`;
   };
   let html = '';
   for (const its of banks.values()) {
@@ -908,6 +908,8 @@ async function linkBank({ receivedRedirectUri } = {}) {
   if (receivedRedirectUri && !token) { toast('That link session has expired; start again from Link account.', { kind: 'warn' }); history.replaceState(null, '', location.pathname); return; }
   if (typeof Plaid === 'undefined') { toast('Plaid did not load; reload the page and try again.', { kind: 'warn' }); return; }
   if (!receivedRedirectUri) {
+    if (isDemo()) { toast("This is the demo household: made-up data, and it can't link a bank. Run finnamon init to set up your own.", { kind: 'warn' }); return; }
+    if (summary?.status?.plaid_keys === false) { toast('No Plaid keys yet: run finnamon init --plaid on the Finnamon box (Plaid dashboard → Team Settings → Keys), then link a bank.', { kind: 'warn' }); return; }
     const owner = await askOwner();
     if (owner === undefined) return;
     const r = await api('POST', '/api/link/token', owner ? { owner } : undefined);
@@ -934,6 +936,20 @@ async function linkBank({ receivedRedirectUri } = {}) {
   handler.open();
   if (receivedRedirectUri) history.replaceState(null, '', location.pathname);   // a reload must not hand Plaid the same return twice
 }
+// A manual account with no balance (its file had none) asks for one in place; Enter saves, Escape leaves it.
+document.addEventListener('click', (e) => {
+  const b = e.target.closest?.('.setbal'); if (!b) return;
+  const inp = document.createElement('input'); inp.className = 'num setbal-in'; inp.inputMode = 'decimal'; inp.setAttribute('aria-label', 'Balance now'); inp.placeholder = 'Balance now'; inp.dataset.id = b.dataset.id;
+  b.replaceWith(inp); inp.focus();
+});
+document.addEventListener('keydown', async (e) => {
+  const inp = e.target.closest?.('.setbal-in'); if (!inp || (e.key !== 'Enter' && e.key !== 'Escape')) return;
+  e.stopPropagation();
+  if (e.key === 'Escape') { loadSummary(); return; }
+  const out = await api('POST', '/api/account/balance', { account: inp.dataset.id, balance: inp.value });
+  if (!out.ok) { toast(out.error, { kind: 'warn' }); return; }
+  toast(`Balance set to ${money(out.balance)}`); loadSummary();
+});
 $('link-btn').addEventListener('click', () => linkBank());
 $('nolink-btn').addEventListener('click', () => linkBank());
 // the Add account menu closes when a way is picked, on Escape, or on a click anywhere else
@@ -951,6 +967,8 @@ function makeTerm(id) {
   const f = new FitAddon.FitAddon();
   t.loadAddon(f); t.loadAddon(new WebLinksAddon.WebLinksAddon());
   t.open($(id));
+  // Escape closes the panel; xterm would otherwise send it to Claude as ESC, which interrupts the answer. Ctrl-C and the Stop button still do.
+  t.attachCustomKeyEventHandler((e) => { if (e.key !== 'Escape') return true; if (e.type === 'keydown') toggleIntercom(false); return false; });
   f.fit();   // the closed panel has layout (opacity 0, not display none), so the replay lands at the right width
   return { term: t, fit: f };
 }
@@ -1003,6 +1021,7 @@ function showView(v) {
   $('terminal').hidden = v !== 'chat'; $('terminal-import').hidden = v !== 'import';
   document.querySelectorAll('.intercom-head .tab').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.view === v)));
   $('intercom-state').textContent = v === 'import' ? (importState === 'DOWN' ? (importTyped ? 'ended; Import CSV starts another' : importStopping ? 'import stopped' : 'import ended') : importStopping ? 'stopping…' : STATE_TEXT[importState] || importState || '') : STATE_TEXT[lastState] || '';
+  $('chat-stop').hidden = v !== 'chat' || lastState !== 'WORKING';
   $('import-stop').hidden = v !== 'import' || !importState || importState === 'DOWN';
   $('import-stop').disabled = importStopping;
   if (opened) requestAnimationFrame(() => { sendSize(); (v === 'import' ? iterm : term)?.focus(); });
@@ -1016,6 +1035,7 @@ function setImportState(s) {
 }
 document.querySelectorAll('.intercom-head .tab').forEach(b => b.addEventListener('click', () => showView(b.dataset.view)));
 // The only other way out is typing /exit into the terminal; the server kills the process after a short grace if claude lingers.
+$('chat-stop').addEventListener('click', () => { send({ type: 'input', data: '\x1b' }); term?.focus(); });   // ESC is Claude Code's own interrupt
 $('import-stop').addEventListener('click', () => { if (!wsReady) return; importStopping = true; send({ type: 'stop', session: 'import' }); showView('import'); });
 
 // The dot lights when a reply to something you typed lands while the panel is closed. The TUI redraws on its own
@@ -1024,6 +1044,7 @@ let awaitingReply = false, lastState = null;
 function setState(s) {
   if (locked) return;   // the socket lock() closed must not relabel the page 'offline'
   if (view === 'chat') $('intercom-state').textContent = STATE_TEXT[s] || s;
+  $('chat-stop').hidden = view !== 'chat' || s !== 'WORKING';
   $('intercom-btn').dataset.state = s;
   if ((s === 'WAITING' || s === 'QUESTION') && lastState === 'WORKING' && awaitingReply) { if (!opened) markUnread(); awaitingReply = false; }
   lastState = s;

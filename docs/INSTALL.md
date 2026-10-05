@@ -88,7 +88,9 @@ Five steps, each one re-runnable (it skips what's already there). Enter on a bla
 skips that step for now; the rest still runs, and `finnamon init` again adds it later. Waiting on Plaid? `finnamon demo`
 shows the whole thing on a made-up household meanwhile.
 
-1. **Plaid keys.** Checked live against Plaid. Sandbox-only keys are called out: you would see test banks, not yours.
+1. **Plaid keys.** Checked live against Plaid. Linking always uses **Production**: with only a Sandbox secret on file the check says so, and no
+   bank can be linked until you add the Production secret. Sandbox secrets are for the test suite. Moving from Sandbox to Production later:
+   `finnamon init --plaid` (prompts for the client_id and secrets without echoing them; Enter keeps one already on file).
 2. **Telegram bot.** Paste the token; then open the link it prints and tap Start, which records the household
    chat. To add your partner later: `finnamon owner add <name>` (make a group with both of you and the bot). A partner who won't chat with the bot: `finnamon owner add <name> --no-telegram`; add their Telegram id later with `--user-id <id>`.
 3. **Claude Code.** Checks `claude` is installed and logged in, and writes the assistant's directory,

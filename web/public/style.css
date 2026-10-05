@@ -191,6 +191,7 @@ details.bank .bn { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
 details.bank .cnt { font-weight: 400; font-size: 13px; color: var(--muted); }
 details.bank > summary .bal { font-weight: 600; min-width: 5ch; text-align: right; }
 details.bank > summary .bal.owed { color: var(--neg); }
+details.bank > summary .bal.none { color: var(--muted); font-weight: 400; }
 details.bank .note { flex-basis: 100%; padding-left: 24px; font-weight: 400; } details.bank .note .hint, details.bank .note .tag { margin-left: 0; }
 details.bank .note button.link { font-size: 13px; margin-left: 4px; }   /* Reconnect: the alert list's action size, beside the tag that says why */
 @media (prefers-reduced-motion: reduce) { details.bank > summary > svg.chev { transition: none; } }
@@ -202,6 +203,8 @@ details.bank .note button.link { font-size: 13px; margin-left: 4px; }   /* Recon
 .accts .kd { grid-column: 1; font-size: 13px; color: var(--muted); }
 .accts .bal { grid-column: 2; grid-row: 1; font-size: 15px; font-weight: 500; text-align: right; white-space: nowrap; }
 .accts .bal.owed { color: var(--neg); } .accts .bal.none { color: var(--muted); font-weight: 400; }
+.accts button.setbal { font: inherit; background: none; border: none; padding: 0; min-width: 0; min-height: 0; cursor: pointer; text-decoration: underline dotted; }
+.accts .setbal-in { width: 9em; text-align: right; }
 .status .txt button.link { padding: 2px 4px; margin: 0 -4px; color: inherit; font-weight: 400; text-decoration: underline dotted; text-underline-offset: 3px; white-space: nowrap; }   /* muted like the line it sits in; the underline says it opens something */
 .erow { display: grid; grid-template-columns: 1fr 140px 32px; gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); }
 .erow input, .erow select { font: inherit; font-size: 15px; color: var(--ink); caret-color: var(--cinnamon); background: var(--soft); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; width: 100%; min-width: 0; }
@@ -336,10 +339,10 @@ details.mergebox p.muted { margin: 0 0 8px; font-size: 13px; }
 .intercom-head .tab:hover { color: var(--ink); }
 .intercom-head .tab[hidden] { display: none; }
 .intercom-head #intercom-state { flex: 1; color: var(--term-muted); }
-#import-stop { font: inherit; font-size: 13px; font-weight: 600; color: var(--ink); background: transparent; border: 1px solid var(--term-line); border-radius: 6px; padding: 2px 10px; min-width: 0; min-height: 24px; margin: 0 6px 0 0; cursor: pointer; }   /* 24px: the target minimum; the gap keeps a miss for close from ending a login */
-#import-stop:hover:not(:disabled) { background: var(--soft); }
+#import-stop, #chat-stop { font: inherit; font-size: 13px; font-weight: 600; color: var(--ink); background: transparent; border: 1px solid var(--term-line); border-radius: 6px; padding: 2px 10px; min-width: 0; min-height: 24px; margin: 0 6px 0 0; cursor: pointer; }   /* 24px: the target minimum; the gap keeps a miss for close from ending a login */
+#import-stop:hover:not(:disabled), #chat-stop:hover { background: var(--soft); }
 #import-stop:disabled { opacity: .5; cursor: default; }
-#import-stop[hidden] { display: none; }
+#import-stop[hidden], #chat-stop[hidden] { display: none; }
 #intercom-close { background: transparent; border: none; color: var(--term-muted); min-width: 36px; min-height: 36px; margin: -6px -4px -6px 0; border-radius: 50%; display: grid; place-items: center; }
 #intercom-close:hover { background: var(--soft); color: var(--ink); }
 /* Talk to Finnamon: the phone in the head, the call bar under the terminal */

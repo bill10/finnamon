@@ -662,6 +662,12 @@ export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon',
   // One manual account and its transactions (its bank too, if it was the last); the CLI refuses a Plaid one. --yes: the page asked.
   // The page sends the account_id (manual:<bank>:<name>, up to 88 characters), so what it confirmed is what goes; a name works too.
   const MANUAL_ID = /^manual:[a-z0-9-]{1,40}:[a-z0-9-]{1,40}$/;
+  app.post('/api/account/balance', (req, res) => {   // a manual account whose file carried no running balance
+    const ref = String(req.body?.account ?? ''), b = Number(String(req.body?.balance ?? '').replace(/[$,\s]/g, ''));
+    if (!MANUAL_ID.test(ref)) return res.status(400).json({ error: 'balances are set on manual accounts' });
+    if (String(req.body?.balance ?? '').trim() === '' || !Number.isFinite(b)) return res.status(400).json({ error: 'the balance has to be a number, like 1200 or 1,234.56' });
+    write(res, ['account', 'balance', '--', ref, String(b)]);
+  });
   app.delete('/api/account/:ref', (req, res) => {
     const ref = MANUAL_ID.test(req.params.ref) ? req.params.ref : name(req.params.ref);
     ref ? write(res, ['account', 'remove', '--yes', '--', ref]) : res.status(400).json({ error: 'bad name' });

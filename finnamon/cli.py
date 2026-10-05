@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import functools
+import getpass
 import http.client
 import select
 import sqlite3
@@ -45,10 +46,19 @@ def cmd_init(a) -> None:
     plaid, tg = dict(cur.get("plaid", {})), dict(cur.get("telegram", {}))
     fresh_bot = not tg.get("bot_token")   # an existing bot keeps its inbound mode: no silent switch
     skipped = []   # steps left for later: init runs again any time and keeps what is already set up
-    print("Step 1 of 5: Plaid keys (Enter on a blank line skips this for now)")
+    replace = bool(getattr(a, "plaid", False))   # `init --plaid`: change the keys on file (Sandbox → Production) without the other steps
+    print("Plaid keys (Enter on a blank line keeps what is on file)" if replace else "Step 1 of 5: Plaid keys (Enter on a blank line skips this for now)")
     for attempt in range(3):
-        if attempt == 0 and plaid.get("client_id") and (plaid.get("production_secret") or plaid.get("sandbox_secret")):
-            print("  found in secrets.toml")
+        if attempt == 0 and not replace and plaid.get("client_id") and (plaid.get("production_secret") or plaid.get("sandbox_secret")):
+            print("  found in secrets.toml (`finnamon init --plaid` replaces them, e.g. to move from Sandbox to Production)")
+        elif replace:
+            print("  Plaid dashboard → Team Settings → Keys. Secrets are not echoed; Enter keeps the one on file.")
+            plaid["client_id"] = input(f"  client_id [{plaid.get('client_id') or 'none'}]: ").strip() or plaid.get("client_id", "")
+            plaid["production_secret"] = getpass.getpass("  Production secret: ").strip() or plaid.get("production_secret", "")
+            plaid["sandbox_secret"] = getpass.getpass("  Sandbox secret (optional): ").strip() or plaid.get("sandbox_secret", "")
+            if not (plaid["client_id"] and (plaid["production_secret"] or plaid["sandbox_secret"])):
+                die("Plaid keys need a client_id and at least one secret")
+            secrets.write(plaid, tg, dict(cur.get("items", {})))
         else:
             print("  Open https://dashboard.plaid.com/signup and create an account (the Trial plan is free).")
             print("  Then Team Settings → Keys and copy:")
@@ -68,7 +78,11 @@ def cmd_init(a) -> None:
         if ok:
             break
     else:
-        die("Plaid rejected the keys three times; check them at dashboard.plaid.com, then run `finnamon init` again")
+        die("Plaid rejected the keys three times; check them at dashboard.plaid.com, then run `finnamon init --plaid` again")
+    if replace:
+        if plaid.get("production_secret"):
+            print("Linking uses Production: add banks with `finnamon link` or the dashboard's Link account. Banks linked in Sandbox are test data; unlink them (`finnamon link --remove <item_id>`).")
+        return
 
     print("Step 2 of 5: Telegram bot (Enter on a blank line skips this for now)")
     me = None
@@ -141,7 +155,7 @@ def cmd_init(a) -> None:
         print("  Link account adds a bank in the page." if "Plaid keys" not in skipped else "  Link account adds a bank in the page once the Plaid keys are in (`finnamon init`).")
         print('  The intercom button in the corner is the household\'s Claude Code session: ask it to "set up my budgets".')
     elif scheduled:
-        print("Done. Next: finnamon link (per bank), then `claude` in this directory and ask it to \"set up my budgets\".")
+        print(f"Done. Next: finnamon link (per bank), then ask the assistant to \"set up my budgets\": in the dashboard's intercom, or {_ASK_CLAUDE}.")
     else:
         print("Done, nothing scheduled: `finnamon install` when you're ready, then finnamon link (per bank).")
     if skipped:
@@ -152,6 +166,10 @@ def cmd_init(a) -> None:
                if dashboard else "run <code>finnamon link</code> in a terminal on the Finnamon box")
         telegram.send_message(chat, f"Finnamon is set up. Nothing is linked yet: {how} to add a bank. Here in the chat you can ask me anything about the accounts once they're in.")
         print("Sent you a message on Telegram too.")
+
+
+# The household's assistant lives in its own directory; a `claude` anywhere else (this checkout, ~) is a different, unsealed session.
+_ASK_CLAUDE = "`cd ~/.finnamon/assistant && claude --strict-mcp-config`"
 
 
 def _plaid_probe(env: str) -> tuple[bool, str]:
@@ -357,6 +375,8 @@ def _setup_dashboard(a) -> bool:
 def cmd_link(a) -> None:
     _triage_read_only()
     conn = store.connect()
+    if a.update:
+        a.update = _resolve_item(conn, a.update)
     if _from_claude():
         if not (a.start or a.finish or (a.update and a.telegram)) or a.token is not None or a.public_token or a.web:   # a bare --token is the empty string; --web is a person's click
             die("from a Claude session, `finnamon link --start` adds a bank and `link --update <item_id> --telegram` sends a re-login link to the chat; "
@@ -428,7 +448,10 @@ def cmd_link(a) -> None:
         except (ValueError, PlaidError, telegram.TelegramError) as e:
             die(str(e))
         return
-    s = link.start(owner, a.update)
+    try:
+        s = link.start(owner, a.update)
+    except (ValueError, PlaidError) as e:
+        die(str(e))
     print("Open this on any device:\n  " + s["url"])
     if a.telegram and (link.send_url(conn, s["url"], "Log back into the bank", link.UPDATE_LINK_VALID) if a.update else link.send_url(conn, s["url"])):   # opt in: the household chat is not your phone
         print("(also sent to your Telegram)")
@@ -453,7 +476,27 @@ def cmd_link(a) -> None:
             print("  ✓ marked joint")
     print("Baseline set: nothing before today counts as new.")
     link.announce(conn, r["item_id"])
-    print("Summary sent to Telegram. Next: finnamon link (another bank) or `claude` → 'set up my budgets'")
+    print(f"Summary sent to Telegram. Next: finnamon link (another bank), or ask the assistant to 'set up my budgets': in the dashboard's intercom, or {_ASK_CLAUDE}")
+
+
+def _resolve_item(conn, ref: str) -> str:
+    """`link --update` takes an item_id or, when only one bank has that name, the institution's name."""
+    rows = conn.execute("SELECT item_id, institution FROM items WHERE source='plaid'").fetchall()
+    if any(r[0] == ref for r in rows):
+        return ref
+    hits = [r for r in rows if (r[1] or "").lower() == ref.lower()] or [r for r in rows if ref.lower() in (r[1] or "").lower()]
+    if len(hits) == 1:
+        return hits[0][0]
+    if hits:
+        die(f"more than one bank matches {ref!r}: " + ", ".join(f"{r[1]} ({r[0]})" for r in hits) + "; pass the item_id")
+    die(f"no linked bank {ref!r}; `finnamon status` lists them")
+
+
+def _telegram_die(e: Exception) -> None:
+    """One line and the next step, not a traceback, for a bot Telegram will not talk to."""
+    if isinstance(e, telegram.TelegramError) and e.code in (401, 404):
+        die(f"Telegram refused the bot token ({e.code}); there is no working bot yet: `finnamon init` adds one (in Telegram: @BotFather → /newbot)")
+    die(f"Telegram: {e}" if isinstance(e, telegram.TelegramError) else str(e))
 
 
 def _print_linked(r: dict) -> None:
@@ -515,7 +558,10 @@ def cmd_owner(a) -> None:
             print(f"Add {a.name} to the household group (for a new group instead: finnamon owner add {a.name} --new-group).")
         print(f"Then have {a.name} send exactly this in the group:  {code}")
         print("waiting...", flush=True)
-        out(owners.add_member(conn, a.name, code, switch=a.new_group))
+        try:
+            out(owners.add_member(conn, a.name, code, switch=a.new_group))
+        except (telegram.TelegramError, RuntimeError, TimeoutError) as e:
+            _telegram_die(e)
 
 
 def cmd_channel(a) -> None:
@@ -697,6 +743,15 @@ def cmd_account(a) -> None:
         try:
             out(link.remove_account(conn, a.new))
         except (ValueError, runmod.Locked, sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+            die(str(e))
+    elif a.action == "balance":   # a manual account whose file had no running balance
+        _triage_read_only()
+        amt = imports.parse_money(a.existing) if a.existing else None
+        if not a.new or amt is None:
+            die('usage: finnamon account balance "<name>" <amount>   (what a card or loan owes is a positive number)')
+        try:
+            out(imports.set_balance(conn, a.new, amt))
+        except ValueError as e:
             die(str(e))
     elif a.action in ("type", "kind"):   # the household's type for an account, kept through every sync; reversible, so the assistant may
         _triage_read_only()
@@ -1063,14 +1118,14 @@ def _triage_read_only() -> None:
 
 def _draft(a) -> None:
     _triage_read_only()
-    # Claude may run this. SQL comes only from stdin; the name is confined to pending/; never overwrite.
+    # Claude may run this. SQL comes only from stdin; the name is confined to the household's detector-drafts/; never overwrite.
     if a.draft != "-":
         die("drafts are read from stdin only: finnamon detect --draft - --name <snake_name> < file.sql")
     name = a.name or "draft"
     if not DRAFT_NAME.fullmatch(name):
         die("--name must be snake_case letters, digits, underscores")
-    pend = (detect.DETECTORS / "pending").resolve()
-    pend.mkdir(exist_ok=True)
+    detect.migrate_drafts()
+    pend = detect.drafts_dir().resolve()
     p = (pend / f"{name}.sql").resolve()
     if p.parent != pend:
         die("invalid name")
@@ -1085,7 +1140,8 @@ def _draft(a) -> None:
 
 
 def _review_pending(a) -> None:
-    pend = sorted((detect.DETECTORS / "pending").glob("*.sql"))
+    detect.migrate_drafts()
+    pend = sorted(detect.drafts_dir().glob("*.sql"))
     if not pend:
         print("no pending detectors"); return
     store.connect()  # make sure the DB exists and is migrated
@@ -1147,7 +1203,7 @@ def cmd_heartbeat(a) -> None:
 def cmd_status(a) -> None:
     conn = store.connect()
     out({"version": __version__, "home": str(config.home()), "chat_id": store.get_state(conn, "chat_id"),
-         "last_run": store.get_state(conn, "last_run"), "last_backup_at": store.get_state(conn, "last_backup_at"), "backup_error": store.get_state(conn, "backup_error"), "session": store.get_state(conn, "session"), "inbound": store.get_state(conn, "inbound") or "daemon", "inbound_conflict_at": store.get_state(conn, "inbound_conflict_at"), "channel_deaf_since": store.get_state(conn, "channel_deaf_since"), "daemon_alive": owners.daemon_alive(conn), "demo": bool(store.get_state(conn, "demo")),
+         "last_run": store.get_state(conn, "last_run"), "last_backup_at": store.get_state(conn, "last_backup_at"), "backup_error": store.get_state(conn, "backup_error"), "session": store.get_state(conn, "session"), "inbound": store.get_state(conn, "inbound") or "daemon", "inbound_conflict_at": store.get_state(conn, "inbound_conflict_at"), "channel_deaf_since": store.get_state(conn, "channel_deaf_since"), "daemon_alive": owners.daemon_alive(conn), "demo": bool(store.get_state(conn, "demo")), "plaid_keys": all(config.plaid_auth().values()),
          "items": [dict(r) for r in conn.execute("SELECT item_id, institution, owner, status, last_synced_at, last_error, "
                                                      "(SELECT group_concat(COALESCE(a.name, '') || COALESCE(' …' || a.mask, ''), ', ') FROM accounts a WHERE a.item_id=items.item_id) AS accounts FROM items")],
          "pending_alerts": conn.execute(f"SELECT count(*) FROM alerts WHERE {notify.SENDABLE}").fetchone()[0],
@@ -1195,11 +1251,11 @@ def cmd_doctor(a) -> None:
     elif not plaid.get("client_id") or not plaid.get(f"{env}_secret"):
         have = [e for e in ("production", "sandbox") if plaid.get(f"{e}_secret")]
         check(False, "Plaid keys", f"no {env} secret" + (f" (only {', '.join(have)})" if have else ""),
-              "finnamon init (dashboard.plaid.com → Team Settings → Keys); a sandbox-only key sees test banks: set production_secret "
-              "under [plaid] in secrets.toml, or remove the [plaid] section and run init again. docs/INSTALL.md covers production access")
+              "finnamon init --plaid (dashboard.plaid.com → Team Settings → Keys); a sandbox-only key sees test banks: "
+              "enter the Production secret there. docs/INSTALL.md covers production access")
     else:
         ok, msg = _plaid_probe(env)
-        check(ok, f"Plaid keys ({env})", msg, "" if ok else "check the keys in secrets.toml against dashboard.plaid.com → Team Settings → Keys")
+        check(ok, f"Plaid keys ({env})", msg, "" if ok else "finnamon init --plaid (check the keys against dashboard.plaid.com → Team Settings → Keys)")
     if not tg_token:
         if sp.exists():
             check(False, "Telegram bot", "no bot token", "finnamon init (in Telegram: @BotFather → /newbot)")
@@ -1337,7 +1393,7 @@ def cmd_update(a) -> None:
     if _from_claude():
         die("`finnamon update` restarts the dashboard, and in channel mode that is the session you are talking to; run it in a terminal on the Finnamon box")
     repo = Path(scheduler.repo_dir())
-    if not (repo / ".git").is_dir():
+    if not (repo / ".git").exists():   # a file, not a directory, in a git worktree
         die(f"{repo} is not a git checkout, so there is nothing to pull; `finnamon install` reprovisions from whatever is there")
     if a.check:   # the dashboard's "Update available": what the pull below would bring, looked at the way --dry-run looks
         _git(repo, "fetch", "--quiet", check=False)
@@ -1353,7 +1409,8 @@ def cmd_update(a) -> None:
 
     # The units are compared before anything is pulled or migrated: it reads only files, and a release whose unit files
     # moved cannot be adopted by restarting into them, so there is no reason to have touched the database first.
-    if (drift := scheduler.drifted_units()):
+    scheduled = any(scheduler.installed(n) for n in ("daemon", "web"))   # init's schedule step can be declined: no units, so none to drift or restart
+    if scheduled and (drift := scheduler.drifted_units()):
         die("these service files are no longer what this version generates, so restarting would keep running the old "
             f"definition: {', '.join(drift)}. Run `finnamon install` instead (it rewrites them, and the assistant starts fresh).\n"
             "If the only difference is a PATH, you are running update from a shell whose PATH differs from the daemon's "
@@ -1374,6 +1431,8 @@ def cmd_update(a) -> None:
             print(f"{ahead} commit(s) to pull from {remote or 'the tracked remote'}")
             _install_bundle(dry_run=True)
             print("would restart: " + (", ".join(scheduler.services_for(names)) or "nothing") + " (nothing was pulled or migrated)")
+            if _npm_needed(names):
+                print("would run `npm ci` in web/ (its package files changed)")
             return
         remote = _git(repo, "config", "--get", "remote.origin.url", check=False).stdout.strip()
         pull = _git(repo, "pull", "--ff-only", check=False)
@@ -1391,6 +1450,8 @@ def cmd_update(a) -> None:
     services = ["daemon", "web"] if (a.all or a.no_pull) else scheduler.services_for(changed)
     if any(c.startswith(assistant.BUNDLE_REL) for c in changed):
         print("note: this release changes the assistant bundle (its instructions and permission set)")
+    if not scheduled:
+        services = []
 
     if a.dry_run:   # every --dry-run path ends here: looking must not take the lock or move the schema
         _install_bundle(dry_run=True)
@@ -1415,9 +1476,16 @@ def cmd_update(a) -> None:
                 services = ["daemon", "web"]
         except OSError as e:
             die(f"could not write the assistant bundle to {assistant.dir()} ({e}), so nothing was restarted; the schema is migrated")
+        if (moved := detect.migrate_drafts()):
+            print(f"moved detector drafts out of the checkout into {detect.drafts_dir()}: {', '.join(moved)}")
         _register_channel_plugin(store.connect(), force=a.force)
         _session_tip(store.connect())
+        if _npm_needed(changed):
+            _npm_ci()
 
+        if not scheduled:
+            print("no scheduled services (init's schedule step was skipped): nothing to restart; `finnamon install` adds them, or restart a daemon you run by hand")
+            return
         if not services:
             page = any(c.startswith("web/public/") for c in changed)
             print("nothing to restart" + (" (web/public is read per request: reload the page)" if page else ""))
@@ -1431,6 +1499,28 @@ def cmd_update(a) -> None:
             die(str(e))
     finally:
         held.close()
+
+
+def _npm_needed(changed) -> bool:
+    """A release that changed the dashboard's package files leaves its node_modules stale, and the dashboard crash-loops on the
+    missing module; only a household that installed the dashboard (it has node_modules) has anything to refresh."""
+    web = Path(scheduler.repo_dir()) / "web"
+    return (web / "node_modules").is_dir() and any(c in ("web/package.json", "web/package-lock.json") for c in changed)
+
+
+def _npm_ci() -> None:
+    web = Path(scheduler.repo_dir()) / "web"
+    npm = shutil.which("npm")
+    if not npm:
+        die("this release changed web/package.json but `npm` is not on PATH, so the dashboard would crash-loop; install Node, run `cd web && npm ci`, then `finnamon update --no-pull`")
+    print("web/ package files changed: npm ci")
+    argv = [npm, "ci" if (web / "package-lock.json").exists() else "install"]
+    try:
+        r = subprocess.run(argv, cwd=web, timeout=NPM_TIMEOUT_S)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        die(f"npm did not finish ({e}); run `cd web && npm ci`, then `finnamon update --no-pull`")
+    if r.returncode:
+        die("npm ci failed, so nothing was restarted; fix that (`cd web && npm ci`), then `finnamon update --no-pull`")
 
 
 def cmd_install(a) -> None:
@@ -1791,6 +1881,7 @@ def cmd_serve(a) -> None:
 HUMAN_HELP = {
     "init": """First-time setup, interactive: Plaid keys, the Telegram bot, the dashboard, the schedule. Run it once on the Finnamon box.
 Needs: a Plaid account (dashboard.plaid.com, Team Settings > Keys) and a bot from @BotFather (/newbot, then /setprivacy, Disable).
+  finnamon init --plaid   replace the Plaid keys on file (Sandbox → Production); prompts without echo, skips the other steps
 Next: finnamon link --start --owner <name> for each bank, then ask the assistant to set up budgets.""",
     "link": """Connect, re-login or unlink a bank. --start and --finish (and --update <item_id> --telegram) the assistant may run;
 the rest are for a person in a terminal on the Finnamon box:
@@ -1845,6 +1936,8 @@ would do; --uninstall removes the services. Run it in a terminal on the Finnamon
 Next: finnamon status to check the daemon is running.""",
     "update": """Pull the latest Finnamon, migrate, rewrite the assistant's directory, and restart whatever changed, keeping the
 household's Claude conversation. Run it in a terminal on the Finnamon box.
+When the release changed web/package*.json it runs `npm ci` in web/ first; a household that skipped scheduling has nothing to restart.
+--dry-run only looks: nothing is pulled, migrated or restarted.
 Next: finnamon status; finnamon --version shows the version now running.""",
     "detect": """detect --review (a person at a terminal on the Finnamon box only): go through detector drafts the assistant saved with
 --draft, see each one's SQL and how many rows it finds today, and answer y (move it to candidates/, whose alerts triage
@@ -1872,7 +1965,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = p.add_subparsers(dest="cmd", required=True, parser_class=functools.partial(argparse.ArgumentParser, allow_abbrev=False))
     p.commands = sp.choices   # main() reparses one intermixed
 
-    s = sp.add_parser("init", help="keys, bot, dashboard, schedule"); s.add_argument("--owner"); s.add_argument("--yes", action="store_true", help="accept every prompt, including npm install and the scheduler"); s.set_defaults(fn=cmd_init)
+    s = sp.add_parser("init", help="keys, bot, dashboard, schedule"); s.add_argument("--owner"); s.add_argument("--plaid", action="store_true", help="replace the Plaid keys on file (Sandbox → Production), prompting without echo; the other steps are skipped"); s.add_argument("--yes", action="store_true", help="accept every prompt, including npm install and the scheduler"); s.set_defaults(fn=cmd_init)
     s = sp.add_parser("link", help="connect a bank via Plaid Hosted Link"); s.add_argument("--owner"); s.add_argument("--yes", action="store_true"); s.set_defaults(fn=cmd_link)
     g = s.add_mutually_exclusive_group(); g.add_argument("--update", metavar="ITEM_ID"); g.add_argument("--remove", metavar="ITEM_ID", help="unlink a bank (Plaid stops billing; its data is dropped)")
     g.add_argument("--start", action="store_true", help="open a Link session and return; the daemon (or --finish) completes it"); g.add_argument("--finish", action="store_true", help="complete a --start session once the bank login is done")
@@ -1887,7 +1980,7 @@ def build_parser() -> argparse.ArgumentParser:
                      description="session: the daemon polls Telegram and types each message into the dashboard's intercom session (the default for new installs, no plugin). on: Claude Code's Telegram channel plugin reads the chat. off: the legacy mode, the daemon answers with its own separate claude -p session."); s.add_argument("action", choices=["on", "session", "off", "status"]); s.set_defaults(fn=cmd_channel)
     s = sp.add_parser("hook", help="Claude Code hooks (stdin: the hook event JSON)"); s.add_argument("name", choices=["reply-guard", "browser-guard", "permission", "secret-guard"]); s.set_defaults(fn=cmd_hook)
     s = sp.add_parser("property", help="stated assets a bank doesn't report (house, car), counted into net worth"); s.add_argument("action", choices=["list", "set", "remove"], nargs="?", default="list"); s.add_argument("name", nargs="?"); s.add_argument("value", nargs="?"); s.set_defaults(fn=cmd_property)
-    s = sp.add_parser("account", help="list | add \"<name>\" --institution <bank> (a manual account, fed by import) | remove \"<name>\" (a manual account and its transactions) | type <account_id> <type>|--clear | merge | unmerge | failover | owner"); s.add_argument("action", choices=["list", "add", "remove", "type", "kind", "merge", "unmerge", "failover", "owner"]); s.add_argument("new", nargs="?"); s.add_argument("existing", nargs="?")
+    s = sp.add_parser("account", help="list | add \"<name>\" --institution <bank> (a manual account, fed by import) | remove \"<name>\" (a manual account and its transactions) | type <account_id> <type>|--clear | balance \"<name>\" <amount> (a manual account's balance now) | merge | unmerge | failover | owner"); s.add_argument("action", choices=["list", "add", "remove", "type", "kind", "balance", "merge", "unmerge", "failover", "owner"]); s.add_argument("new", nargs="?"); s.add_argument("existing", nargs="?")
     s.add_argument("--institution", help="add: the bank's name (default: the first word of the account name)"); s.add_argument("--type", choices=list(imports.KINDS), default="checking"); s.add_argument("--owner"); s.add_argument("--mask", help="last 4 digits"); s.add_argument("--yes", action="store_true", help="remove: don't ask"); s.add_argument("--clear", action="store_true", help="type: back to the bank's own type"); s.add_argument("--force", action="store_true", help="merge: even when the types or balances differ")
     s.add_argument("--to", metavar="URL", help="list: the accounts on the Finnamon box at this dashboard URL (FINNAMON_WEB_TOKEN set to its `finnamon web token`)"); s.set_defaults(fn=cmd_account)
     s = sp.add_parser("import", help="a bank's CSV export into a manual account; --browser <bank> fetches it through a browser you log into"); s.add_argument("account", nargs="?", help="the manual account (name or id); with --browser, the bank")
@@ -1897,7 +1990,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sp.add_parser("sync"); s.add_argument("--item"); s.set_defaults(fn=cmd_sync)
     s = sp.add_parser("detect"); s.add_argument("--as-of"); s.add_argument("--only", nargs="*"); s.add_argument("--sql", metavar="NAME", help="print the assembled query"); s.add_argument("--prelude", action="store_true", help="print _prelude.sql, the CTEs every detector selects from")
     s.add_argument("--review", action="store_true"); s.add_argument("--tier", choices=["rules", "candidates"], default="candidates")
-    s.add_argument("--draft", metavar="FILE|-", help="save a detector draft to pending/"); s.add_argument("--name"); s.set_defaults(fn=cmd_detect)
+    s.add_argument("--draft", metavar="FILE|-", help="save a detector draft to the household's detector-drafts/ (under FINNAMON_HOME)"); s.add_argument("--name"); s.set_defaults(fn=cmd_detect)
     s = sp.add_parser("notify"); s.add_argument("--list", action="store_true"); s.add_argument("--roundup", action="store_true"); s.add_argument("--restarted", action="store_true", help=argparse.SUPPRESS); s.set_defaults(fn=cmd_notify)
     s = sp.add_parser("run"); s.add_argument("--no-sync", action="store_true"); s.add_argument("--no-triage", action="store_true"); s.add_argument("--no-notify", action="store_true"); s.set_defaults(fn=cmd_run)
     sp.add_parser("daemon").set_defaults(fn=cmd_daemon)
@@ -1909,7 +2002,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-pull", action="store_true", help="adopt the tree as it stands, without pulling")
     s.add_argument("--all", action="store_true", help="restart the daemon and the dashboard whatever changed")
     s.add_argument("--check", action="store_true", help="fetch and print, as JSON, whether there is anything to pull (the dashboard's Update button); changes nothing")
-    s.add_argument("--dry-run", action="store_true", help="pull and migrate as usual, then name the services instead of restarting them"); s.add_argument("--force", action="store_true", help="register the Telegram channel plugin even outside ~/.finnamon/assistant"); s.set_defaults(fn=cmd_update)
+    s.add_argument("--dry-run", action="store_true", help="look only: fetch, then name the commits to pull and the services that would restart; nothing is pulled, migrated, installed or restarted"); s.add_argument("--force", action="store_true", help="register the Telegram channel plugin even outside ~/.finnamon/assistant"); s.set_defaults(fn=cmd_update)
 
     s = sp.add_parser("budget"); s.add_argument("action", choices=["list", "suggest", "set", "remove"], nargs="?", default="list")
     s.add_argument("name", nargs="?"); s.add_argument("amount", nargs="?", type=float)
