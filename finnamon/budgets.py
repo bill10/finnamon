@@ -2,12 +2,13 @@
 Claude calls. Claude proposes; these write. Every write is plain SQL on the household DB."""
 from __future__ import annotations
 
+import difflib
 import json
 import math
 import re
 import sqlite3
 
-from . import store, taxonomy
+from . import detect, store, taxonomy
 
 
 class ResolveError(Exception):
@@ -133,12 +134,14 @@ def category_set(conn: sqlite3.Connection, merchant: str, category_text: str) ->
     code = resolve_category(category_text)
     if code in taxonomy.DETAILED:
         raise ValueError("a merchant override needs a detailed category, e.g. FOOD_AND_DRINK_GROCERIES")
-    canonical = canonical_for(conn, merchant)
-    conn.execute("INSERT INTO category_override (canonical, pfc_primary, pfc_detailed) VALUES (?,?,?) "
-                 "ON CONFLICT(canonical) DO UPDATE SET pfc_primary=excluded.pfc_primary, pfc_detailed=excluded.pfc_detailed, created_at=datetime('now','localtime')",
-                 (canonical, taxonomy.primary_of(code), code))
-    out = {"merchant": merchant, "canonical": canonical, "category": code}
-    pinned = conn.execute("SELECT count(*) FROM tx_category_override x JOIN tx_now t USING (transaction_id) WHERE t.canonical=?", (canonical,)).fetchone()[0]
+    m = resolve_merchant(conn, merchant)
+    for c in m["canonicals"]:
+        conn.execute("INSERT INTO category_override (canonical, pfc_primary, pfc_detailed) VALUES (?,?,?) "
+                     "ON CONFLICT(canonical) DO UPDATE SET pfc_primary=excluded.pfc_primary, pfc_detailed=excluded.pfc_detailed, created_at=datetime('now','localtime')",
+                     (c, taxonomy.primary_of(code), code))
+    out = {"merchant": merchant, **_covers(m), "category": code}
+    pinned = conn.execute(f"SELECT count(*) FROM tx_category_override x JOIN tx_now t USING (transaction_id) WHERE t.canonical IN ({','.join('?' * len(m['canonicals']))})",
+                          m["canonicals"]).fetchone()[0]
     if pinned:   # a one-time edit beats the rule, so those charges keep their own category
         out["one_time_edits_kept"] = pinned
     return out
@@ -146,12 +149,17 @@ def category_set(conn: sqlite3.Connection, merchant: str, category_text: str) ->
 
 def category_clear(conn: sqlite3.Connection, merchant: str) -> dict:
     """Delete a merchant's rule so its charges fall back to the bank's category; one-time --tx edits stay."""
-    canonical = canonical_for(conn, merchant)
-    r = conn.execute("SELECT pfc_detailed FROM category_override WHERE canonical=?", (canonical,)).fetchone()
-    if r:
-        conn.execute("DELETE FROM category_override WHERE canonical=?", (canonical,))
-    return {"merchant": merchant, "canonical": canonical, "cleared": bool(r), "removed_category": r[0] if r else None,
-            **({} if r else {"note": "no rule for this merchant (see: finnamon category --rules)"})}
+    try:
+        canonicals = resolve_merchant(conn, merchant)["canonicals"]
+    except ValueError:   # the rule's own key, as --rules lists it: a rule whose merchant has no charges left is still removable
+        canonicals = [r[0] for r in conn.execute("SELECT canonical FROM category_override WHERE canonical=? COLLATE NOCASE", (merchant.strip(),))]
+    marks = ",".join("?" * len(canonicals))
+    removed = [x[0] for x in conn.execute(f"SELECT pfc_detailed FROM category_override WHERE canonical IN ({marks})", canonicals)] if canonicals else []
+    if removed:
+        conn.execute(f"DELETE FROM category_override WHERE canonical IN ({marks})", canonicals)
+    return {"merchant": merchant, "canonical": canonicals[0] if canonicals else merchant.strip(), "cleared": bool(removed),
+            "removed_category": removed[0] if removed else None,
+            **({} if removed else {"note": "no rule for this merchant (see: finnamon category --rules)"})}
 
 
 def category_rules(conn: sqlite3.Connection) -> dict:
@@ -202,6 +210,47 @@ def canonical_for(conn: sqlite3.Connection, merchant: str) -> str:
     return r[0] if r else merchant.strip()
 
 
+def resolve_merchant(conn: sqlite3.Connection, text: str) -> dict:
+    """Any name the household sees for a merchant (the display name, Plaid's merchant name, the raw bank text, an alias's
+    canonical or the alias pattern itself), exact and case-insensitive, to the canonical(s) the detectors key on.
+    Several canonicals under one display name (Plaid's entity id on some charges, none on others) are one merchant to the
+    household, so all of them; several display names is ambiguous and refused with the candidates; no charge is refused
+    with suggestions, so a rule is never written that covers nothing. An entity id (mch_...) is taken as given."""
+    t = text.strip()
+    if not t:
+        raise ValueError("a merchant name is empty")
+    if t.startswith("mch_"):
+        n = conn.execute("SELECT count(*) FROM tx_now WHERE canonical=?", (t,)).fetchone()[0]
+        return {"canonicals": [t], "display": t, "charges": n}
+    q = "SELECT canonical, max(display) AS display, count(*) AS n FROM tx_now WHERE {} GROUP BY canonical ORDER BY n DESC, canonical"
+    # the name as the household sees it first, so "Shell" is Plaid's Shell even where another merchant's raw text is SHELL
+    rows = conn.execute(q.format("lower(?) IN (lower(display), lower(canonical))"), (t,)).fetchall() or conn.execute(q.format(
+        "lower(?) IN (lower(merchant_name), lower(name)) OR alias_canonical IN (SELECT canonical FROM merchant_alias WHERE lower(name)=lower(?))"), (t, t)).fetchall()
+    if not rows:
+        sug = _suggest_merchants(conn, t)
+        raise ValueError(f"0 charges match '{t}'" + (f"; did you mean {' or '.join(sug)}?" if sug else "; no merchant by that name")
+                         + " (a merchant is named as its charges show it: finnamon query \"SELECT display, count(*) FROM tx_now GROUP BY 1\")")
+    if len({r["display"].lower() for r in rows}) > 1:
+        raise ValueError(f"'{t}' matches several merchants: " + "; ".join(f"{r['display']} ({r['n']} charges)" for r in rows) + ". Name one of them")
+    return {"canonicals": [r["canonical"] for r in rows], "display": rows[0]["display"], "charges": sum(r["n"] for r in rows)}
+
+
+def _suggest_merchants(conn: sqlite3.Connection, t: str, limit: int = 3) -> list[str]:
+    """Display names a partial or misspelled name probably meant: containing it first, then close spellings."""
+    rows = conn.execute("SELECT display, lower(display), lower(COALESCE(merchant_name, '')), lower(name), count(*) AS n FROM tx_now "
+                        "WHERE display IS NOT NULL GROUP BY 1, 2, 3, 4 ORDER BY n DESC").fetchall()
+    low = t.lower()
+    hits = [r[0] for r in rows if any(low in h for h in r[1:4])]   # a partial name, or the start of the raw bank text
+    spelled = {h: r[0] for r in rows for h in r[1:4] if h}
+    hits += [spelled[m] for m in difflib.get_close_matches(low, list(spelled), n=limit, cutoff=0.6)]   # a typo
+    return list(dict.fromkeys(hits))[:limit]
+
+
+def _covers(m: dict) -> dict:
+    """What a merchant rule covers, for the reply: the canonical (all of them when there are several) and today's charges."""
+    return {"canonical": m["canonicals"][0], **({"canonicals": m["canonicals"]} if len(m["canonicals"]) > 1 else {}), "charges": m["charges"]}
+
+
 PATTERN_MIN_LITERAL = 3   # "%" alone would alias every transaction
 
 
@@ -223,14 +272,46 @@ def alias_set(conn: sqlite3.Connection, raw_name: str, canonical: str) -> dict:
     return {"name": raw_name, "canonical": canonical.strip(), "matches": n, "distinct_names": distinct}
 
 
+def rule_kinds() -> list[str]:
+    """The alert kinds a suppression can quiet: the detectors that read the prelude's `suppressed`, and recurring_changed
+    (by its stream). A rule for any other kind would never match, so `--kind` refuses it."""
+    return sorted({detect.kind_of(f)[1] for f in detect.detectors() if "suppressed" in f.read_text()} | {"anomaly:recurring_changed"})
+
+
+# "It's normal" on an alert no rule can quiet: it resolves that alert, writes no rule, and says what happens next.
+NO_RULE_NOTES = {
+    "low_balance": "Resolved for this week; it alerts again next week while {account} stays under ${threshold:,.0f}. "
+                   "To alert at a lower balance: finnamon threshold \"{account}\" <amount>.",
+    "budget_pace": "Resolved for this month; the {budget} budget alerts again once spending reaches the limit, or next month. "
+                   "To change the limit: finnamon budget set \"{budget}\" <amount>.",
+    "sync_health": "Resolved for today; it alerts again tomorrow if {institution} still isn't syncing.",
+}
+
+
+def _no_rule_note(kind: str, p: dict) -> str:
+    try:
+        return NO_RULE_NOTES[kind].format(**{k: v for k, v in p.items() if v is not None})
+    except (KeyError, ValueError, TypeError):   # an older payload, or a kind with no note of its own
+        return "Resolved; no rule applies to this kind of alert, so the next one still alerts."
+
+
 def normal(conn: sqlite3.Connection, canonical: str | None = None, kind: str | None = None, account: str | None = None,
            max_amount: float | None = None, note: str | None = None, alert_id: int | None = None) -> dict:
     """A structured suppression. With alert_id, defaults are taken from that alert's payload. A rule with no kind
-    covers every detector but recurring_changed; that one needs its kind, and from an alert is scoped to its stream."""
+    covers every detector but recurring_changed; that one needs its kind, and from an alert is scoped to its stream.
+    A merchant typed by a person goes through resolve_merchant, so a rule always covers charges that exist; an alert of a
+    kind no rule can quiet (low balance, budget, sync health) is resolved with no rule and a note on what comes next."""
     stream_id = None
     account_id = find_account(conn, account)["account_id"] if account else None
     if max_amount is not None:
         max_amount = _positive(max_amount, "max amount")
+    if kind:
+        kinds = rule_kinds()
+        kind = kind if kind in kinds else f"anomaly:{kind}" if f"anomaly:{kind}" in kinds else None
+        if not kind:
+            raise ValueError(f"no alert kind a rule can quiet is called that; the kinds are: {', '.join(kinds)}")
+    m = resolve_merchant(conn, canonical) if canonical else None
+    canonicals = m["canonicals"] if m else []
     if alert_id and not canonical:
         a = conn.execute("SELECT kind, key, payload_json, transaction_id, account_id, resolved_at FROM alerts WHERE id=?", (alert_id,)).fetchone()
         if not a:
@@ -238,31 +319,38 @@ def normal(conn: sqlite3.Connection, canonical: str | None = None, kind: str | N
         if a["resolved_at"]:   # a second rule would outlive the undo, which removes only the one recorded
             raise ValueError(f"alert {alert_id} is already resolved; `finnamon alerts --undo {alert_id}` first to change how")
         p = json.loads(a["payload_json"])
+        if a["kind"] not in rule_kinds() and not kind:
+            _resolve(conn, alert_id, "normal", None)   # Undo reopens it like any other
+            return {"id": None, "alert_id": alert_id, "kind": a["kind"], "rule": None, "next": _no_rule_note(a["kind"], p)}
+        found = None
         if a["transaction_id"]:
             # the same expression the prelude uses, so the suppression matches what the detectors see
             r = conn.execute("SELECT canonical FROM tx_now WHERE transaction_id=?", (a["transaction_id"],)).fetchone()
-            canonical = r[0] if r else None
-        canonical = canonical or p.get("merchant") or p.get("name")
+            found = r[0] if r else None
+        found = found or p.get("merchant") or p.get("name")
         kind = kind or a["kind"]
         if kind == "anomaly:recurring_changed" == a["kind"]:   # "I cancelled it" acknowledges this stream, not the merchant
             stream_id = a["key"].removeprefix("anom:rec:").rsplit(":", 1)[0]   # anom:rec:<stream_id>:<YYYY-MM>
             r = conn.execute("SELECT COALESCE(merchant_entity_id, merchant_name, description) FROM recurring WHERE stream_id=?", (stream_id,)).fetchone()
-            canonical = (r and r[0]) or canonical   # the detector's own expression, so the rule matches what it sees
+            found = (r and r[0]) or found   # the detector's own expression, so the rule matches what it sees
             account_id = account_id or a["account_id"]
         if kind == "duplicate_charge":   # "normal" means this charge twice is fine, not every duplicate at the merchant
             # ponytail: a cap, so a smaller duplicate there stays muted too; an exact-amount column if that bites
             account_id = account_id or a["account_id"]
             max_amount = max_amount if max_amount is not None else p.get("amount")
-    if canonical and not stream_id:
-        canonical = canonical_for(conn, canonical) if not canonical.startswith("mch_") else canonical
-    if not (canonical or account_id or (kind and max_amount is not None)):
+        if found and not stream_id and not found.startswith("mch_"):   # a raw string from the payload (its transaction now a mirror's) resolves through the aliases
+            found = canonical_for(conn, found)
+        canonicals = [found] if found else []
+    if not (canonicals or account_id or (kind and max_amount is not None)):
         raise ValueError("a suppression needs a merchant, an account, or a kind with a max amount; an unscoped one would silence every detector")
-    cur = conn.execute("INSERT INTO suppressions (kind, canonical, account_id, max_amount, note, stream_id) VALUES (?,?,?,?,?,?)",
-                       (kind, canonical, account_id, max_amount, note, stream_id))
+    if alert_id and len(canonicals) > 1:   # an undo removes the one rule it recorded
+        raise ValueError(f"'{canonical}' is several merchant ids ({', '.join(canonicals)}); with --alert, name one of them")
+    ids = [conn.execute("INSERT INTO suppressions (kind, canonical, account_id, max_amount, note, stream_id) VALUES (?,?,?,?,?,?)",
+                        (kind, c, account_id, max_amount, note, stream_id)).lastrowid for c in (canonicals or [None])]
     if alert_id:   # the rule it wrote is recorded, so an undo removes that one and never another
-        _resolve(conn, alert_id, "normal", cur.lastrowid)
-    return {"id": cur.lastrowid, "kind": kind, "canonical": canonical, "account_id": account_id, "max_amount": max_amount, "note": note,
-            "stream_id": stream_id}
+        _resolve(conn, alert_id, "normal", ids[0])
+    return {"id": ids[0], **({"ids": ids} if len(ids) > 1 else {}), "kind": kind, "canonical": canonicals[0] if canonicals else None,
+            **({"charges": m["charges"]} if m else {}), "account_id": account_id, "max_amount": max_amount, "note": note, "stream_id": stream_id}
 
 
 def normal_remove(conn: sqlite3.Connection, rule_id: int) -> dict:
