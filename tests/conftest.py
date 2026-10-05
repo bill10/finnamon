@@ -72,6 +72,13 @@ def home(tmp_path, monkeypatch):
 
 
 @pytest.fixture
+def scheduled(monkeypatch):
+    """The household's jobs are installed, whatever LaunchAgents this machine has (`finnamon update` restarts only what is)."""
+    from finnamon import scheduler
+    monkeypatch.setattr(scheduler, "installed", lambda *a, **k: True)
+
+
+@pytest.fixture
 def household_home(tmp_path, monkeypatch):
     """FINNAMON_HOME at the default ~/.finnamon, with ~ a scratch directory: what the household's own jobs are named for."""
     from finnamon import scheduler

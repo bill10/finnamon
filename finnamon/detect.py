@@ -15,15 +15,35 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shutil
 import sqlite3
 from pathlib import Path
 
-from . import store
+from . import config, store
 
 log = logging.getLogger("finnamon.detect")
 
 DETECTORS = Path(__file__).parent / "detectors"
 PRELUDE = DETECTORS / "_prelude.sql"
+
+
+def drafts_dir() -> Path:
+    """Unreviewed drafts live in the household's home, not in the code checkout: a pull never conflicts with them and the
+    demo (its own home) does not share them. Created, 0700, on first use."""
+    d = config.home() / "detector-drafts"
+    d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return d
+
+
+def migrate_drafts() -> list[str]:
+    """Move drafts an earlier version left in <checkout>/detectors/pending/ into drafts_dir(); a name already there stays put."""
+    old, moved = DETECTORS / "pending", []
+    dest = drafts_dir()
+    for f in sorted(old.glob("*.sql")):
+        if not (dest / f.name).exists():
+            shutil.move(str(f), dest / f.name)
+            moved.append(f.name)
+    return moved
 
 
 def assemble(sql_file: Path, kind: str) -> str:

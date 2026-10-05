@@ -127,7 +127,7 @@ def render(alert: sqlite3.Row, page: bool = False) -> str:
     if k == "run_error":
         return f"🩺 <b>A sync run crashed:</b> {esc(p.get('error'))} (see the log on the Finnamon box). I'll try again on the next run."
     if k == "triage_error":
-        return "🩺 <b>Anomaly triage is failing.</b> In a terminal on the Finnamon box, run <code>claude</code> to check the login, then <code>finnamon triage</code>."
+        return "🩺 <b>Anomaly triage is failing.</b> On the Finnamon box, run <code>cd ~/.finnamon/assistant &amp;&amp; claude --strict-mcp-config</code> to check the login (or open the dashboard's intercom), then <code>finnamon triage</code>."
     if k.startswith("anomaly:"):
         what = tidy(p.get("merchant") or p.get("name")) or "a transaction"
         amount = next((p[k] for k in ("amount", "last_amount", "avg_amount") if p.get(k) is not None), None)   # a recurring change describes the charge it tracks

@@ -22,6 +22,7 @@ from . import store
 KINDS = {"checking": ("depository", "checking"), "savings": ("depository", "savings"), "credit": ("credit", "credit card"),
          "loan": ("loan", "loan"), "investment": ("investment", "brokerage")}
 MAX_NAME = 80
+SUMMARY_LINES = 30   # how far down a file's header may sit below a bank's summary block
 DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%Y/%m/%d", "%d %b %Y", "%b %d, %Y", "%d-%b-%Y", "%m-%d-%Y")
 # header words per role, in the order roles are claimed: "Transaction Date" is the date, not the description; "Debit Amount" is a debit, not the amount
 HEADERS = (("date", ("transaction date", "posting date", "posted date", "date")), ("name", ("description", "memo", "payee", "narrative", "details", "merchant", "name")),
@@ -92,6 +93,19 @@ def find_account(conn: sqlite3.Connection, ref: str) -> sqlite3.Row:
     return r
 
 
+def set_balance(conn: sqlite3.Connection, ref: str, balance: float, now: str | None = None) -> dict:
+    """What a manual account is worth today, for a file that carried no running balance (a card export, usually). What is owed
+    on a card or loan is a positive number, as Plaid reports it."""
+    r = find_account(conn, ref)
+    if not isinstance(balance, (int, float)) or balance != balance or abs(balance) == float("inf"):
+        raise ValueError("the balance has to be a number, like 1200 or 1234.56")
+    if r["type"] in ("credit", "loan"):
+        balance = abs(balance)
+    conn.execute("INSERT OR REPLACE INTO balances (account_id, as_of, current, available) VALUES (?,?,?,?)",
+                 (r["account_id"], now or store.now_local(), balance, balance if r["type"] == "depository" else None))
+    return {"account_id": r["account_id"], "name": r["name"], "balance": balance}
+
+
 # --- parsing ------------------------------------------------------------------------------------
 
 def parse_date(s: str) -> str | None:
@@ -148,6 +162,10 @@ def parse(text: str) -> dict:
     if not rows:
         raise ValueError("the file is empty")
     header = not any(parse_date(c) for c in rows[0])
+    if header:   # Bank of America puts a summary block (beginning balance, totals) above the header: the header is the first row that names a date and an amount
+        start = next((i for i, r in enumerate(rows[:SUMMARY_LINES]) if not any(parse_date(c) for c in r)
+                      and "date" in (c := _columns(r)) and {"amount", "debit", "credit"} & c.keys()), 0)
+        rows = rows[start:]
     cols = _columns(rows[0]) if header else _infer(rows[0])
     if "date" not in cols or not ({"amount", "debit", "credit"} & cols.keys()):
         raise ValueError(f"could not find a date and an amount column ({'header' if header else 'first'} row has {len(rows[0])} cells); "

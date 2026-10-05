@@ -299,18 +299,19 @@ def test_command_surface(home, tg, capsys, monkeypatch, tmp_path):
     for d in ("rules", "candidates"):
         (det / d).mkdir(parents=True)
     monkeypatch.setattr(detect, "DETECTORS", det)
+    drafts = tmp_path / "detector-drafts"   # under the household's home, not the checkout
     assert "no pending" in run_cli(capsys, "detect", "--review")
     monkeypatch.setattr(sys, "stdin", io.StringIO("SELECT account_id, 'anomaly:big' AS kind, 'big:'||transaction_id AS key, transaction_id, '{}' AS payload FROM tx WHERE amount > 500;"))
     out = run_cli(capsys, "detect", "--draft", "-", "--name", "big_charge")
-    assert "Not live until reviewed" in out and (det / "pending" / "big_charge.sql").exists()
-    (det / "pending" / "broken.sql").write_text("SELECT nonsense FROM nowhere")
-    (det / "pending" / "unwanted.sql").write_text("SELECT 1")
-    (det / "pending" / "keep.sql").write_text("SELECT 1")
+    assert "Not live until reviewed" in out and (drafts / "big_charge.sql").exists()
+    (drafts / "broken.sql").write_text("SELECT nonsense FROM nowhere")
+    (drafts / "unwanted.sql").write_text("SELECT 1")
+    (drafts / "keep.sql").write_text("SELECT 1")
     answers(monkeypatch, "y", "n", "", "d")  # pending/ is reviewed in name order: big_charge, broken, keep, unwanted
     out = run_cli(capsys, "detect", "--review", "--tier", "candidates")
     assert "(runs; 0 rows right now)" in out and "(does not run:" in out and "live" in out and "deleted" in out
-    assert (det / "candidates" / "big_charge.sql").exists() and (det / "pending" / "broken.sql").exists()
-    assert not (det / "pending" / "unwanted.sql").exists() and (det / "pending" / "keep.sql").exists()
+    assert (det / "candidates" / "big_charge.sql").exists() and (drafts / "broken.sql").exists()
+    assert not (drafts / "unwanted.sql").exists() and (drafts / "keep.sql").exists()
     # drafts come from stdin only; names are confined to pending/; no overwrite; SQL must be a SELECT
     src = tmp_path / "d.sql"
     src.write_text("SELECT NULL, 'r', 'r:1', NULL, '{}' WHERE 0")
@@ -326,7 +327,7 @@ def test_command_surface(home, tg, capsys, monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "stdin", io.StringIO("SELECT 2"))
     with pytest.raises(SystemExit):
         run_cli(capsys, "detect", "--draft", "-", "--name", "keep")                       # exists: no overwrite
-    assert (det / "pending" / "keep.sql").read_text() == "SELECT 1"
+    assert (drafts / "keep.sql").read_text() == "SELECT 1"
     monkeypatch.setattr(sys, "stdin", io.StringIO(src.read_text()))
     run_cli(capsys, "detect", "--draft", "-", "--name", "draft")
     answers(monkeypatch, "n", "y", "n")  # broken, draft, keep
@@ -547,14 +548,14 @@ def test_a_release_commit_restarts_nothing():
     assert services_for(["CHANGELOG.md", "VERSION", "changelog.d/fix-a-thing.md", "changelog.d/add-b.md"]) == []
 
 
-def test_update_is_for_a_person_at_a_terminal(monkeypatch, capsys):
+def test_update_is_for_a_person_at_a_terminal(scheduled, monkeypatch, capsys):
     monkeypatch.setenv("CLAUDECODE", "1")   # the dashboard's session is the household's: it must not restart itself
     with pytest.raises(SystemExit):
         cli.main(["update"])
     assert "terminal on the Finnamon box" in capsys.readouterr().err
 
 
-def test_update_refuses_a_dirty_tree_and_restarts_nothing(home, monkeypatch, tmp_path, capsys):
+def test_update_refuses_a_dirty_tree_and_restarts_nothing(scheduled, home, monkeypatch, tmp_path, capsys):
     repo = tmp_path / "checkout"; (repo / ".git").mkdir(parents=True)
     seen = []
     monkeypatch.setattr(cli.scheduler, "repo_dir", lambda: str(repo))
@@ -568,7 +569,7 @@ def test_update_refuses_a_dirty_tree_and_restarts_nothing(home, monkeypatch, tmp
     assert "--untracked-files=no" in status, "an approved detector left untracked by `detect --review` must not block updates forever"
 
 
-def test_update_sends_you_to_install_when_the_unit_files_changed(home, monkeypatch, tmp_path, capsys):
+def test_update_sends_you_to_install_when_the_unit_files_changed(scheduled, home, monkeypatch, tmp_path, capsys):
     repo = tmp_path / "checkout"; (repo / ".git").mkdir(parents=True)
     monkeypatch.setattr(cli.scheduler, "repo_dir", lambda: str(repo))
     monkeypatch.setattr(cli.scheduler, "drifted_units", lambda *a, **k: ["com.finnamon.web.plist"])
@@ -580,7 +581,7 @@ def test_update_sends_you_to_install_when_the_unit_files_changed(home, monkeypat
     assert "com.finnamon.web.plist" in err and "finnamon install" in err
 
 
-def test_update_restarts_only_the_services_the_pull_touched(home, monkeypatch, tmp_path, capsys):
+def test_update_restarts_only_the_services_the_pull_touched(scheduled, home, monkeypatch, tmp_path, capsys):
     repo = tmp_path / "checkout"; (repo / ".git").mkdir(parents=True)
     restarted = []
     monkeypatch.setattr(cli.scheduler, "repo_dir", lambda: str(repo))
@@ -607,7 +608,7 @@ def test_update_restarts_only_the_services_the_pull_touched(home, monkeypatch, t
     assert "adopted old111..new222 from git@example:finnamon.git" in out, "say what was adopted and from where"
 
 
-def test_update_no_pull_adopts_the_tree_rather_than_reporting_nothing_to_do(home, monkeypatch, tmp_path, capsys):
+def test_update_no_pull_adopts_the_tree_rather_than_reporting_nothing_to_do(scheduled, home, monkeypatch, tmp_path, capsys):
     """A pull by hand leaves no range to diff; restarting nothing would leave the new code unrun."""
     repo = tmp_path / "checkout"; (repo / ".git").mkdir(parents=True)
     restarted = []
@@ -619,14 +620,14 @@ def test_update_no_pull_adopts_the_tree_rather_than_reporting_nothing_to_do(home
     assert restarted == ["daemon", "web"]
 
 
-def test_update_needs_a_checkout_to_pull_into(home, monkeypatch, tmp_path, capsys):
+def test_update_needs_a_checkout_to_pull_into(scheduled, home, monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(cli.scheduler, "repo_dir", lambda: str(tmp_path / "site-packages" / "finnamon"))
     with pytest.raises(SystemExit):
         cli.main(["update"])
     assert "not a git checkout" in capsys.readouterr().err   # a wheel install has nothing to pull; `install` is the way in
 
 
-def test_update_stops_when_the_pull_does_not_fast_forward(home, monkeypatch, tmp_path, capsys):
+def test_update_stops_when_the_pull_does_not_fast_forward(scheduled, home, monkeypatch, tmp_path, capsys):
     repo = tmp_path / "checkout"; (repo / ".git").mkdir(parents=True)
     monkeypatch.setattr(cli.scheduler, "repo_dir", lambda: str(repo))
     monkeypatch.setattr(cli.scheduler, "drifted_units", lambda *a, **k: [])
@@ -641,7 +642,7 @@ def test_update_stops_when_the_pull_does_not_fast_forward(home, monkeypatch, tmp
     assert e.value.code == 1 and "fast-forward" in capsys.readouterr().err   # the box keeps running what it has
 
 
-def test_update_dry_run_names_what_would_restart_and_all_ignores_the_diff(home, monkeypatch, tmp_path, capsys):
+def test_update_dry_run_names_what_would_restart_and_all_ignores_the_diff(scheduled, home, monkeypatch, tmp_path, capsys):
     repo = tmp_path / "checkout"; (repo / ".git").mkdir(parents=True)
     monkeypatch.setattr(cli.scheduler, "repo_dir", lambda: str(repo))
     monkeypatch.setattr(cli.scheduler, "drifted_units", lambda *a, **k: [])
@@ -661,7 +662,7 @@ def test_update_dry_run_names_what_would_restart_and_all_ignores_the_diff(home, 
     assert "would restart: daemon (nothing was pulled or migrated)" in out
 
 
-def test_update_leaves_the_assistant_alone_when_only_the_page_changed(home, monkeypatch, tmp_path, capsys):
+def test_update_leaves_the_assistant_alone_when_only_the_page_changed(scheduled, home, monkeypatch, tmp_path, capsys):
     repo = tmp_path / "checkout"; (repo / ".git").mkdir(parents=True)
     monkeypatch.setattr(cli.scheduler, "repo_dir", lambda: str(repo))
     monkeypatch.setattr(cli.scheduler, "drifted_units", lambda *a, **k: [])
@@ -681,7 +682,7 @@ def test_update_leaves_the_assistant_alone_when_only_the_page_changed(home, monk
     assert "reload the page" in out                  # new code nobody restarted into: the household is told where it is
 
 
-def test_update_adopts_a_release_commit_without_a_restart(home, monkeypatch, tmp_path, capsys):
+def test_update_adopts_a_release_commit_without_a_restart(scheduled, home, monkeypatch, tmp_path, capsys):
     """The release workflow's own commit (VERSION, CHANGELOG.md, deleted fragments) carries no code to restart into."""
     repo = tmp_path / "checkout"; (repo / ".git").mkdir(parents=True)
     monkeypatch.setattr(cli.scheduler, "repo_dir", lambda: str(repo))
@@ -701,7 +702,7 @@ def test_update_adopts_a_release_commit_without_a_restart(home, monkeypatch, tmp
     assert "nothing to restart" in out and "reload the page" not in out
 
 
-def test_update_reports_a_restart_the_service_manager_refused(home, monkeypatch, tmp_path, capsys):
+def test_update_reports_a_restart_the_service_manager_refused(scheduled, home, monkeypatch, tmp_path, capsys):
     repo = tmp_path / "checkout"; (repo / ".git").mkdir(parents=True)
     monkeypatch.setattr(cli.scheduler, "repo_dir", lambda: str(repo))
     monkeypatch.setattr(cli.scheduler, "drifted_units", lambda *a, **k: [])
@@ -712,7 +713,7 @@ def test_update_reports_a_restart_the_service_manager_refused(home, monkeypatch,
     assert e.value.code == 1 and "Could not find service" in capsys.readouterr().err   # a half-done update names the job it could not bounce
 
 
-def test_update_will_not_migrate_or_restart_while_a_sync_holds_the_run_lock(home, monkeypatch, tmp_path, capsys):
+def test_update_will_not_migrate_or_restart_while_a_sync_holds_the_run_lock(scheduled, home, monkeypatch, tmp_path, capsys):
     """migrate outside the lock races the daemon's own write transactions, and a restart mid-cycle kills a Plaid page."""
     repo = tmp_path / "checkout"; (repo / ".git").mkdir(parents=True)
     monkeypatch.setattr(cli.scheduler, "repo_dir", lambda: str(repo))
@@ -729,7 +730,7 @@ def test_update_will_not_migrate_or_restart_while_a_sync_holds_the_run_lock(home
     assert "a sync is running right now" in capsys.readouterr().err
 
 
-def test_update_names_a_release_that_changes_what_the_assistant_may_do(home, monkeypatch, tmp_path, capsys):
+def test_update_names_a_release_that_changes_what_the_assistant_may_do(scheduled, home, monkeypatch, tmp_path, capsys):
     """The bundle is the assistant's permission set and instructions: adopting it silently is the thing to avoid."""
     repo = tmp_path / "checkout"; (repo / ".git").mkdir(parents=True)
     restarted = []
@@ -748,7 +749,7 @@ def test_update_names_a_release_that_changes_what_the_assistant_may_do(home, mon
     assert restarted == ["daemon", "web"], "the session holding those settings read them at startup"
 
 
-def test_update_dry_run_never_takes_the_lock_or_moves_the_schema(home, monkeypatch, tmp_path, capsys):
+def test_update_dry_run_never_takes_the_lock_or_moves_the_schema(scheduled, home, monkeypatch, tmp_path, capsys):
     """--no-pull --dry-run used to fall past the early return and migrate for real, unlike the default path."""
     repo = tmp_path / "checkout"; (repo / ".git").mkdir(parents=True)
     monkeypatch.setattr(cli.scheduler, "repo_dir", lambda: str(repo))
@@ -1040,7 +1041,7 @@ def test_account_list_carries_each_account_owner(capsys, tmp_path, monkeypatch):
     assert json.loads(run_cli(capsys, "account", "list"))[0]["owner"] == "sam"
 
 
-def test_update_check_reports_what_the_pull_would_bring_and_changes_nothing(home, monkeypatch, tmp_path, capsys):
+def test_update_check_reports_what_the_pull_would_bring_and_changes_nothing(scheduled, home, monkeypatch, tmp_path, capsys):
     """The dashboard's Update available: the same upstream `update` pulls from, looked at without moving HEAD."""
     g = lambda d, *a: subprocess.run(["git", "-C", str(d), "-c", "user.name=t", "-c", "user.email=t@t", *a], check=True, capture_output=True)
     origin = tmp_path / "origin"; origin.mkdir(); g(origin, "init", "-q", "-b", "main")

@@ -81,6 +81,7 @@ class Daemon:
         self.stop = threading.Event()
         self.inbox: queue.Queue = queue.Queue()
         self.consecutive_timeouts = 0
+        self.strangers: dict = {}   # Telegram user id -> when they were last told how to join (once a day, so a chatty one is not answered every line)
         self.died = False   # _start ended by a failure (harness check, dead thread), not a clean stop
 
     def _connect(self, name: str) -> sqlite3.Connection | None:
@@ -334,9 +335,24 @@ class Daemon:
         owner = conn.execute("SELECT owner FROM owners WHERE telegram_user_id=?", (sender.get("id"),)).fetchone()
         if not owner:
             log.info("ignoring message from unknown user %s", sender.get("id"))
+            self.tell_stranger(chat_id, sender)
             return
         reply_to = (m.get("reply_to_message") or {}).get("message_id")
         self.inbox.put({"owner": owner[0], "text": m["text"], "reply_to": reply_to, "message_id": m["message_id"], "chat_id": chat_id})
+
+    STRANGER_EVERY_S = 86400
+
+    def tell_stranger(self, chat_id: str, sender: dict) -> None:
+        """Someone in the household chat who is not a member gets no answer from the assistant; say once why, and how to join."""
+        uid, now = sender.get("id"), time.time()
+        if uid is None or now - self.strangers.get(uid, 0) < self.STRANGER_EVERY_S:
+            return
+        self.strangers[uid] = now
+        try:
+            telegram.send_message(chat_id, f"I only answer household members. To add you, someone already in the household runs, on the Finnamon box: "
+                                           f"<code>finnamon owner add {esc((sender.get('first_name') or 'name').lower())} --user-id {int(uid)}</code>")
+        except telegram.TelegramError as e:
+            log.warning("could not tell user %s how to join: %s", uid, e)
 
     # --- conversation worker (serial) ---------------------------------------------------------
 

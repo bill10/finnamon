@@ -730,6 +730,19 @@ test('resolved alerts render apart, greyed, saying how; only an undoable one get
   assert.equal(els['alerts-resolved'].hidden, true);
 });
 
+test('setting a manual account\'s balance: its id only, a number only, the amount after --', async () => {
+  await withApp(async ({ base, calls }) => {
+    const post = (body) => fetch(`${base}/api/account/balance`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    assert.equal((await post({ account: 'manual:amex:amex', balance: '$1,234.50' })).status, 200);
+    assert.deepEqual(calls.at(-1), ['account', 'balance', '--', 'manual:amex:amex', '1234.5']);
+    const n = calls.length;
+    assert.equal((await post({ account: 'Amex', balance: '5' })).status, 400, 'a name or a Plaid id is not a manual account id');
+    assert.equal((await post({ account: 'manual:amex:amex', balance: 'lots' })).status, 400);
+    assert.equal((await post({ account: 'manual:amex:amex', balance: '' })).status, 400);
+    assert.equal(calls.length, n, 'the CLI never ran');
+  });
+});
+
 test('removing a manual account: the name after --, --yes (the page asked), and only with the key from this page\'s origin', async () => {
   await withApp(async ({ base, calls }) => {
     const port = new URL(base).port, path = `/api/account/${encodeURIComponent('--HSBC Checking')}`;

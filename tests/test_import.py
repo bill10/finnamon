@@ -638,7 +638,7 @@ def test_every_dashboard_write_parses():
     # The web tests assert the argv each route builds, against a fake exec; this runs it through the real parser,
     # a flag-shaped value in every user slot. A new expression in a route's argv needs a sample here.
     sample = {"ref": "-HSBC Checking", "n": "-HSBC Checking", "inst": "HSBC", "kind": "checking", "String(amount)": "100",
-              "String(req.body?.value ?? '')": "250000", "name(req.params.name)": "-Dining", "req.params.id": "item9"}
+              "String(req.body?.value ?? '')": "250000", "name(req.params.name)": "-Dining", "req.params.id": "item9", "String(b)": "100"}
     src = (Path(__file__).resolve().parents[1] / "web/server.js").read_text()
     routes = re.findall(r"write\(res, \[(.*?)\]\)", src)
     assert any(r.startswith("'account', 'add'") for r in routes)

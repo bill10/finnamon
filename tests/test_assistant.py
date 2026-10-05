@@ -41,7 +41,7 @@ def test_install_writes_the_bundle_to_finnamon_home_and_nothing_else(own_dir, ho
     assert not again["changed"] and not again["first"] and again["written"] == [] and again["backed_up"] == []
 
 
-def test_update_keeps_a_local_edit_as_bak_and_overwrites_only_what_the_release_changed(own_dir, monkeypatch):
+def test_update_keeps_a_local_edit_as_bak_and_overwrites_only_what_the_release_changed(scheduled, own_dir, monkeypatch):
     assistant.install()
     skill = own_dir / ".claude/skills/finnamon/SKILL.md"
     triage = own_dir / ".claude/skills/triage/SKILL.md"
@@ -313,7 +313,7 @@ def test_import_browser_starts_its_session_in_the_assistant_directory(own_dir, c
     assert calls[0] == ("cd", str(own_dir)) and calls[1][1][2:4] == ["--setting-sources", "project"] and "--strict-mcp-config" in calls[1][1]
 
 
-def test_update_writes_the_bundle_retires_the_sessions_once_and_restarts_both_jobs(own_dir, conn, monkeypatch, capsys):
+def test_update_writes_the_bundle_retires_the_sessions_once_and_restarts_both_jobs(scheduled, own_dir, conn, monkeypatch, capsys):
     """Claude Code keeps a session's transcript under the directory it ran in, so the first bundle install is the one time
     the household's conversations cannot be resumed: the daemon's session id is cleared and the dashboard's retired
     (kept as `prev`, the way `install` retires it). Later updates leave both alone."""
@@ -447,7 +447,7 @@ def test_a_failed_write_leaves_no_temp_file_and_the_target_unchanged(own_dir, mo
     assert target.read_text() == "before" and sorted(os.listdir(own_dir)) == ["t.txt"]
 
 
-def test_update_that_cannot_write_the_bundle_dies_after_the_migration_and_restarts_nothing(own_dir, conn, monkeypatch, capsys):
+def test_update_that_cannot_write_the_bundle_dies_after_the_migration_and_restarts_nothing(scheduled, own_dir, conn, monkeypatch, capsys):
     seed(conn)
     repo = config.home() / "checkout"; (repo / ".git").mkdir(parents=True)
     monkeypatch.setattr(cli.scheduler, "repo_dir", lambda: str(repo))
@@ -480,7 +480,7 @@ def test_status_reports_the_assistant_directory_and_its_problems(own_dir, conn, 
     assert json.loads(capsys.readouterr().out)["assistant_problems"] == [], "what the dashboard's health pill reads"
 
 
-def test_update_registers_the_channel_plugin_in_channel_mode(own_dir, conn, fake_claude, tmp_path, monkeypatch, capsys):
+def test_update_registers_the_channel_plugin_in_channel_mode(scheduled, own_dir, conn, fake_claude, tmp_path, monkeypatch, capsys):
     seed(conn); store.set_state(conn, "inbound", "channel")
     log = tmp_path / "plugin.txt"
     fake_claude.write_text(f'#!/bin/sh\n{{ pwd; printf "%s\\n" "$@"; }} >> {log}\n')
