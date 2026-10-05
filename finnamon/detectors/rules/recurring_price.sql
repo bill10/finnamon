@@ -3,20 +3,20 @@
 -- average already includes the new price, so the charges themselves are compared: Netflix $15.49, $15.49, then $17.99.
 -- The last charge is the transaction at the stream's last_date and last_amount; the earlier ones are the same merchant on
 -- the same account. One alert per charge (the key is that transaction).
-WITH last AS (
-  SELECT r.stream_id, r.frequency, t.transaction_id, t.account_id, t.account_name, t.mask, t.display, t.canonical, t.date, t.amount,
-         (SELECT p.amount FROM tx p WHERE p.account_id = t.account_id AND p.canonical = t.canonical AND p.pending = 0 AND p.amount > 0
-            AND p.date < t.date ORDER BY p.date DESC, p.transaction_id DESC LIMIT 1) AS prev1,
-         (SELECT p.amount FROM tx p WHERE p.account_id = t.account_id AND p.canonical = t.canonical AND p.pending = 0 AND p.amount > 0
-            AND p.date < t.date ORDER BY p.date DESC, p.transaction_id DESC LIMIT 1 OFFSET 1) AS prev2,
-         (SELECT p.date FROM tx p WHERE p.account_id = t.account_id AND p.canonical = t.canonical AND p.pending = 0 AND p.amount > 0
-            AND p.date < t.date ORDER BY p.date DESC, p.transaction_id DESC LIMIT 1) AS prev_date
+WITH hist AS (   -- one pass over the charges: each with the two before it, same merchant, same account
+  SELECT transaction_id, account_id, account_name, mask, display, canonical, date, amount, first_synced_at,
+         lag(amount, 1) OVER w AS prev1, lag(amount, 2) OVER w AS prev2, lag(date, 1) OVER w AS prev_date
+  FROM tx WHERE pending = 0 AND amount > 0
+  WINDOW w AS (PARTITION BY account_id, canonical ORDER BY date, transaction_id)
+),
+last AS (
+  SELECT r.stream_id, r.frequency, h.*
   FROM recurring r
-  JOIN tx t ON t.account_id = r.account_id AND t.date = r.last_date AND t.amount = r.last_amount AND t.pending = 0
+  JOIN hist h ON h.account_id = r.account_id AND h.date = r.last_date AND h.amount = r.last_amount
   WHERE r.direction = 'outflow' AND r.status NOT IN ('EARLY_DETECTION', 'TOMBSTONED')
     AND COALESCE(r.is_active, 1) = 1
     AND r.first_seen_at <= :as_of
-    AND t.date >= date(:as_of, '-' || (SELECT text FROM g WHERE key='lookback_days') || ' days') AND t.date >= date(t.first_synced_at) AND t.date <= date(:as_of)
+    AND h.date >= date(:as_of, '-' || (SELECT text FROM g WHERE key='lookback_days') || ' days') AND h.date >= date(h.first_synced_at) AND h.date <= date(:as_of)
 )
 SELECT account_id, 'recurring_price' AS kind, 'recprice:' || transaction_id AS key, transaction_id,
        json_object('merchant', display, 'old_amount', prev1, 'amount', amount, 'date', date, 'prev_date', prev_date, 'frequency', frequency,
