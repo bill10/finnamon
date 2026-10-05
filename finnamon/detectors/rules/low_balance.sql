@@ -1,8 +1,15 @@
--- Depository account whose latest available balance is below its low_balance_threshold. One per week.
+-- Depository account whose latest available balance is below its low_balance_threshold. Once per dip: the key is the
+-- first balance under the threshold since the last one at or above it, so it alerts again only after the account
+-- recovers and drops again.
 SELECT
   acc.account_id,
   'low_balance' AS kind,
-  'lowbal:' || acc.account_id || ':' || strftime('%Y-%W', :as_of) AS key,
+  'lowbal:' || acc.account_id || ':' || (
+    SELECT min(x.as_of) FROM balances x
+    WHERE x.account_id = acc.account_id AND x.as_of <= :as_of AND x.available < s.value
+      AND x.as_of > COALESCE((SELECT max(y.as_of) FROM balances y
+                              WHERE y.account_id = acc.account_id AND y.as_of <= :as_of AND y.available >= s.value), '')
+  ) AS key,
   NULL AS transaction_id,
   json_object('account', acc.name, 'mask', acc.mask, 'available', b.available, 'threshold', s.value, 'as_of', :as_of) AS payload
 FROM accounts acc

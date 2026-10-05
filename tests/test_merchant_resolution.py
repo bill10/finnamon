@@ -102,9 +102,9 @@ def alert(conn, kind, key, payload):
 
 
 @pytest.mark.parametrize("kind, payload, says", [
-    ("low_balance", {"account": "Chase Checking", "mask": "4821", "available": 180.5, "threshold": 500}, "finnamon threshold \"Chase Checking\""),
+    ("low_balance", {"account": "Chase Checking", "mask": "4821", "available": 180.5, "threshold": 500}, "once Chase Checking has gone back above $500"),
     ("budget_pace", {"budget": "dining", "category": "FOOD_AND_DRINK", "limit": 300, "spent": 320, "state": "over"}, "for this month"),
-    ("sync_health", {"item_id": "item1", "institution": "Chase", "status": "error"}, "Chase still isn't syncing"),
+    ("sync_health", {"item_id": "item1", "institution": "Chase", "status": "error"}, "if Chase's problem changes"),
 ])
 def test_its_normal_on_an_alert_no_rule_can_quiet_resolves_it(house, capsys, kind, payload, says):
     a = alert(house, kind, f"{kind}:1", payload)
@@ -147,3 +147,11 @@ def test_a_recurring_changed_rule_by_name_also_keys_on_the_stream(house):
 def test_an_over_budget_note_waits_for_next_month(house):
     a = alert(house, "budget_pace", "budget:1:2026-09:over", {"budget": "dining", "state": "over", "limit": 300, "spent": 320})
     assert "next month if it goes over again" in budgets.normal(house, alert_id=a)["next"]
+
+
+# Value: protects=`finnamon normal X --kind recurring_price` is accepted and writes a rule of that kind; fails_when=rule_kinds drops
+# recurring_price (the CLI refuses it as an unknown kind); why_new=only the --alert path was tested; seam=none
+def test_recurring_price_is_a_kind_a_rule_can_name(house, capsys):
+    cli.main(["normal", "Shell", "--kind", "recurring_price"])
+    assert json.loads(capsys.readouterr().out)["kind"] == "recurring_price"
+    assert house.execute("SELECT kind FROM suppressions").fetchone()[0] == "recurring_price"

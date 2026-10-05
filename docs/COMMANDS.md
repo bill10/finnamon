@@ -8,8 +8,8 @@ allow-listed in the assistant's `.claude/settings.json` (`normal`, `budget`, `th
 `triage set`, `detect --draft`, `account add`, `account type`, `import`, `link --start` / `--finish`).
 "It is normal" on an alert mutes that pattern (`finnamon normal --alert <id>`); on a subscription that stopped or
 changed price ("yes, I cancelled it") it acknowledges that one subscription, so another at the same merchant still
-alerts. "Acme is normal" (`finnamon normal "Acme"`, no `--kind`) mutes Acme's charges but never its subscriptions
-changing or stopping; that takes `--kind anomaly:recurring_changed`. `finnamon normal --list` shows the rules with
+alerts. "Acme is normal" (`finnamon normal "Acme"`, no `--kind`) mutes Acme's charges, price changes included, but never a subscription
+stopping; that takes `--kind anomaly:recurring_changed`. `finnamon normal --list` shows the rules with
 their ids, `finnamon normal --remove <id>` deletes one. "Fine this once" is `finnamon alerts --dismiss <id>`: resolved,
 no rule, the next one still alerts. `finnamon alerts --undo <id>` reopens either kind and removes only the rule that
 alert wrote. Each covers every alert on that alert's transaction: when two detectors fire on one charge, it is one alert
