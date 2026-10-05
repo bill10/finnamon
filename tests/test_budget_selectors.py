@@ -36,6 +36,13 @@ def test_mortgage_budget_counts_the_checking_payment_once(conn):
     txn(conn, "loan2", "mtg", "2026-10-01", -3200, "PAYMENT RECEIVED", None, None, "LOAN_PAYMENTS", "LOAN_PAYMENTS_MORTGAGE_PAYMENT")
     assert budgets.budget_list(conn, "2026-10-05 12:00:00")[0]["spent"] == 3200
     assert pace_alerts(conn, "2026-10-05 12:00:00")[-1]["key"] == "budget:1:2026-10:over"
+    # not fixed, no Plaid stream: the mortgage still counts once and is never projected (3200 * 31/10 would alert)
+    budgets.budget_set(conn, "mortgage", 3300, fixed=False)
+    b = budgets.budget_list(conn, "2026-10-10 12:00:00")[0]
+    assert (b["spent"], b["recurring"], b["pace"]) == (3200, 3200, 3200)
+    assert [a["key"] for a in pace_alerts(conn, "2026-10-10 12:00:00") if a["key"].startswith("budget:1:2026-10:pace")] == []
+    cats = {c["category"]: c for c in budgets.suggest(conn, 6, "2026-11-15 12:00:00")["categories"]}   # suggest files it as the mortgage too
+    assert cats["LOAN_PAYMENTS_MORTGAGE_PAYMENT"]["months"] == {"2026-09": 3200, "2026-10": 3200} and "TRANSFER_OUT_ACCOUNT_TRANSFER" not in cats
 
 
 def test_recurring_bill_is_counted_once_not_projected(conn):
@@ -102,7 +109,9 @@ def test_several_categories_and_merchants_count_each_transaction_once(conn):
     assert wt["category"] is None and wt["merchants"] == ["Seattle Public Utilities", "RECOLOGY"]
     assert conn.execute("SELECT value FROM budget_selectors WHERE label='Blue Bottle'").fetchone()[0] == "mch_bb"   # canonical_for, as category rules
     # typed in another case, or as `display` shows it after an alias: still matched, and the reply says how many charges
-    assert budgets.budget_set(conn, "trash", 50, merchants=["recology"])["matches"] == {"recology": 1}
+    assert budgets.budget_set(conn, "trash", 50, merchants=["recology", "Recology"])["matches"] == {"Recology": 1}   # one selector, not two
+    budgets.alias_set(conn, "RECOLOGY", "trash pickup")                       # aliased after the budget: the raw name still matches
+    assert [b["spent"] for b in budgets.budget_list(conn, AS_OF) if b["name"] == "trash"] == [45]
     txn(conn, "c2", "cc", "2026-09-13", 5, "BLUE BOTTLE #2", "Blue Bottle", None, "FOOD_AND_DRINK", "FOOD_AND_DRINK_COFFEE")   # Plaid sent no entity id
     assert budgets.budget_set(conn, "bb", 50, merchants=["Blue Bottle"])["matches"] == {"Blue Bottle": 2}
     budgets.alias_set(conn, "BLUE BOTTLE", "my coffee place")
@@ -119,6 +128,7 @@ def test_several_categories_and_merchants_count_each_transaction_once(conn):
 
 def test_cli_repeats_flags(home, conn, capsys):
     seed(conn)
+    assert budgets.budget_list(conn, "2026-10") == []                         # no budgets: nothing to compute, no crash
     cli.main(["budget", "set", "dining", "300", "--category", "restaurant", "--category", "coffee", "--merchant", "Blue Bottle", "--fixed"])
     out = json.loads(capsys.readouterr().out)
     assert (out["categories"], out["merchants"], out["fixed"]) == (["FOOD_AND_DRINK_RESTAURANT", "FOOD_AND_DRINK_COFFEE"], ["Blue Bottle"], True)
