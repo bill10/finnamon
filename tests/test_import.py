@@ -638,12 +638,12 @@ def test_every_dashboard_write_parses():
     # The web tests assert the argv each route builds, against a fake exec; this runs it through the real parser,
     # a flag-shaped value in every user slot. A new expression in a route's argv needs a sample here.
     sample = {"ref": "-HSBC Checking", "n": "-HSBC Checking", "inst": "HSBC", "kind": "checking", "String(amount)": "100",
-              "String(req.body?.value ?? '')": "250000", "name(req.params.name)": "-Dining", "req.params.id": "item9"}
+              "String(req.body?.value ?? '')": "250000", "name(req.params.name)": "-Dining", "req.params.id": "item9", "account": "acc_2", "same": "acc_1"}
     src = (Path(__file__).resolve().parents[1] / "web/server.js").read_text()
     routes = re.findall(r"write\(res, \[(.*?)\]\)", src)
     assert any(r.startswith("'account', 'add'") for r in routes)
     for r in routes:
-        argv = [x[1:-1] if x.startswith("'") else sample[x] for x in (s.strip() for s in r.split(", "))]
+        argv = [y for x in (s.strip() for s in r.split(", ")) for y in (["--owner", "jane"] if x == "...ownerArgs" else [x[1:-1] if x.startswith("'") else sample[x]])]
         v = list(vars(cli.parse_args(argv)).values())
         assert argv[-1] in v or float(argv[-1]) in v, argv   # the last value landed, not orphaned
 

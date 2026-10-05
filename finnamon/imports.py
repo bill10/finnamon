@@ -17,7 +17,7 @@ import re
 import sqlite3
 from datetime import datetime
 
-from . import store
+from . import owners as owners_mod, store
 
 KINDS = {"checking": ("depository", "checking"), "savings": ("depository", "savings"), "credit": ("credit", "credit card"),
          "loan": ("loan", "loan"), "investment": ("investment", "brokerage")}
@@ -47,8 +47,9 @@ def add_account(conn: sqlite3.Connection, name: str, institution: str, kind: str
     if conn.execute("SELECT 1 FROM accounts WHERE account_id=?", (account_id,)).fetchone():
         raise ValueError(f"the id {account_id} is taken by another account whose name reads the same once punctuation is dropped; pick a name that differs in letters or digits")
     with store.tx(conn):
-        conn.execute("INSERT OR IGNORE INTO owners (owner) VALUES (?)", (owner,))
-        conn.execute("INSERT INTO items (item_id, institution, owner, source) VALUES (?,?,?,'manual') ON CONFLICT(item_id) DO NOTHING", (item_id, institution, owner))
+        filed = owners_mod.filing(conn, owner)   # joint is an account's owner, not a member the bank can be filed under
+        conn.execute("INSERT OR IGNORE INTO owners (owner) VALUES (?)", (filed,))
+        conn.execute("INSERT INTO items (item_id, institution, owner, source) VALUES (?,?,?,'manual') ON CONFLICT(item_id) DO NOTHING", (item_id, institution, filed))
         conn.execute("INSERT INTO accounts (account_id, item_id, name, type, subtype, mask, owner) VALUES (?,?,?,?,?,?,?)",
                      (account_id, item_id, name, typ, sub, (mask or None) and str(mask)[-4:], owner))
     # ON CONFLICT DO NOTHING above: a second account at a bank keeps the institution the first one spelled, so report the

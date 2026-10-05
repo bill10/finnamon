@@ -643,7 +643,21 @@ export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon',
     if (!n || !inst) return res.status(400).json({ error: `an account needs a name and a bank of 1 to ${MAX_NAME} characters` });
     if (!BANK_NAME.test(inst)) return res.status(400).json({ error: `a bank name is letters, digits, spaces and .&'- up to ${MAX_NAME} characters` });   // an account whose bank fails this could never use Fetch by AI, and there is no rename
     if (!KINDS.includes(kind)) return res.status(400).json({ error: `type is one of ${KINDS.join(', ')}` });
-    write(res, ['account', 'add', '--institution', inst, '--type', kind, '--', n]);
+    const owner = name(req.body?.owner);   // a member or joint; the CLI refuses any other name, so a typo never becomes a member
+    const ownerArgs = owner ? ['--owner', owner] : [];
+    write(res, ['account', 'add', '--institution', inst, '--type', kind, ...ownerArgs, '--', n]);
+  });
+  // "These two are the same account" (a joint account seen through two logins), and the undo. The CLI does the checking: a different
+  // type or a very different balance comes back as its sentence, and --force is for a terminal.
+  const isId = (v) => typeof v === 'string' && /^[A-Za-z0-9:_.=+\/-]{1,100}$/.test(v);   // RegExp.test(undefined) tests the word "undefined"
+  app.post('/api/account/merge', (req, res) => {
+    const { account, same_as: same } = req.body ?? {};
+    if (!isId(account) || !isId(same)) return res.status(400).json({ error: 'pick two accounts' });
+    write(res, ['account', 'merge', '--', account, same]);
+  });
+  app.post('/api/account/unmerge', (req, res) => {
+    const { account } = req.body ?? {};
+    isId(account) ? write(res, ['account', 'unmerge', '--', account]) : res.status(400).json({ error: 'pick an account' });
   });
   // One manual account and its transactions (its bank too, if it was the last); the CLI refuses a Plaid one. --yes: the page asked.
   // The page sends the account_id (manual:<bank>:<name>, up to 88 characters), so what it confirmed is what goes; a name works too.
@@ -710,7 +724,7 @@ export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon',
     try {
       if (owner !== null) {
         const members = await call('owner', 'list');
-        if (!Array.isArray(members) || !members.some(m => m.owner === owner)) return res.status(400).json({ error: 'that is not a household member' });
+        if (owner !== 'joint' && (!Array.isArray(members) || !members.some(m => m.owner === owner))) return res.status(400).json({ error: 'that is not a household member' });
         args.push('--owner', owner);
       }
       const out = await call(...args); linkToken = out.link_token; linkOwner = owner; res.json(out);

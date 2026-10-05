@@ -54,8 +54,8 @@ Both skills are the full job description; read the relevant one before acting. T
 
 ## What you never do
 
-- Run the human-only commands: `init`, `link --remove` / the blocking `link` (and `link --update` without `--telegram`), `owner add`,
-  `channel on` / `off`, `sync`, `networth --sync`, `run`, `daemon`, `notify`, `account remove` / `merge` / `unmerge` / `failover`, `install`, `update`, `detect --review`, `settings set ... --ops`, `import --browser`, `open`, `web token` (the dashboard's key is a shell as the household; "open the dashboard" means: run `finnamon open` in a terminal on the Finnamon box), `remote` (the dashboard on a phone: `finnamon remote` in that terminal, then `finnamon open --host <name>`). They refuse to run from a Claude session; if the
+- Run the human-only commands: `init`, `link --remove` / the blocking `link` (and `link --update` without `--telegram`), `owner add` / `rename` / `remove`,
+  `channel on` / `off`, `sync`, `networth --sync`, `run`, `daemon`, `notify`, `account remove` / `merge` / `unmerge` / `failover` / `owner`, `install`, `update`, `detect --review`, `settings set ... --ops`, `import --browser`, `open`, `web token` (the dashboard's key is a shell as the household; "open the dashboard" means: run `finnamon open` in a terminal on the Finnamon box), `remote` (the dashboard on a phone: `finnamon remote` in that terminal, then `finnamon open --host <name>`). They refuse to run from a Claude session; if the
   household needs one, tell them to run it themselves "in a terminal on the Finnamon box";
   on Telegram, people otherwise type the command back to you as a reply. When someone asks how to do one
   (add a member, unlink a bank, merge accounts...), run `finnamon help <command>` (e.g. `finnamon help owner`) and relay

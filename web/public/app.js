@@ -422,8 +422,9 @@ $('row-prop').addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.k
 const ON_BOX = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);   // the browser window opens where the server runs
 const KINDS = { checking: 'Checking', savings: 'Savings', credit: 'Credit card', loan: 'Loan', investment: 'Investment' };   // labels for finnamon.imports.KINDS; a parity test holds web/server.js KINDS to it
 const MAX_NAME = 80;   // web/server.js MAX_NAME, which /api/account enforces
+const ownerOptions = (members) => members.map(m => `<option value="${esc(m.owner)}">Owner: ${esc(m.display_name || m.owner)}</option>`).join('') + `<option value="joint">Owner: Joint</option>`;   // the select has no label of its own beside the other fields
 function renderImport(s) {
-  const p = $('import-pop'), manual = (s.accounts || []).filter(a => a.source === 'manual' && !a.mirror_of);
+  const p = $('import-pop'), manual = (s.accounts || []).filter(a => a.source === 'manual' && !a.mirror_of), members = s.owners || [];
   const last = (a) => a.last_synced_at ? ` (last import ${when(a.last_synced_at)})` : ' (nothing imported yet)';
   p.innerHTML = `<h3>Import a CSV<span class="hint">a bank's transaction export, for an account Plaid can't reach</span></h3>` + (manual.length
     ? `<div class="erow add imp"><select id="i-acct" aria-label="Account">${manual.map(a => `<option value="${esc(a.name)}" data-bank="${esc(a.institution)}">${esc(a.institution)} · ${esc(a.name)}${esc(last(a))}</option>`).join('')}</select>` +
@@ -437,7 +438,8 @@ function renderImport(s) {
     `<h3 class="sep">Add a manual account<span class="hint">one per account; add as many as the bank has (HSBC Checking, HSBC Savings, HSBC Credit Card)</span></h3>` +
     `<div class="erow add acct"><input id="a-name" placeholder="Account name, e.g. HSBC Checking" aria-label="Account name" maxlength="${MAX_NAME}">` +
     `<input id="a-inst" placeholder="Bank, e.g. HSBC" aria-label="Bank" maxlength="${MAX_NAME}">` +
-    `<select id="a-type" aria-label="Type">${Object.entries(KINDS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>` +
+    `<select id="a-type" aria-label="Type">${Object.entries(KINDS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>` +
+    (members.length > 1 ? `<select id="a-owner" aria-label="Whose account">${ownerOptions(members)}</select>` : '') + `</div>` +
     `<div class="eactions"><span class="err" id="a-err"></span><button class="quiet" id="i-cancel">${manual.length ? 'Cancel' : 'Close'}</button><button class="${manual.length ? 'quiet' : 'primary'}" id="a-add">Add account</button></div>`;   // with no account yet, adding one is the only thing to do here
   $('i-cancel').addEventListener('click', () => toggleImport(false));
   $('a-add').addEventListener('click', async (e) => {
@@ -445,7 +447,7 @@ function renderImport(s) {
     const n = $('a-name').value.trim(), inst = $('a-inst').value.trim() || n.split(/\s+/)[0];   // \s+, as the CLI's own split() fallback does
     if (!n) { $('a-err').textContent = 'The account needs a name.'; return; }
     $('a-err').textContent = ''; btn.disabled = true;   // a second click while the first is in flight comes back as "already exists", which reads like a failure
-    const r = await api('POST', '/api/account', { name: n, institution: inst, type: $('a-type').value });
+    const r = await api('POST', '/api/account', { name: n, institution: inst, type: $('a-type').value, ...($('a-owner') ? { owner: $('a-owner').value } : {}) });
     if (!r.ok) { $('a-err').textContent = r.error; btn.disabled = false; return; }
     const added = r.name || n;   // account add collapses inner whitespace, and keeps the bank an existing item already had
     toast(`Added ${added} at ${r.institution || inst}`);
@@ -580,11 +582,49 @@ function groupAccounts(accts, view, members) {   // [{ key, name, rows }] for th
   const rank = (g) => { const i = KIND_ORDER.indexOf(g.name); return i < 0 ? KIND_ORDER.length : i; };
   return [...by.values()].sort((x, y) => (x.debt - y.debt) || (rank(x) - rank(y)) || x.name.localeCompare(y.name));
 }
+const isManual = (it) => String(it.item_id).startsWith('manual:');
+const bankKey = (inst, manual) => manual ? `${inst}\u0000manual` : inst;
 const STALE_MS = 24 * 3600e3;   // web/server.js health(): a bank not synced in a day is overdue
+// "These two are the same account": a joint account linked through both people's logins is counted twice until one is marked
+// the copy. Linking does it by itself when it can tell; this is for the pairs it could not, and the undo.
+const acctLabel = (a) => `${a.institution ? `${a.institution} · ` : ''}${acctName(a)}${a.mask ? ` ···${a.mask}` : ''}`;
+function mergePanel(s) {
+  const all = s.accounts || [], live = all.filter(a => !a.mirror_of), copies = all.filter(a => a.mirror_of);
+  if (live.length < 2 && !copies.length) return '';
+  const opts = `<option value="">Choose an account</option>` + live.map(a => `<option value="${esc(a.account_id)}">${esc(acctLabel(a))}</option>`).join('');
+  const byId = new Map(all.map(a => [a.account_id, a]));
+  return `<details class="mergebox"><summary>Same account seen twice?<span class="hint">${copies.length ? `${plural(copies.length, 'pair')} marked as one` : 'a bank linked from two logins: mark them as one'}</span></summary>` +
+    (live.length > 1 ? `<p class="muted">A joint account linked from both logins shows up twice. Pick the copy: it is hidden, and both are counted once, as joint.</p>` +
+      `<div class="erow add merge"><select id="m-keep" aria-label="The account to keep">${opts}</select><select id="m-copy" aria-label="Its copy, to hide">${opts}</select></div>` +
+      `<div class="eactions"><span class="err" id="m-err" role="alert"></span><button class="quiet" id="m-go" type="button">Mark as joint</button></div>` : '') +
+    copies.map(c => `<div class="erow merged"><span>${esc(acctLabel(c))} is counted once, with ${esc(byId.has(c.mirror_of) ? acctLabel(byId.get(c.mirror_of)) : c.mirror_of)}</span><button class="quiet" type="button" data-unmerge="${esc(c.account_id)}">Undo</button></div>`).join('') + `</details>`;
+}
+function wireMerge() {
+  const pop = $('banks-pop'), done = async (r, say) => {
+    if (!r.ok) { const e = $('m-err'); if (e) e.textContent = r.error; else toast(r.error, { kind: 'warn' }); return; }
+    toast(say);
+    try { await loadSummary(); } catch {}
+    renderBanks(summary); pop.querySelector('.mergebox')?.setAttribute('open', '');
+  };
+  const keep = $('m-keep'), copy = $('m-copy');
+  if (keep) {   // the likeliest pair first: the same last four digits on the same kind of account
+    const live = (summary.accounts || []).filter(a => !a.mirror_of), twin = live.find((a, i) => a.mask && live.findIndex(b => b.mask === a.mask && b.type === a.type) !== i);
+    const first = twin && live.find(a => a.mask === twin.mask && a.type === twin.type);
+    if (twin) { keep.value = first.account_id; copy.value = twin.account_id; }
+  }
+  $('m-go')?.addEventListener('click', async () => {
+    if (!keep.value || !copy.value || keep.value === copy.value) { $('m-err').textContent = 'Pick two different accounts.'; return; }
+    $('m-err').textContent = ''; $('m-go').disabled = true;
+    const r = await api('POST', '/api/account/merge', { account: copy.value, same_as: keep.value });
+    $('m-go').disabled = false;
+    done(r, 'Marked as one joint account');
+  });
+  pop.querySelectorAll('[data-unmerge]').forEach(b => b.addEventListener('click', async () => { b.disabled = true; done(await api('POST', '/api/account/unmerge', { account: b.dataset.unmerge }), 'Counted separately again'); }));
+}
 function renderBanks(s) {
   const members = s.owners || [], view = loadView(members);
   const accts = (s.accounts || []).filter(a => !a.mirror_of), banks = new Map(), warn = new Map();   // warn: bank -> what is wrong with its sync, for rows outside the Bank view
-  for (const it of s.status.items || []) banks.set(it.institution, [...(banks.get(it.institution) || []), it]);   // two logins at one bank share a heading
+  for (const it of s.status.items || []) { const k = bankKey(it.institution, isManual(it)); banks.set(k, [...(banks.get(k) || []), it]); }   // two logins at one bank share a heading; a Plaid link and an account added by hand do not: one sync time cannot speak for both
   const everyone = ownerPlan(accts, members);
   const row = (a, plan) => {
     const kind = kindOf(a), debt = DEBT.has(a.type), b = a.balance == null ? NaN : Math.round(Number(a.balance)) || 0;   // whole dollars, as money() shows them, so $0.40 owed is not a red -$0
@@ -603,30 +643,32 @@ function renderBanks(s) {
       `<span class="bn">${esc(name)}${plan.head ? ` <span class="own">${esc(plan.head)}</span>` : ''}</span><span class="cnt">${esc(plural(n, 'account'))}</span><span class="bal num${tot < 0 ? ' owed' : ''}">${esc(money(tot))}</span>${note ? `<span class="note">${note}</span>` : ''}</summary>${list(rows, plan)}</details>`;
   };
   let html = '';
-  for (const [inst, its] of banks) {
+  for (const its of banks.values()) {
+    const inst = its[0].institution, byHand = isManual(its[0]), split = byHand && banks.has(bankKey(inst, false));   // split: the same bank also has a Plaid link, so the two headings must differ
     const bad = its.find(i => i.status && i.status !== 'good');   // as health() reads it, so this heading and the pill agree
     const linked = its.filter(i => !String(i.item_id).startsWith('manual:')), times = (xs) => xs.map(i => i.last_synced_at).filter(Boolean).sort();
     const synced = times(its).pop(), oldest = times(linked)[0];   // a bank's staleness is its stalest login's: a fresh one must not hide it
     const stale = oldest && Date.now() - new Date(String(oldest).replace(' ', 'T')).getTime() > STALE_MS;
     const text = bad ? (/LOGIN/.test(bad.status) ? 'needs a new login' : `not syncing (${bad.status})`) : stale ? `synced ${when(oldest)}` : '';
-    if (text) warn.set(inst, text);
+    if (text && !byHand) warn.set(inst, text);
     const note = bad ? `<span class="tag warn">${icon('warning-circle')} ${esc(text)}</span>${RELOGIN.test(bad.status) && !String(bad.item_id).startsWith('manual:') ? reconnectBtn(bad.item_id) : ''}`
       : !linked.length ? `<span class="hint">added by hand${synced ? ` · imported ${esc(when(synced))}` : ''}</span>`
       : times(linked).length < linked.length ? `<span class="hint">not synced yet</span>`   // just linked: the first sync is on its way
       : stale ? `<span class="tag warn" title="Finnamon syncs every bank at least daily">${icon('warning-circle')} ${esc(text)}</span>`
       : `<span class="hint">synced ${esc(when(synced))}</span>`;
-    if (view === 'bank') html += sec(its[0].institution_id || inst, inst, note, accts.filter(a => a.institution === inst));
+    if (view === 'bank') html += sec(byHand ? (split ? `${inst} (by hand)` : inst) : its[0].institution_id || inst, split ? `${inst} (by hand)` : inst, note, accts.filter(a => a.institution === inst && (a.source === 'manual') === byHand));
   }
   if (view !== 'bank') for (const g of groupAccounts(accts, view, members)) html += sec(g.key || 'none', g.name, '', g.rows);
   else {
-    const loose = accts.filter(a => !banks.has(a.institution));   // an account whose bank has no item row: still counted, so still listed
+    const loose = accts.filter(a => !banks.has(bankKey(a.institution, a.source === 'manual')));   // an account whose bank has no item row: still counted, so still listed
     if (loose.length) html += sec('none', 'No bank connection', '', loose);
   }
   const label = { bank: 'Bank', type: 'Type', owner: 'Owner' };
   const seg = `<div class="ctl"><div class="seg" role="radiogroup" aria-label="Group by"><span class="segl" aria-hidden="true">Group by</span>` +
     viewsFor(members).map(v => `<label><input type="radio" name="gb" value="${v}"${v === view ? ' checked' : ''}><span>${label[v]}</span></label>`).join('') + `</div>` +
     (html.includes('<details') ? `<button class="quiet" id="banks-all" type="button"></button>` : '') + `</div>`;
-  $('banks-pop').innerHTML = `<div class="phead"><h2>Accounts</h2><button class="x" id="banks-x" type="button" aria-label="Close">${icon('x')}</button></div>` + seg + html;
+  $('banks-pop').innerHTML = `<div class="phead"><h2>Accounts</h2><button class="x" id="banks-x" type="button" aria-label="Close">${icon('x')}</button></div>` + seg + html + mergePanel(s);
+  wireMerge();
   $('banks-pop').querySelectorAll('input[name=gb]').forEach(r => r.addEventListener('change', () => { saveView(r.value); renderBanks(s); $('banks-pop').querySelector('input[name=gb]:checked').focus(); }));
   const all = () => [...$('banks-pop').querySelectorAll('details.bank')], sync = () => { const b = $('banks-all'); if (b) b.textContent = all().every(d => d.open) ? 'Collapse all' : 'Expand all'; };
   const store = () => { const mine = new Set(all().map(d => d.dataset.key)); saveOpen(new Set([...loadOpen()].filter(x => !mine.has(x)).concat(all().filter(d => d.open).map(d => d.dataset.key)))); };   // other views' groups stay as they were
@@ -845,13 +887,14 @@ function askOwner() {
   const p = $('owner-pop');
   p.innerHTML = `<h3>Whose bank is this?</h3><form method="dialog">` + members.map((m, i) =>
     `<label class="owner-opt"><input type="radio" name="owner" value="${esc(m.owner)}"${i ? '' : ' checked'}> ${esc(m.display_name || m.owner)}</label>`).join('') +
+    `<label class="owner-opt"><input type="radio" name="owner" value="joint"> Joint <span class="hint">both people's money; a joint account linked twice is counted once</span></label>` +
     `<div class="row"><button class="primary" value="ok">Continue</button> <button value="" formnovalidate>Cancel</button></div></form>`;
   return new Promise(resolve => {
     p.addEventListener('close', () => resolve(p.returnValue === 'ok' ? p.querySelector('input:checked').value : undefined), { once: true });
     p.returnValue = ''; p.showModal();
   });
 }
-const ownerName = (o) => { const m = (summary?.owners || []).find?.(x => x.owner === o); return m ? (m.display_name || m.owner) : o; };
+const ownerName = (o) => { const m = (summary?.owners || []).find?.(x => x.owner === o); return o === 'joint' ? 'Joint' : m ? (m.display_name || m.owner) : o; };
 
 async function linkBank({ receivedRedirectUri } = {}) {
   let token = sessionStorage.getItem('plaid_link_token');
@@ -875,7 +918,8 @@ async function linkBank({ receivedRedirectUri } = {}) {
       const out = await api('POST', '/api/link/finish', { public_token });
       const n = out.sync?.accounts, tx = out.sync?.transactions;
       if (out.ok) toast(`Linked ${out.institution}${out.owner ? ` for ${ownerName(out.owner)}` : ''}: ${plural(n, 'account')}, ${plural(tx, 'transaction')}` +
-        (out.mirror_candidates?.length ? '. Some look like accounts already linked; see the chat.' : ''), { sticky: !!out.mirror_candidates?.length });
+        (out.marked_joint?.length ? `. ${plural(out.marked_joint.length, 'account')} already linked through another login, counted once as joint (Accounts > Same account seen twice? undoes it)` : '') +
+        (out.mirror_candidates?.length ? '. Some look like accounts already linked; see the chat.' : ''), { sticky: !!(out.marked_joint?.length || out.mirror_candidates?.length) });
       else toast(out.error, { kind: 'warn' });
       loadSummary();   // whatever the reply, the bank may have landed
     },
