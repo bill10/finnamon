@@ -210,7 +210,9 @@ details.bank .note button.link { font-size: 13px; margin-left: 4px; }   /* Recon
 .erow .name { display: flex; align-items: center; gap: 10px; font-size: 14px; min-width: 0; }
 .erow .name .ic { width: 28px; height: 28px; border-radius: 8px; background: var(--cinnamon-100); color: var(--cinnamon-dark); display: grid; place-items: center; flex: none; }
 .erow .name .ic svg.ic { width: 15px; height: 15px; }
-.erow .name .pace { font-size: 13px; color: var(--muted); }
+.erow .name .pace { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.erow .name .lbl { min-width: 0; }
+.erow .covers, .cat .covers { display: block; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .erow .del { border: none; background: transparent; color: var(--muted); width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; }
 .erow .del:hover { background: var(--error-50); color: var(--error); }
 .erow .del svg.ic { width: 16px; height: 16px; }
@@ -244,6 +246,8 @@ details.bank .note button.link { font-size: 13px; margin-left: 4px; }   /* Recon
 .cat .ic { grid-row: 1 / 3; width: 30px; height: 30px; border-radius: 8px; background: var(--cinnamon-100); color: var(--cinnamon-dark); display: grid; place-items: center; }
 .cat .ic svg.ic { width: 17px; height: 17px; }
 .cat .name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cat .covers { grid-column: 2 / 4; margin-top: 4px; }
+.cats .cat { align-content: start; }   /* a card with a covers line is taller; its row neighbour stays top-aligned */
 .cat .amt { color: var(--muted); font-size: 13px; text-align: right; white-space: nowrap; }
 .cat .bar { grid-column: 2 / 4; height: 6px; margin: 4px 0 0; }
 

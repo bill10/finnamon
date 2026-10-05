@@ -1548,7 +1548,7 @@ def cmd_budget(a) -> None:
             out(budgets.suggest(conn, a.months, a.as_of))
         elif a.action == "set":
             _triage_read_only()
-            out(budgets.budget_set(conn, a.name, a.amount, a.category))
+            out(budgets.budget_set(conn, a.name, a.amount, a.category, a.merchants, a.fixed))
         elif a.action == "remove":
             _triage_read_only()
             out({"removed": budgets.budget_remove(conn, a.name)})
@@ -1880,7 +1880,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--dry-run", action="store_true", help="pull and migrate as usual, then name the services instead of restarting them"); s.add_argument("--force", action="store_true", help="register the Telegram channel plugin even outside ~/.finnamon/assistant"); s.set_defaults(fn=cmd_update)
 
     s = sp.add_parser("budget"); s.add_argument("action", choices=["list", "suggest", "set", "remove"], nargs="?", default="list")
-    s.add_argument("name", nargs="?"); s.add_argument("amount", nargs="?", type=float); s.add_argument("--category"); s.add_argument("--months", type=int, default=6); s.add_argument("--as-of"); s.set_defaults(fn=cmd_budget)
+    s.add_argument("name", nargs="?"); s.add_argument("amount", nargs="?", type=float)
+    s.add_argument("--category", action="append"); s.add_argument("--merchant", action="append", dest="merchants")   # each repeatable; given, they replace the budget's
+    s.add_argument("--fixed", action=argparse.BooleanOptionalAction); s.add_argument("--months", type=int, default=6); s.add_argument("--as-of"); s.set_defaults(fn=cmd_budget)
     s = sp.add_parser("threshold"); s.add_argument("account"); s.add_argument("amount", type=float); s.set_defaults(fn=cmd_threshold)
     s = sp.add_parser("settings"); s.add_argument("action", choices=["list", "get", "set"], nargs="?", default="list"); s.add_argument("key", nargs="?"); s.add_argument("value", nargs="?"); s.add_argument("--account"); s.add_argument("--ops", action="store_true", help="operational keys (daemon interval, timeouts); not for Claude"); s.set_defaults(fn=cmd_settings)
     s = sp.add_parser("category", help="<merchant> <category> (a rule: every past and future charge) | --tx <transaction_id> <category> (one charge, a one-time edit; --clear undoes it) | list | resolve <text>")

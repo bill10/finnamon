@@ -17,6 +17,18 @@ alert wrote. Each covers every alert on that alert's transaction: when two detec
 "Costco is groceries" is a rule, `finnamon category costco groceries`: every Costco charge, past and future. "That one
 charge was groceries" is a one-time edit of that charge only, `finnamon category --tx <transaction_id> groceries` (`--clear`
 undoes it; it wins over the rule). `finnamon category costco --clear` deletes the rule (charges fall back to the bank's category; one-time edits stay) and `finnamon category --rules` lists the rules and one-time edits; the assistant asks which you mean when it can't tell.
+A budget covers one or more categories and merchants: `finnamon budget set dining 400 --category restaurants
+--category "fast food" --category coffee`, `finnamon budget set "water and trash" 90 --merchant "Seattle Public Utilities"
+--merchant Recology` (each flag repeats; a merchant is any name its charges show, as for `finnamon category`, and a name with no charge is refused with suggestions; either one given replaces all of the budget's categories and merchants; a charge
+several of them match counts once; two budgets may share a category). The mortgage counts (the checking-side payment, once,
+even when the bank filed it as a transfer) toward a budget on the mortgage category (`LOAN_PAYMENTS_MORTGAGE_PAYMENT`, or all
+of `LOAN_PAYMENTS`) or on its merchant, and never toward any other category; transfers and card payments never count.
+Pace counts the mortgage, and a charge of a monthly or yearly bill or subscription Plaid sees as recurring (the same
+merchant, within 25% of its amount), once at its amount and projects only the rest; `--fixed` (`--no-fixed` undoes it)
+marks a budget that is one bill a month, so it is compared to its limit and never projected. A limit alone (a dashboard
+limit edit too) keeps the categories, merchants and `--fixed`; a removed budget set again keeps its categories and
+merchants but comes back not fixed. `finnamon budget` lists each with its `categories`, `merchants`, `fixed`, `spent`,
+`recurring` (the part of `spent` that is not projected) and `pace`.
 It can start adding a bank ("add my Chase account" → `finnamon link --start` gives you the Plaid link; you
 log in, the daemon finishes), and send a broken bank's re-login link to the chat (reply "fix Chase" to a re-login or
 expiring-connection alert → `finnamon link --update <item_id> --telegram`; when two logins share a bank the alert says

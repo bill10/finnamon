@@ -1,7 +1,7 @@
 """Charts (needs matplotlib) and holdings / net worth with Plaid faked."""
 import pytest
 
-from finnamon import store, charts, config, investments, plaid_api
+from finnamon import budgets, store, charts, config, investments, plaid_api
 from finnamon.plaid_api import PlaidError
 from tests.conftest import AS_OF, seed, txn, today
 
@@ -47,7 +47,7 @@ def test_merchant_history_finds_an_aliased_payee_by_all_three_of_its_names(conn)
 
 def test_every_chart_renders_and_bad_input_is_refused(conn, home):
     seed(conn)
-    conn.execute("INSERT INTO budgets (name, category, monthly_limit) VALUES ('groceries','FOOD_AND_DRINK_GROCERIES',600)")
+    budgets.budget_set(conn, "groceries", 600, "FOOD_AND_DRINK_GROCERIES")
     for i in range(6):
         txn(conn, f"t{i}", "chk", f"2026-0{4 + i}-10", 100 + i, "WF", "Whole Foods", "mch_wf")
         txn(conn, f"p{i}", "chk", f"2026-0{4 + i}-02", -3000, "PAYROLL", "Acme", "mch_acme", "INCOME", "INCOME_WAGES")

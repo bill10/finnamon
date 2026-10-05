@@ -36,54 +36,114 @@ def _positive(amount, what: str) -> float:
     return v
 
 
-def budget_set(conn: sqlite3.Connection, name: str, amount: float, category: str | None = None) -> dict:
+def budget_set(conn: sqlite3.Connection, name: str, amount: float, categories: list[str] | str | None = None,
+               merchants: list[str] | None = None, fixed: bool | None = None) -> dict:
+    """Categories and merchants given replace the budget's selectors; none given keeps an existing budget's (the
+    dashboard's limit edit, or re-adding a removed one) and a new one takes its name as the category. fixed None keeps
+    what it was, except that a removed budget comes back not fixed. A merchant is any name the household sees for it
+    (resolve_merchant: all its canonicals; a name with no charge is refused with suggestions); the reply carries how many
+    past spending charges each one matches."""
     name = name.strip().lower()
     amount = _positive(amount, "monthly limit")
-    code = resolve_category(category or name)
-    conn.execute(
-        "INSERT INTO budgets (name, category, monthly_limit, active) VALUES (?,?,?,1) "
-        "ON CONFLICT(name) DO UPDATE SET category=excluded.category, monthly_limit=excluded.monthly_limit, active=1",
-        (name, code, float(amount)),
-    )
-    return {"name": name, "category": code, "monthly_limit": float(amount)}
+    categories = [categories] if isinstance(categories, str) else list(categories or [])
+    merchants = list({m.strip().lower(): m.strip() for m in merchants or []}.values())   # "Recology" and "recology" are one
+    with store.tx(conn):   # one write, read and all: a crash or a concurrent edit mid-way would leave a budget counting nothing
+        old = conn.execute("SELECT id FROM budgets WHERE name=?", (name,)).fetchone()
+        keep = not (categories or merchants) and old and conn.execute("SELECT 1 FROM budget_selectors WHERE budget_id=?", (old[0],)).fetchone()
+        codes = [] if keep else list(dict.fromkeys(resolve_category(c) for c in categories or ([] if merchants else [name])))
+        sel = [("category", c, None) for c in codes] + [("merchant", c, m) for m in merchants for c in resolve_merchant(conn, m)["canonicals"]]
+        conn.execute(
+            "INSERT INTO budgets (name, category, monthly_limit, active, fixed) VALUES (?,?,?,1,?) "
+            "ON CONFLICT(name) DO UPDATE SET category=CASE WHEN ? THEN category ELSE excluded.category END, monthly_limit=excluded.monthly_limit, "
+            "fixed=CASE WHEN active=1 THEN COALESCE(?, fixed) ELSE excluded.fixed END, active=1",
+            (name, codes[0] if codes else "", amount, int(bool(fixed)), bool(keep), None if fixed is None else int(fixed)))
+        bid = conn.execute("SELECT id FROM budgets WHERE name=?", (name,)).fetchone()[0]
+        if not keep:
+            conn.execute("DELETE FROM budget_selectors WHERE budget_id=?", (bid,))
+            conn.executemany("INSERT OR IGNORE INTO budget_selectors (budget_id, kind, value, label) VALUES (?,?,?,?)", [(bid, *s) for s in sel])
+    out = next(b for b in _budgets(conn, "WHERE id=?", (bid,)))
+    if merchants:
+        one = MERCHANT.replace(":v", "s.value").replace(":l", "s.label")
+        out["matches"] = {m: conn.execute(f"SELECT count(*) FROM tx_now t WHERE pending=0 AND {SPEND} AND EXISTS (SELECT 1 FROM budget_selectors s "
+                                          f"WHERE s.budget_id=:bid AND s.kind='merchant' AND s.label=:l AND {one})", {"bid": bid, "l": m}).fetchone()[0]
+                          for m in merchants}
+    return out
 
 
 def budget_remove(conn: sqlite3.Connection, name: str) -> bool:
     return conn.execute("UPDATE budgets SET active=0 WHERE name=?", (name.strip().lower(),)).rowcount > 0
 
 
+def _budgets(conn: sqlite3.Connection, where: str, args: tuple = ()) -> list[dict]:
+    out = []
+    for b in conn.execute(f"SELECT id, name, category, monthly_limit, fixed FROM budgets {where} ORDER BY name", args).fetchall():
+        sel = conn.execute("SELECT kind, value, label FROM budget_selectors WHERE budget_id=? ORDER BY rowid", (b["id"],)).fetchall()
+        cats = [s["value"] for s in sel if s["kind"] == "category"]
+        merchants = list(dict.fromkeys(s["label"] or s["value"] for s in sel if s["kind"] == "merchant"))   # one name, maybe several canonicals
+        out.append({"id": b["id"], "name": b["name"], "category": cats[0] if cats else None,   # the first, as before selectors
+                    "categories": cats, "merchants": merchants, "covers": [taxonomy.label(c) for c in cats] + merchants,   # covers: the dashboard's line
+                    "fixed": bool(b["fixed"]), "monthly_limit": b["monthly_limit"]})
+    return out
+
+
 def budget_list(conn: sqlite3.Connection, as_of: str | None = None) -> list[dict]:
     as_of = as_of or store.now_local()
-    rows = conn.execute("SELECT id, name, category, monthly_limit FROM budgets WHERE active=1 ORDER BY name").fetchall()
     out = []
-    for b in rows:
-        mtd = month_to_date(conn, b["category"], as_of)
+    for b in _budgets(conn, "WHERE active=1"):
         day = int(as_of[8:10])
         days = conn.execute("SELECT CAST(strftime('%d', date(?, 'start of month', '+1 month', '-1 day')) AS INTEGER)", (as_of,)).fetchone()[0]
-        out.append({"id": b["id"], "name": b["name"], "category": b["category"], "monthly_limit": b["monthly_limit"],
-                    "spent": round(mtd, 2), "day": day, "pace": round(mtd * days / day, 2) if day else None})
+        mtd, rec = month_to_date(conn, b["id"], as_of)
+        pace = mtd if b["fixed"] else max(mtd, rec + (mtd - rec) * days / day)   # a refund never projects below what is spent
+        out.append({**b, "spent": round(mtd, 2), "recurring": round(rec, 2), "day": day, "pace": round(pace, 2)})
     return out
 
 
 # tx_now (migration 005): transactions with the alias and the category override resolved, mirrors excluded --
 # the prelude's `tx` without the :as_of scoping. Everything here reads categories and merchants through it.
-SPEND = "flow IN ('expense','refund')"   # tx_now's flow (migration 008): not a transfer between the household's own accounts, not a payment onto a linked card, not money in; the mortgage is fixed, not budgeted
+# tx_now's flow (migration 008): not a transfer between the household's own accounts, not a payment onto a linked card,
+# not money in. The mortgage counts, once: its checking-side payment is 'mortgage', the loan account's mirror 'skipped'.
+SPEND = "flow IN ('expense','refund','mortgage')"
+# KEEP IN STEP WITH detectors/rules/budget_pace.sql. A budget counts a transaction any of its selectors matches, once.
+# A payment paired with the mortgage loan is a mortgage whatever Plaid filed it under (often a transfer), and only a mortgage. A merchant is
+# a canonical resolve_merchant found or the name as typed, either one case-insensitively against canonical or `display`: an
+# alias added later (the raw bank name stays a candidate), or a charge Plaid sent without the entity id, still matches.
+MERCHANT = "(lower(:v) IN (lower(t.canonical), lower(t.display), lower(t.name)) OR lower(:l) IN (lower(t.canonical), lower(t.display), lower(t.name)))"
+MATCH = ("EXISTS (SELECT 1 FROM budget_selectors s WHERE s.budget_id = :bid AND ((s.kind = 'category' AND ((t.flow <> 'mortgage' AND s.value IN (t.category, t.category_primary)) "
+         "OR (t.flow = 'mortgage' AND s.value IN ('LOAN_PAYMENTS_MORTGAGE_PAYMENT', 'LOAN_PAYMENTS')))) "
+         "OR (s.kind = 'merchant' AND " + MERCHANT.replace(":v", "s.value").replace(":l", "COALESCE(s.label, s.value)") + ")))")
+# The mortgage (often filed as a transfer, with no stream to match), or a charge of one of Plaid's live recurring
+# streams (a bill, a subscription), or its refund: pace counts it once, never
+# projects it. Monthly and annual streams only: one that recurs within the month (weekly, semi-monthly) or irregularly
+# (Plaid's UNKNOWN, a restaurant) stays projected. Same merchant (a bare description: on the stream's account) and within 25%
+# (the tolerance, four times here and in budget_pace.sql) of the stream's amount, so a one-off at a merchant that also
+# bills monthly stays variable. Not scoped to :as_of: a run takes as_of before its sync stamps a new stream's first_seen_at.
+# ponytail: merchant + amount, not Plaid's transaction_ids per stream (not stored); store them if this misfiles.
+RECURRING = ("(t.flow = 'mortgage' OR EXISTS (SELECT 1 FROM recurring r WHERE r.direction = 'outflow' AND COALESCE(r.is_active, 1) = 1 "
+             "AND COALESCE(r.status, '') NOT IN ('TOMBSTONED', 'EARLY_DETECTION') AND r.frequency IN ('MONTHLY', 'ANNUALLY') "
+             "AND (r.merchant_entity_id = t.merchant_entity_id OR lower(r.merchant_name) = lower(t.merchant_name) OR (r.description = t.name AND r.account_id = t.account_id)) "
+             "AND (abs(abs(t.amount) - r.avg_amount) <= 0.25 * abs(r.avg_amount) OR abs(abs(t.amount) - r.last_amount) <= 0.25 * abs(r.last_amount))))")
 
 
-def month_to_date(conn: sqlite3.Connection, category: str, as_of: str) -> float:
+def month_to_date(conn: sqlite3.Connection, budget_id: int, as_of: str) -> tuple[float, float]:
+    """(spent, the part of it that is recurring charges)."""
     r = conn.execute(
-        "SELECT COALESCE(SUM(amount),0) FROM tx_now "
-        "WHERE pending=0 AND date >= date(?, 'start of month') AND date <= date(?) "
-        f"AND {SPEND} AND (category = ? OR category_primary = ?)",
-        (as_of, as_of, category, category)).fetchone()
-    return float(r[0] or 0)
+        f"SELECT COALESCE(SUM(amount),0), COALESCE(SUM(CASE WHEN {RECURRING} THEN amount END),0) FROM tx_now t "
+        "WHERE pending=0 AND date >= date(:as_of, 'start of month') AND date <= date(:as_of) "
+        f"AND {SPEND} AND {MATCH}",
+        {"as_of": as_of, "bid": budget_id}).fetchone()
+    return float(r[0] or 0), float(r[1] or 0)
+
+
+# A payment paired with the mortgage loan is the mortgage in suggest, as MATCH counts it, whatever Plaid filed it under.
+SUGGEST_CAT = "CASE WHEN flow = 'mortgage' THEN 'LOAN_PAYMENTS_MORTGAGE_PAYMENT' ELSE category END"
+SUGGEST_PRIM = "CASE WHEN flow = 'mortgage' THEN 'LOAN_PAYMENTS' ELSE category_primary END"
 
 
 def suggest(conn: sqlite3.Connection, months: int = 6, as_of: str | None = None) -> dict:
     """The numbers Claude reasons over in Step 3: per-category monthly spend, spread, top merchants, fixed vs variable."""
     as_of = as_of or store.now_local()
     rows = conn.execute(
-        "SELECT strftime('%Y-%m', date) ym, category cat, category_primary prim, round(sum(amount),2) spent "
+        f"SELECT strftime('%Y-%m', date) ym, {SUGGEST_CAT} cat, {SUGGEST_PRIM} prim, round(sum(amount),2) spent "
         "FROM tx_now WHERE pending=0 AND amount>0 AND date >= date(?,'start of month', ?) AND date < date(?,'start of month') "
         f"AND {SPEND} GROUP BY ym, cat ORDER BY cat, ym", (as_of, f"-{months} months", as_of)).fetchall()
     by_cat: dict[str, dict] = {}
@@ -97,7 +157,7 @@ def suggest(conn: sqlite3.Connection, months: int = 6, as_of: str | None = None)
         med = vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2
         top = conn.execute(   # the same relation and the same category as the totals above, or a category's total would list merchants that do not add up to it
             "SELECT display m, round(sum(amount)) s FROM tx_now "
-            f"WHERE pending=0 AND amount>0 AND {SPEND} AND category=? AND date >= date(?,'start of month', ?) AND date < date(?,'start of month') GROUP BY m ORDER BY s DESC LIMIT 3",
+            f"WHERE pending=0 AND amount>0 AND {SPEND} AND {SUGGEST_CAT} = ? AND date >= date(?,'start of month', ?) AND date < date(?,'start of month') GROUP BY m ORDER BY s DESC LIMIT 3",
             (c["category"], as_of, f"-{months} months", as_of)).fetchall()
         out.append({**c, "months_seen": n, "min": vals[0], "max": vals[-1], "median": round(med, 2),
                     "variance_ratio": round((vals[-1] - vals[0]) / med, 2) if med else None,

@@ -40,7 +40,7 @@ def test_mcp_server_tools(home, conn):
     pytest.importorskip("mcp")
     from finnamon import mcp_server
     seed(conn)
-    conn.execute("INSERT INTO budgets (name, category, monthly_limit) VALUES ('groceries','FOOD_AND_DRINK_GROCERIES',600)")
+    budgets.budget_set(conn, "groceries", 600, "FOOD_AND_DRINK_GROCERIES")
     conn.execute("INSERT INTO balances VALUES ('chk', ?, 1000, 900)", (store.now_local(),))   # MCP tools use the wall clock
     txn(conn, "t1", "chk", today(), 80, "WF", "Whole Foods", "mch_wf")
     conn.execute("INSERT INTO alerts (tier, kind, key, payload_json, as_of, verdict, confidence, reason) VALUES ('anomaly','anomaly:first_merchant','k','{\"merchant\":\"x\"}',?,'suppress','low','normal')", (AS_OF,))
