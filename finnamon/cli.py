@@ -1621,12 +1621,17 @@ def cmd_alerts(a) -> None:
         return
     where = f" AND (sent_at IS NOT NULL OR resolution IS NOT NULL OR {notify.SENDABLE})" if a.sent else ""   # delivered, queued, or resolved by a person before it went
     where += " AND resolved_at IS NULL" if a.open else " AND resolved_at IS NOT NULL" if a.resolved else ""
-    rows = conn.execute(f"SELECT * FROM alerts WHERE created_at >= datetime('now','localtime', ?){where} ORDER BY {'resolved_at DESC, ' if a.resolved else ''}id DESC LIMIT ?",
-                        (f"-{a.since} days", a.limit)).fetchall()
-    out([{"id": r["id"], "kind": r["kind"], "tier": r["tier"], "created_at": r["created_at"], "sent_at": r["sent_at"], "telegram_message_id": r["telegram_message_id"],
-          "verdict": r["verdict"], "confidence": r["confidence"], "reason": r["reason"], "resolved_at": r["resolved_at"],
-          "resolution": r["resolution"], "suppression_id": r["suppression_id"],
-          "text": notify.render(r), "payload": json.loads(r["payload_json"])} for r in rows])
+    rows = conn.execute(f"SELECT *, {store.ALERT_GROUP} AS grp FROM alerts WHERE created_at >= datetime('now','localtime', ?){where} "
+                        f"ORDER BY {'resolved_at DESC, ' if a.resolved else ''}id DESC LIMIT ?", (f"-{a.since} days", a.limit)).fetchall()
+    families: dict[str, list] = {}   # one transaction is one alert here too; the page's Dismiss on it resolves the rest
+    for r in rows:
+        families.setdefault(r["grp"], []).append(r)
+    shown = [(notify.best(fam), fam) for fam in families.values()]
+    out([{"id": r["id"], "kind": r["kind"], "tier": r["tier"], "transaction_id": r["transaction_id"], "created_at": r["created_at"], "sent_at": r["sent_at"],
+          "telegram_message_id": r["telegram_message_id"], "verdict": r["verdict"], "confidence": r["confidence"], "reason": r["reason"],
+          "resolved_at": r["resolved_at"], "resolution": r["resolution"], "suppression_id": r["suppression_id"],
+          "folded": [f["id"] for f in fam if f["id"] != r["id"]],
+          "text": notify.render(r), "payload": json.loads(r["payload_json"])} for r, fam in shown])
 
 
 STDIN_WAIT_S = 2   # a heredoc is ready at once; a forgotten one would block a Claude Code Bash tool forever

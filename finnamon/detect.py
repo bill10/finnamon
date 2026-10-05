@@ -18,6 +18,8 @@ import re
 import sqlite3
 from pathlib import Path
 
+from . import store
+
 log = logging.getLogger("finnamon.detect")
 
 DETECTORS = Path(__file__).parent / "detectors"
@@ -56,7 +58,23 @@ def insert(conn: sqlite3.Connection, sql_file: Path, rows: list, as_of: str) -> 
         )
         if cur.rowcount:
             new_ids.append(cur.lastrowid)
+            join_family(conn, cur.lastrowid)
     return new_ids
+
+
+def join_family(conn: sqlite3.Connection, alert_id: int) -> None:
+    """One transaction, one verdict: a detector that fires on a transaction triage has already judged, or a person has
+    already resolved, takes that verdict and that resolution instead of being judged and shown again on its own."""
+    ids = [i for i in store.alert_group(conn, alert_id) if i != alert_id]
+    if not ids:
+        return
+    q = ",".join("?" * len(ids))
+    v = conn.execute(f"SELECT verdict, confidence, reason FROM alerts WHERE id IN ({q}) AND tier='anomaly' AND verdict IS NOT NULL ORDER BY id LIMIT 1", ids).fetchone()
+    if v:
+        conn.execute("UPDATE alerts SET verdict=?, confidence=?, reason=? WHERE id=? AND tier='anomaly' AND verdict IS NULL", (*v, alert_id))
+    r = conn.execute(f"SELECT resolved_at, resolution, suppression_id FROM alerts WHERE id IN ({q}) AND resolved_at IS NOT NULL ORDER BY id LIMIT 1", ids).fetchone()
+    if r:
+        conn.execute("UPDATE alerts SET resolved_at=?, resolution=?, suppression_id=? WHERE id=?", (*r, alert_id))
 
 
 def run_one(conn: sqlite3.Connection, sql_file: Path, as_of: str) -> list[int]:

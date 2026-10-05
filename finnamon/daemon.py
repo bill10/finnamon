@@ -336,9 +336,9 @@ class Daemon:
     def note_for(self, conn: sqlite3.Connection, msg: dict) -> tuple[str, int | None]:
         """What the message replied to, for its prefix ('' for nothing of ours), and the alert id when it was one alert."""
         if msg.get("reply_to"):
-            rows = conn.execute("SELECT id FROM alerts WHERE telegram_chat_id=? AND telegram_message_id=? ORDER BY id",
+            rows = conn.execute(f"SELECT id, {store.ALERT_GROUP} FROM alerts WHERE telegram_chat_id=? AND telegram_message_id=? ORDER BY id",
                                 (str(msg.get("chat_id")), msg["reply_to"])).fetchall()
-            if len(rows) == 1:
+            if rows and len({r[1] for r in rows}) == 1:   # one transaction's alerts share one message: still one alert
                 return f"replying to alert {rows[0][0]}", rows[0][0]
             if rows:
                 return f"replying to roundup message {msg['reply_to']} (items 1..{len(rows)}; use finnamon normal --roundup-item)", None

@@ -1,4 +1,5 @@
-"""Alerts → Telegram. One message per alert (so a quoted reply maps to exactly one alert).
+"""Alerts → Telegram. One message per transaction: every alert on it (store.ALERT_GROUP) is one line, stamped together,
+so a quoted reply maps to exactly one alert's family.
 Sunday roundup: one numbered message for low-confidence anomalies, with roundup_items rows.
 
     pending alert ──render()──▶ HTML ──send_message──▶ 200: sent_at + telegram_message_id
@@ -136,15 +137,31 @@ def pending(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(f"SELECT * FROM alerts WHERE {SENDABLE} ORDER BY id").fetchall()
 
 
+def best(rows: list) -> sqlite3.Row:
+    """The one to show for a transaction several alerts fired on: a rule's own words first, then the surest verdict,
+    then the fullest reason, then the oldest."""
+    return min(rows, key=lambda a: (a["tier"] != "rule", a["confidence"] != "high", -len(a["reason"] or ""), a["id"]))
+
+
+def _stamp(conn: sqlite3.Connection, ids: list[int], chat_id, mid) -> None:
+    conn.execute(f"UPDATE alerts SET sent_at = datetime('now','localtime'), telegram_chat_id = ?, telegram_message_id = ? WHERE id IN ({','.join('?' * len(ids))})",
+                 (None if chat_id is None else str(chat_id), mid, *ids))
+
+
 def send_pending(conn: sqlite3.Connection, chat_id: int | str | None = None, sleep=time.sleep) -> int:
     chat_id = chat_id or store.get_state(conn, "chat_id")
     if not chat_id:
         log.warning("no chat_id in state; nothing sent")
         return 0
-    sent = 0
-    for i, alert in enumerate(pending(conn)):
-        if i and i % 15 == 0:
+    sent = tries = 0
+    done: set[int] = set()
+    for alert in pending(conn):
+        if alert["id"] in done:   # folded into a sibling's message (or its failed try) this run
+            continue
+        done.update(store.alert_group(conn, alert["id"]))
+        if tries and tries % 15 == 0:
             sleep(60)  # Telegram allows ~20 messages/min per chat
+        tries += 1
         try:
             send_one(conn, alert, chat_id)
         except telegram.TelegramError as e:
@@ -157,16 +174,24 @@ def send_pending(conn: sqlite3.Connection, chat_id: int | str | None = None, sle
 
 
 def send_one(conn: sqlite3.Connection, alert, chat_id: int | str | None = None) -> int | None:
-    """Send one alert now and stamp it. Raises TelegramError; send_pending handles the retry policy around it.
+    """Send one alert now, with every other alert pending on its transaction, and stamp them all. Raises TelegramError;
+    send_pending handles the retry policy around it. A transaction already told folds into that message, unsent.
 
     Something that has to be read soon cannot wait for the next cycle: the sync thread runs every
     sync_interval_hours (6 by default), which would make a three-minute detection a six-hour telling."""
     chat_id = chat_id or store.get_state(conn, "chat_id")
     if not chat_id:
         return None
-    mid = telegram.send_message(chat_id, render(alert))
-    conn.execute("UPDATE alerts SET sent_at = datetime('now','localtime'), telegram_chat_id = ?, telegram_message_id = ? WHERE id = ?",
-                 (str(chat_id), mid, alert["id"]))
+    ids = store.alert_group(conn, alert["id"])
+    q = ",".join("?" * len(ids))
+    family = [alert] + [r for r in conn.execute(f"SELECT * FROM alerts WHERE id IN ({q}) AND sent_at IS NULL AND resolved_at IS NULL "
+                                                "AND (tier = 'rule' OR verdict = 'promote')", ids) if r["id"] != alert["id"]]   # a low one rides along too
+    told = conn.execute(f"SELECT telegram_chat_id, telegram_message_id FROM alerts WHERE id IN ({q}) AND sent_at IS NOT NULL ORDER BY sent_at, id LIMIT 1", ids).fetchone()
+    if told:
+        _stamp(conn, [a["id"] for a in family], told[0], told[1])
+        return told[1]
+    mid = telegram.send_message(chat_id, render(best(family)))
+    _stamp(conn, [a["id"] for a in family], chat_id, mid)
     return mid
 
 
@@ -184,7 +209,18 @@ def send_roundup(conn: sqlite3.Connection, as_of: str, chat_id: int | str | None
         if in_slot:
             store.set_state(conn, "last_roundup_week", week)
         return None
-    rows = conn.execute("SELECT * FROM alerts WHERE sent_at IS NULL AND resolved_at IS NULL AND verdict='promote' AND confidence='low' ORDER BY id").fetchall()
+    rows = conn.execute(f"SELECT *, {store.ALERT_GROUP} AS grp FROM alerts WHERE sent_at IS NULL AND resolved_at IS NULL AND verdict='promote' AND confidence='low' ORDER BY id").fetchall()
+    families: dict[str, list] = {}   # one numbered item per transaction; the rest of its alerts ride on that item's message
+    for r in rows:
+        families.setdefault(r["grp"], []).append(r)
+    for g, fam in list(families.items()):   # a transaction already told (a rule fired on it) is not told again
+        ids = store.alert_group(conn, fam[0]["id"])
+        told = conn.execute(f"SELECT telegram_chat_id, telegram_message_id FROM alerts WHERE id IN ({','.join('?' * len(ids))}) AND sent_at IS NOT NULL "
+                            "ORDER BY sent_at, id LIMIT 1", ids).fetchone()
+        if told:
+            _stamp(conn, [a["id"] for a in fam], told[0], told[1])
+            del families[g]
+    rows = list(families.values())
     if not rows:
         try:
             mid = telegram.send_message(chat_id, quiet_line(conn, as_of))
@@ -195,7 +231,7 @@ def send_roundup(conn: sqlite3.Connection, as_of: str, chat_id: int | str | None
             store.set_state(conn, "last_roundup_week", week)
         return mid
     # One numbered list, chunked under Telegram's limit; each chunk is its own message with its own roundup_items rows.
-    items = [(n, a, f"{n}. {render(a).replace('🔍 ', '')}") for n, a in enumerate(rows, 1)]
+    items = [(n, fam, f"{n}. {render(best(fam)).replace('🔍 ', '')}") for n, fam in enumerate(rows, 1)]
     footer = "\nReply <i>normal 3</i> (etc.) to stop hearing about a pattern."
     chunks: list[list[tuple]] = [[]]
     size = len("📋 <b>Things I noticed this week</b>")
@@ -214,10 +250,9 @@ def send_roundup(conn: sqlite3.Connection, as_of: str, chat_id: int | str | None
             return first_mid
         first_mid = first_mid or mid
         with store.tx(conn):
-            for n, a, _ in chunk:
-                conn.execute("UPDATE alerts SET sent_at = datetime('now','localtime'), telegram_chat_id = ?, telegram_message_id = ? WHERE id = ?",
-                             (str(chat_id), mid, a["id"]))
-                conn.execute("INSERT INTO roundup_items (telegram_chat_id, telegram_message_id, n, alert_id) VALUES (?,?,?,?)", (str(chat_id), mid, n, a["id"]))
+            for n, fam, _ in chunk:
+                _stamp(conn, [a["id"] for a in fam], chat_id, mid)
+                conn.execute("INSERT INTO roundup_items (telegram_chat_id, telegram_message_id, n, alert_id) VALUES (?,?,?,?)", (str(chat_id), mid, n, best(fam)["id"]))
     if first_mid and in_slot:
         store.set_state(conn, "last_roundup_week", week)
     return first_mid
