@@ -281,3 +281,20 @@ def test_the_page_and_notify_agree_on_which_statuses_need_a_login():
     src = (Path(__file__).resolve().parents[1] / "web/public/app.js").read_text()
     rx = re.compile(re.search(r"const RELOGIN = /(.+?)/;", src).group(1))
     assert all(rx.search(s) for s in notify.RELOGIN) and not rx.search("INSTITUTION_DOWN") and not rx.search("good")
+
+
+def test_a_bank_a_cycle_already_fixed_still_gets_its_alert_resolved_and_the_message(env, conn, tg, monkeypatch):
+    # the person logged in while a sync cycle ran: the cycle set the bank good before the tick saw the session end
+    a, c = _alert(conn), _alert(conn, "health:item1:consent:2026-11-01", "consent_expiring")
+    conn.execute("UPDATE items SET status='good', last_error=NULL WHERE item_id='item1'")
+    monkeypatch.setattr(sync, "sync_item", lambda c_, item, token=None: {"item_id": item, "error": None})
+    link.start_update(conn, "item1", now=T0, to_chat=False)
+    monkeypatch.setattr(plaid_api, "link_token_get", _finished(False))            # thin results: no token
+    link.check_updates(conn, now=T0 + 60)
+    got = {r["id"]: (r["resolution"], r["key"]) for r in conn.execute("SELECT id, resolution, key FROM alerts")}
+    assert got[a["id"]][0] == "reconnected" and got[c["id"]] == (None, "health:item1:consent:2026-11-01")
+    assert tg.sent[-1]["text"] == "Chase is reconnected."
+    link.start_update(conn, "item1", now=T0 + link.UPDATE_REUSE_S, to_chat=False)
+    monkeypatch.setattr(plaid_api, "link_token_get", _finished(True))
+    link.check_updates(conn, now=T0 + link.UPDATE_REUSE_S + 60)                   # renewed: the consent alert resolves, its key kept
+    assert tuple(conn.execute("SELECT resolution, key FROM alerts WHERE id=?", (c["id"],)).fetchone()) == ("reconnected", "health:item1:consent:2026-11-01")

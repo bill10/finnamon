@@ -229,8 +229,8 @@ def check_updates(conn: sqlite3.Connection, now: float | None = None) -> list[di
                 if x["link_token"] in gone:
                     continue   # its bank was reconnected by an earlier session this tick
                 row = conn.execute("SELECT institution, status FROM items WHERE item_id=?", (x["item_id"],)).fetchone()
-                if not row or (not proof and row[1] == "good"):   # unlinked meanwhile; or closed on a bank that never broke
-                    gone.add(x["link_token"])
+                if not row or (not proof and row[1] == "good" and not _broken_alert(conn, x["item_id"])):
+                    gone.add(x["link_token"])   # unlinked meanwhile; or closed on a bank that syncs and has nothing open to clear
                     continue
                 r = {"item_id": x["item_id"], "institution": row[0] or x["item_id"], "sync": reconnect(conn, x["item_id"], renewed=proof)}
                 gone.add(x["link_token"])   # only now: a sync that raised (a locked database) is retried next tick
@@ -252,17 +252,27 @@ def check_updates(conn: sqlite3.Connection, now: float | None = None) -> list[di
     return out
 
 
+def _broken_alert(conn: sqlite3.Connection, item_id: str) -> bool:
+    """An open health alert other than the consent warning: a cycle's sync may have set the Item good before the tick saw
+    its session end, and that alert still wants resolving."""
+    prefix, consent = f"health:{item_id}:", f"health:{item_id}:consent:"
+    return bool(conn.execute("SELECT 1 FROM alerts WHERE resolved_at IS NULL AND substr(key, 1, ?) = ? AND substr(key, 1, ?) <> ?",
+                             (len(prefix), prefix, len(consent), consent)).fetchone())
+
+
 def reconnect(conn: sqlite3.Connection, item_id: str, renewed: bool = True) -> dict:
-    """Sync one Item after a re-login; when that works, it is good again and its open health alerts are resolved, each
-    keyed apart so the detector can raise a new one if the bank breaks again today. Not renewed (no proof the login
+    """Sync one Item after a re-login; when that works, it is good again and its open health alerts are resolved. A
+    date-keyed sync_health alert is keyed apart, so the detector can raise a new one if the bank breaks again today; a
+    consent alert keeps its key (one per expiry date: a real renewal moves the date). Not renewed (no proof the login
     happened): the consent alert stays open, since a bank whose connection is only expiring syncs either way."""
     result = sync.sync_item(conn, item_id)
     if not result["error"]:
         conn.execute("UPDATE items SET status='good', last_error=NULL WHERE item_id=?", (item_id,))
         prefix, consent = f"health:{item_id}:", f"health:{item_id}:consent:"   # not LIKE: an _ in the id would match another bank's
-        conn.execute("UPDATE alerts SET resolved_at=?, resolution='reconnected', key=key || ':reconnected:' || id "
+        conn.execute("UPDATE alerts SET resolved_at=?, resolution='reconnected', "
+                     "key=CASE WHEN substr(key, 1, ?) = ? THEN key ELSE key || ':reconnected:' || id END "
                      "WHERE resolved_at IS NULL AND substr(key, 1, ?) = ? AND (? OR substr(key, 1, ?) <> ?)",
-                     (store.now_local(), len(prefix), prefix, renewed, len(consent), consent))
+                     (store.now_local(), len(consent), consent, len(prefix), prefix, renewed, len(consent), consent))
     return result
 
 
