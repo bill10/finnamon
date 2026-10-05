@@ -147,7 +147,7 @@ export function delta(history) {
   const last = history[history.length - 1], monthStart = String(last.date || '').slice(0, 7) + '-01';
   const prev = history.findLast(r => String(r.date || '') < monthStart);
   if (!prev) return null;
-  const a = Number(last.net_worth), b = Number(prev.net_worth);
+  const a = Number(last.net_worth) - (Number(last.new_this_month) || 0), b = Number(prev.net_worth);   // an account added this month is not growth
   if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
   return { amount: Math.round(a - b), pct: b ? Math.round((a - b) / Math.abs(b) * 1000) / 10 : null };
 }
@@ -592,7 +592,7 @@ export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon',
     res.status(r.status || 200).json(r);
   });
 
-  const fail = (res, e, status = 400) => res.status(status).json({ error: (e.stderr || e.message || String(e)).trim() });
+  const fail = (res, e, status = 400) => res.status(status).json({ error: (e.stderr || e.message || String(e)).trim().replace(/^error:\s*/i, '') });   // the CLI's own "error: " prefix is for a terminal
   const name = (v) => { const n = String(v ?? '').trim(); return n.length <= MAX_NAME ? n : ''; };   // the CLI's own limit; '' fails validation below
   // `--` ends option parsing: a name like "--help" is a name, not an argparse option
   const write = (res, args) => call(...args).then(out => res.json({ ok: true, ...out })).catch(e => fail(res, e));
@@ -631,8 +631,9 @@ export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon',
   // Each rides as --flag=value, so a value starting with - stays a value. Neither list sent keeps the budget's own.
   const picks = (v) => v === undefined ? [] : Array.isArray(v) && v.length <= 40 && v.every(x => typeof x === 'string' && x.trim() && x.length <= MAX_NAME) ? v.map(x => x.trim()) : null;
   app.post('/api/budget', (req, res) => {
-    const n = name(req.body?.name), amount = Number(req.body?.amount), cats = picks(req.body?.categories), merchants = picks(req.body?.merchants);
-    if (!n || !(amount > 0)) return res.status(400).json({ error: `a budget needs a name of 1 to ${MAX_NAME} characters and a positive monthly amount` });
+    const n = name(req.body?.name), typed = String(req.body?.amount ?? '').trim(), amount = Number(typed.replace(/[$,\s]/g, '')), cats = picks(req.body?.categories), merchants = picks(req.body?.merchants);
+    if (!n) return res.status(400).json({ error: `a budget needs a name of 1 to ${MAX_NAME} characters` });
+    if (!typed || !(amount > 0)) return res.status(400).json({ error: 'the monthly limit has to be a positive number of dollars, like 400 or $1,200' });   // its own sentence: the name was fine
     if (!cats || !merchants) return res.status(400).json({ error: `categories and merchants are lists of up to 40 names of 1 to ${MAX_NAME} characters` });
     write(res, ['budget', 'set', ...cats.map(c => `--category=${c}`), ...merchants.map(m => `--merchant=${m}`), '--', n, String(amount)]);
   });
@@ -759,7 +760,7 @@ export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon',
   });
   // Update Finnamon (the header's Update available). A POST only from the page itself: its cookie and its Origin, which a
   // browser always sends on a fetch POST; the bearer key (the CLI's `--to`, curl) is refused, so nothing but a person's tap runs it.
-  const updating = (res) => update || (res.status(503).json({ error: 'this server cannot update Finnamon' }), null);
+  const updating = (res) => update || (res.status(503).json({ error: process.env.FINNAMON_DEMO ? "the demo can't update: it is made-up data, with nothing installed to update" : 'this server cannot update Finnamon' }), null);
   app.get('/api/update', async (req, res) => { if (updating(res)) res.json(await update.status({ fresh: req.query.fresh === '1', load: req.query.load === '1' })); });
   // Settings' read-only rows: what `finnamon doctor` and the existing APIs already know. The demo has no update, so the version comes from the checkout.
   app.get('/api/settings', (_req, res) => {

@@ -68,9 +68,14 @@ def test_the_board_is_a_list_the_assistant_owns(home, conn, capsys, monkeypatch)
     with pytest.raises(SystemExit):
         cli.main(["chart", "--remove", "budgets"])
     assert "no chart 'budgets'" in capsys.readouterr().err
+    cli.main(["chart", "--clear"])
     for i in range(charts.MAX_CHARTS):
         _spec_json(monkeypatch, {"mark": "bar", "data": {"values": []}}, "--id", f"c{i}")
     assert ids() == [f"c{i}" for i in range(charts.MAX_CHARTS)]
+    with pytest.raises(SystemExit):   # a ninth is refused with the way out, not dropped silently
+        _spec_json(monkeypatch, {"mark": "bar", "data": {"values": []}}, "--id", "c9")
+    assert "8 charts at most; remove one" in capsys.readouterr().err and ids() == [f"c{i}" for i in range(charts.MAX_CHARTS)]
+    _spec_json(monkeypatch, {"mark": "line", "data": {"values": []}}, "--id", "c3")   # replacing one in place is not a ninth
     cli.main(["chart", "--clear"])
     assert charts.board() == []
     with pytest.raises(SystemExit):
