@@ -84,6 +84,20 @@ test('a budget\'s picks and a transaction\'s category reach the CLI as values, n
   });
 });
 
+// Value: protects=the dashboard summary still loads when `budget overall` fails (an older CLI), with overall null so the page
+// falls back to summing budgets; fails_when=the .catch on the overall call is removed; why_new=the picks test only checks the call is made; seam=none
+test('a CLI without budget overall still serves the summary, with overall null', async () => {
+  const cli = async (...args) => { if (args[0] === 'budget' && args[1] === 'overall') throw new Error('invalid choice: overall'); return args[0] === 'budget' ? [] : {}; };
+  const app = buildApp({ token: () => KEY, cli, exec: async () => '', allowHost: (h) => h.startsWith('127.0.0.1:') });
+  const srv = app.listen(0, '127.0.0.1');
+  await new Promise(r => srv.once('listening', r));
+  try {
+    const r = await fetch(`http://127.0.0.1:${srv.address().port}/api/summary`);
+    assert.equal(r.status, 200);
+    assert.equal((await r.json()).overall, null);
+  } finally { srv.close(); }
+});
+
 test('the board reaches the page as a list, whatever the file holds', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'finnamon-board-')), spec = join(dir, 'current.json');
   const app = buildApp({ token: () => KEY, cli: async () => ({}), allowHost: () => true, spec });

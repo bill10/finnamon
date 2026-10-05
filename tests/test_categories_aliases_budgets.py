@@ -116,3 +116,57 @@ def test_the_cli_surface(conn, capsys):
     assert {"code": "FOOD_AND_DRINK_GROCERIES", "label": "Groceries", "primary": "FOOD_AND_DRINK"} in picker["categories"] and picker["merchants"] == ["Costco"]
     assert json.loads(run_cli(capsys, "category", "--tx", "c1", "Restaurant", "--every"))["category"] == "FOOD_AND_DRINK_RESTAURANT"
     assert json.loads(run_cli(capsys, "category", "--uncategorized")) == {"uncategorized": 0, "merchants": []}
+
+
+# Value: protects=a refused category from the dashboard's "every charge" picker leaves that charge's one-time edit in place;
+# fails_when=the DELETE of the edit runs outside store.tx, or before the category is resolved; why_new=the existing test refuses on a
+# charge with no edit, so a lost edit would pass; seam=none
+def test_every_charge_refused_keeps_the_one_time_edit(conn):
+    seed(conn)
+    txn(conn, "c1", "chk", "2026-09-05", 30, "COSTCO", "Costco", "mch_costco", "GENERAL_MERCHANDISE", "GENERAL_MERCHANDISE_SUPERSTORES")
+    budgets.tx_category_set(conn, "c1", "gas")
+    for bad, err in (("zzzz", budgets.ResolveError), ("food", ValueError)):   # no category; a primary, where a rule needs a detailed one
+        with pytest.raises(err):
+            budgets.tx_merchant_rule(conn, "c1", bad)
+        assert conn.execute("SELECT category FROM tx_now WHERE transaction_id='c1'").fetchone()[0] == "TRANSPORTATION_GAS"
+    assert conn.execute("SELECT count(*) FROM category_override").fetchone()[0] == 0
+    with pytest.raises(ValueError, match="no transaction 'nope'"):
+        budgets.tx_merchant_rule(conn, "nope", "Groceries")
+
+
+# Value: protects=a new budget warns about one that counts the same charges before any charge exists (primary over detailed,
+# a shared merchant), and stays quiet when nothing is shared; fails_when=the primary_of(theirs) or merchant selector comparison
+# is dropped, or overlap fires for unrelated budgets; why_new=existing overlap tests cover a past charge and detailed-under-primary only; seam=none
+def test_overlap_before_any_charge_and_none_for_unrelated_budgets(conn):
+    seed(conn)
+    txn(conn, "c1", "chk", "2026-01-05", 30, "COSTCO", "Costco", "mch_costco", "GENERAL_MERCHANDISE", "GENERAL_MERCHANDISE_SUPERSTORES")   # a past month: no charge in common this month
+    budgets.budget_set(conn, "dining", 400)
+    assert "overlaps" not in budgets.budget_set(conn, "travel", 100)
+    assert budgets.budget_set(conn, "food", 900, ["FOOD_AND_DRINK"])["overlaps"] == [{"budget": "dining", "charges": 0}]
+    budgets.budget_set(conn, "bulk", 200, ["TRAVEL_FLIGHTS"], ["Costco"])
+    assert {o["budget"] for o in budgets.budget_set(conn, "warehouse", 200, None, ["Costco"])["overlaps"]} == {"bulk"}
+
+
+# Value: protects=the dashboard's reads (budget overall on every summary load, alias --list, category --uncategorized) never rewrite
+# the board, and the new flags' misuse is refused before any write; fails_when=a read drops out of CHART_READS/_changes_charts, or
+# a usage guard is removed; why_new=test_chart_refresh checks the older reads only; seam=none
+def test_new_reads_leave_the_board_alone_and_misuse_is_refused(home, conn, monkeypatch, capsys):
+    seed(conn)
+    calls = []
+    monkeypatch.setattr(charts, "refresh", lambda c=None: calls.append(1) or [])
+    for argv in (["budget", "overall"], ["alias", "--list"], ["category", "--uncategorized"], ["category", "list", "--json"]):
+        run_cli(capsys, *argv)
+    assert calls == [], "reads do not refresh the board"
+    for argv in (["category", "--tx", "t1", "--clear", "--every"], ["category", "costco", "groceries", "--every"],
+                 ["alias", "x", "--list"], ["alias", "x", "--remove", "y"], ["alias", "only-one"]):
+        with pytest.raises(SystemExit):
+            run_cli(capsys, *argv)
+        assert "usage" in capsys.readouterr().err, argv
+    assert conn.execute("SELECT count(*) FROM category_override").fetchone()[0] == 0
+
+
+# Value: protects=a threshold with no accounts at all says so instead of offering an empty "closest" list;
+# fails_when=the near/empty branch of find_account's message is broken; why_new=the existing test always has accounts; seam=none
+def test_threshold_with_no_accounts_says_there_are_none(conn):
+    with pytest.raises(ValueError, match="matches no account; there are no accounts yet"):
+        budgets.threshold_set(conn, "Checking", 500)
