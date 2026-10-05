@@ -124,3 +124,26 @@ def test_a_kind_with_no_note_of_its_own_still_resolves_and_two_ids_with_an_alert
     b = alert(house, "duplicate_charge", "dup:x:y", {"amount": 10})
     with pytest.raises(ValueError, match="several merchant ids"):   # an undo removes the one rule it recorded
         budgets.normal(house, "Amazon", alert_id=b)
+
+
+def test_clear_removes_a_rule_written_as_typed_and_shows_an_ambiguous_name(house):
+    house.execute("INSERT INTO category_override (canonical, pfc_primary, pfc_detailed) VALUES ('whole foods market','FOOD_AND_DRINK','FOOD_AND_DRINK_GROCERIES')")
+    assert budgets.category_clear(house, "Whole Foods Market")["cleared"] and overrides(house) == 0   # the old bug's key, though the name resolves
+    txn(house, "q1", "chk", "2026-09-18", 6, "SQ *SHOP", "Blue Bottle", None)
+    txn(house, "q2", "chk", "2026-09-19", 7, "SQ *SHOP", "Philz", None)
+    with pytest.raises(ValueError, match="several merchants"):
+        budgets.category_clear(house, "sq *shop")
+
+
+def test_a_recurring_changed_rule_by_name_also_keys_on_the_stream(house):
+    budgets.alias_set(house, "NETFLIX.COM", "Netflix Streaming")
+    txn(house, "n1", "cc", "2026-09-05", 15.49, "NETFLIX.COM", None, None)
+    house.execute("INSERT INTO recurring (stream_id, account_id, direction, merchant_name, status, first_seen_at) VALUES ('s9','cc','outflow',NULL,'MATURE',?)", (AS_OF,))
+    house.execute("UPDATE recurring SET description='NETFLIX.COM' WHERE stream_id='s9'")
+    r = budgets.normal(house, "Netflix Streaming", kind="recurring_changed")
+    assert {x[0] for x in house.execute("SELECT canonical FROM suppressions")} == {"Netflix Streaming", "NETFLIX.COM"} and len(r["ids"]) == 2
+
+
+def test_an_over_budget_note_waits_for_next_month(house):
+    a = alert(house, "budget_pace", "budget:1:2026-09:over", {"budget": "dining", "state": "over", "limit": 300, "spent": 320})
+    assert "next month if it goes over again" in budgets.normal(house, alert_id=a)["next"]

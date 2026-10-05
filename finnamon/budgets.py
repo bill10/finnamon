@@ -149,10 +149,16 @@ def category_set(conn: sqlite3.Connection, merchant: str, category_text: str) ->
 
 def category_clear(conn: sqlite3.Connection, merchant: str) -> dict:
     """Delete a merchant's rule so its charges fall back to the bank's category; one-time --tx edits stay."""
+    err = None
     try:
         canonicals = resolve_merchant(conn, merchant)["canonicals"]
-    except ValueError:   # the rule's own key, as --rules lists it: a rule whose merchant has no charges left is still removable
-        canonicals = [r[0] for r in conn.execute("SELECT canonical FROM category_override WHERE canonical=? COLLATE NOCASE", (merchant.strip(),))]
+    except ValueError as e:
+        canonicals, err = [], e
+    # and the rule's own key, as --rules lists it: a rule written as typed before names were resolved, or whose merchant has no charges left
+    keys = [r[0] for r in conn.execute("SELECT canonical FROM category_override WHERE canonical=? COLLATE NOCASE", (merchant.strip(),))]
+    if err and not keys and "several merchants" in str(err):
+        raise err
+    canonicals = list(dict.fromkeys(canonicals + keys))
     marks = ",".join("?" * len(canonicals))
     removed = [x[0] for x in conn.execute(f"SELECT pfc_detailed FROM category_override WHERE canonical IN ({marks})", canonicals)] if canonicals else []
     if removed:
@@ -284,12 +290,16 @@ NO_RULE_NOTES = {
                    "To alert at a lower balance: finnamon threshold \"{account}\" <amount>.",
     "budget_pace": "Resolved for this month; the {budget} budget alerts again once spending reaches the limit, or next month. "
                    "To change the limit: finnamon budget set \"{budget}\" <amount>.",
-    "sync_health": "Resolved for today; it alerts again tomorrow if {institution} still isn't syncing.",
+    "budget_pace:over": "Resolved for this month; the {budget} budget is over its limit and alerts again next month if it goes over again. "
+                        "To change the limit: finnamon budget set \"{budget}\" <amount>.",
+    "sync_health": "Resolved for today; it alerts again tomorrow if {institution} still isn't syncing. "
+                   "If the bank wants a new login, reconnect it from the dashboard's Accounts.",
 }
 
 
 def _no_rule_note(kind: str, p: dict) -> str:
     try:
+        kind = f"{kind}:over" if kind == "budget_pace" and p.get("state") == "over" else kind
         return NO_RULE_NOTES[kind].format(**{k: v for k, v in p.items() if v is not None})
     except (KeyError, ValueError, TypeError):   # an older payload, or a kind with no note of its own
         return "Resolved; no rule applies to this kind of alert, so the next one still alerts."
@@ -312,6 +322,12 @@ def normal(conn: sqlite3.Connection, canonical: str | None = None, kind: str | N
             raise ValueError(f"no alert kind a rule can quiet is called that; the kinds are: {', '.join(kinds)}")
     m = resolve_merchant(conn, canonical) if canonical else None
     canonicals = m["canonicals"] if m else []
+    if m and kind == "anomaly:recurring_changed":   # that detector keys on the stream's own name, with no alias step
+        t, marks = canonical.strip(), ",".join("?" * len(canonicals))
+        canonicals = list(dict.fromkeys(canonicals + [r[0] for r in conn.execute(
+            f"SELECT DISTINCT COALESCE(r.merchant_entity_id, r.merchant_name, r.description) FROM recurring r WHERE lower(?) IN (lower(r.merchant_name), lower(r.description)) "
+            f"OR r.merchant_entity_id IN ({marks}) OR EXISTS (SELECT 1 FROM tx_now t WHERE t.canonical IN ({marks}) "   # the names behind an alias too
+            f"AND lower(COALESCE(r.merchant_name, r.description)) IN (lower(t.merchant_name), lower(t.name)))", (t, *canonicals, *canonicals))]))
     if alert_id and not canonical:
         a = conn.execute("SELECT kind, key, payload_json, transaction_id, account_id, resolved_at FROM alerts WHERE id=?", (alert_id,)).fetchone()
         if not a:
