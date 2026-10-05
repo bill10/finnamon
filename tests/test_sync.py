@@ -75,9 +75,14 @@ def test_modified_and_removed(conn, item, monkeypatch):
 
 def test_pending_replaced_by_posted(conn, item, monkeypatch):
     run(monkeypatch, conn, [page([plaid_txn("p1", "chk", "2026-09-01", 10, "coffee", pending=True)])])
+    conn.execute("INSERT INTO tx_category_override (transaction_id, pfc_primary, pfc_detailed) VALUES ('p1', 'FOOD_AND_DRINK', 'FOOD_AND_DRINK_COFFEE')")
     run(monkeypatch, conn, [page([plaid_txn("x1", "chk", "2026-09-02", 10, "coffee", pending_id="p1")], cursor="c2")])
     rows = [dict(r) for r in conn.execute("SELECT transaction_id, pending FROM transactions")]
     assert rows == [{"transaction_id": "x1", "pending": 0}]
+    assert [tuple(r) for r in conn.execute("SELECT transaction_id, pfc_detailed FROM tx_category_override")] == [("x1", "FOOD_AND_DRINK_COFFEE")]   # the one-time edit follows it
+    conn.execute("INSERT INTO tx_category_override (transaction_id, pfc_primary, pfc_detailed) VALUES ('p1', 'FOOD_AND_DRINK', 'FOOD_AND_DRINK_GROCERIES')")
+    run(monkeypatch, conn, [page([plaid_txn("x1", "chk", "2026-09-02", 10, "coffee", pending_id="p1")], cursor="c3")])   # a replay: the posted one's edit wins
+    assert conn.execute("SELECT pfc_detailed FROM tx_category_override WHERE transaction_id='x1'").fetchone()[0] == "FOOD_AND_DRINK_COFFEE"
 
 
 def test_mutation_during_pagination_restarts_from_run_start_cursor(conn, item, monkeypatch):

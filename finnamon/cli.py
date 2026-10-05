@@ -1560,8 +1560,8 @@ def cmd_settings(a) -> None:
 
 def cmd_category(a) -> None:
     conn = store.connect()
-    if a.tx:
-        if a.category or (a.merchant is None) == (not a.clear):
+    if a.tx is not None:
+        if a.category or (a.clear and a.merchant) or not (a.clear or a.merchant):
             die("usage: finnamon category --tx <transaction_id> <category> | --tx <transaction_id> --clear")
         _triage_read_only()
         try:

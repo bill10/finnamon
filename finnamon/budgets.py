@@ -142,7 +142,7 @@ def category_set(conn: sqlite3.Connection, merchant: str, category_text: str) ->
 
 def tx_category_set(conn: sqlite3.Connection, transaction_id: str, category_text: str | None) -> dict:
     """A one-time edit: this one transaction only, ahead of the merchant rule. category_text None clears it."""
-    t = conn.execute("SELECT transaction_id, date, amount, display FROM tx_all_accounts WHERE transaction_id=?", (transaction_id.strip(),)).fetchone()
+    t = conn.execute("SELECT transaction_id, date, amount, display FROM tx_now WHERE transaction_id=?", (transaction_id.strip(),)).fetchone()   # a mirror's id: its twin is the one counted
     if not t:
         raise ValueError(f"no transaction '{transaction_id}' (ids are tx_now.transaction_id)")
     if category_text is None:
@@ -155,7 +155,7 @@ def tx_category_set(conn: sqlite3.Connection, transaction_id: str, category_text
         conn.execute("INSERT INTO tx_category_override (transaction_id, pfc_primary, pfc_detailed) VALUES (?,?,?) "
                      "ON CONFLICT(transaction_id) DO UPDATE SET pfc_primary=excluded.pfc_primary, pfc_detailed=excluded.pfc_detailed, created_at=datetime('now','localtime')",
                      (t["transaction_id"], taxonomy.primary_of(code), code))
-    now = conn.execute("SELECT category FROM tx_all_accounts WHERE transaction_id=?", (t["transaction_id"],)).fetchone()[0]
+    now = conn.execute("SELECT category FROM tx_now WHERE transaction_id=?", (t["transaction_id"],)).fetchone()[0]
     out = {"transaction_id": t["transaction_id"], "date": t["date"], "amount": t["amount"], "merchant": t["display"], "category": now}
     if category_text is None:
         out["cleared"] = bool(n)

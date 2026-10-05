@@ -131,3 +131,4 @@ def test_one_charge_is_a_one_time_edit_and_always_is_the_merchant_rule(fixture_h
     assert conn.execute("SELECT count(*) FROM category_override").fetchone()[0] == 0, "one charge must not become a merchant rule"
     run_claude("Actually, Costco is always groceries for us, every charge. Make that the rule; don't ask me anything.", env)
     assert [tuple(r) for r in conn.execute("SELECT canonical, pfc_detailed FROM category_override")] == [("mch_costco", "FOOD_AND_DRINK_GROCERIES")]
+    assert [tuple(r) for r in conn.execute("SELECT transaction_id FROM tx_category_override")] == [("c8",)], "the rule leaves one-time edits alone"

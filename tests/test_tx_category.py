@@ -35,6 +35,15 @@ def test_one_transaction_moves_only_that_one_and_beats_the_merchant_rule_and_cle
 
     assert budgets.tx_category_set(conn, "c1", None) == {**r, "category": "HOME_IMPROVEMENT_HARDWARE", "cleared": True}
     assert cats(conn, "2099-01-01") == {k: "HOME_IMPROVEMENT_HARDWARE" for k in ("c1", "c2", "c3")}
+    assert budgets.tx_category_set(conn, "c1", None)["cleared"] is False
+
+
+def test_a_mirror_accounts_id_is_refused(conn):
+    costco(conn)
+    conn.execute("UPDATE accounts SET mirror_of='chk' WHERE account_id='cc'")
+    txn(conn, "m1", "cc", "2026-09-05", 80, "COSTCO WHSE", "Costco", "mch_costco")
+    with pytest.raises(ValueError, match="no transaction"):
+        budgets.tx_category_set(conn, "m1", "groceries")
 
 
 def test_prelude_time_scopes_the_one_time_edit(conn):
@@ -62,6 +71,8 @@ def test_cli_tx_form_validates_and_clears(home, conn, capsys):
                       (["category", "--tx", "c1", "FOOD_AND_DRINK"], "detailed category"),
                       (["category", "--tx", "c1"], "usage"),
                       (["category", "--tx", "c1", "groceries", "extra"], "usage"),
+                      (["category", "--tx", "c1", "groceries", "--clear"], "usage"),
+                      (["category", "--tx", "", "groceries"], "no transaction"),
                       (["category", "--clear"], "usage")):
         with pytest.raises(SystemExit):
             cli.main(argv)
