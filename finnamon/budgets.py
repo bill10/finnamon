@@ -173,7 +173,7 @@ RECURRING = ("(t.flow = 'mortgage' OR EXISTS (SELECT 1 FROM recurring r WHERE r.
 # a reworded MATCH must keep this scope clause (the assert says so at import, not as a silently double-counting Overall).
 assert "s.budget_id = :bid" in MATCH
 ANY_BUDGET = MATCH.replace("s.budget_id = :bid", "s.budget_id IN (SELECT id FROM budgets WHERE active = 1)")
-UNCATEGORIZED = "category IS NULL AND pending = 0 AND flow <> 'skipped'"   # the Budgets card's count and charts' uncategorized table: one rule
+UNCATEGORIZED = "category IS NULL AND pending = 0 AND flow IN ('expense', 'refund')"   # spending only: money in, and a transfer already paired, never need one   # the Budgets card's count and charts' uncategorized table: one rule
 UNCATEGORIZED_SHOWN = 20   # merchants, and ids per merchant, in a reply; the count is always the whole
 
 
@@ -195,7 +195,7 @@ def uncategorized(conn: sqlite3.Connection, transaction_ids: list[str] | None = 
     # the ids as one JSON parameter: an import of years of rows never meets SQLite's limit on bound variables
     where, args = (UNCATEGORIZED, ()) if transaction_ids is None else (UNCATEGORIZED + " AND transaction_id IN (SELECT value FROM json_each(?))", (json.dumps(transaction_ids),))
     rows = conn.execute(f"SELECT display, count(*) n, round(sum(amount), 2) total, group_concat(transaction_id) ids FROM tx_now WHERE {where} "
-                        "GROUP BY canonical ORDER BY n DESC, display", args).fetchall()
+                        "GROUP BY lower(display) ORDER BY n DESC, display", args).fetchall()   # one merchant as people see it, as resolve_merchant has it
     return {"uncategorized": sum(r["n"] for r in rows),
             "merchants": [{"merchant": r["display"], "charges": r["n"], "total": r["total"], "transaction_ids": r["ids"].split(",")[:UNCATEGORIZED_SHOWN]}
                           for r in rows][:UNCATEGORIZED_SHOWN]}
@@ -475,7 +475,20 @@ def alias_remove(conn: sqlite3.Connection, name: str) -> dict:
         raise ValueError(f"no alias named '{name.strip()}'" + (f"; '{name.strip()}' is the merchant of {', '.join(repr(x) for x in names)}: remove those by name" if names
                                                               else " (finnamon alias --list shows them)"))
     conn.execute("DELETE FROM merchant_alias WHERE name=?", (r["name"],))
-    return {"removed": {"name": r["name"], "canonical": r["canonical"]}, "matches": _alias_matches(conn, r["name"])[0]}
+    out = {"removed": {"name": r["name"], "canonical": r["canonical"]}, "matches": _alias_matches(conn, r["name"])[0]}
+    # what was keyed on that merchant name stops applying to those charges, unless another alias still makes it
+    if not conn.execute("SELECT 1 FROM merchant_alias WHERE canonical=?", (r["canonical"],)).fetchone():
+        keyed = {k: n for k, n in (
+            ("category_rules", conn.execute("SELECT count(*) FROM category_override WHERE canonical=?", (r["canonical"],)).fetchone()[0]),
+            ("budgets", [x[0] for x in conn.execute("SELECT DISTINCT b.name FROM budget_selectors s JOIN budgets b ON b.id=s.budget_id AND b.active=1 "
+                                                    "WHERE s.kind='merchant' AND ? IN (s.value, s.label)", (r["canonical"],))]),
+            ("suppressions", conn.execute("SELECT count(*) FROM suppressions WHERE canonical=?", (r["canonical"],)).fetchone()[0])) if n}
+        if keyed:
+            out["still_keyed_on_it"] = keyed
+            out["warning"] = (f"'{r['canonical']}' no longer names those charges, so what was set up under that name stops covering them: "
+                              + ", ".join(f"{k.replace('_', ' ')} {', '.join(v) if isinstance(v, list) else v}" for k, v in keyed.items())
+                              + ". Set them again under the charges' own name, or add the alias back")
+    return out
 
 
 def rule_kinds() -> list[str]:

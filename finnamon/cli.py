@@ -1726,6 +1726,8 @@ def cmd_category(a) -> None:
             die("usage: finnamon category --rules")
         out(budgets.category_rules(conn)); return
     if a.uncategorized:
+        if a.merchant or a.category or a.clear:
+            die("usage: finnamon category --uncategorized")
         out(budgets.uncategorized(conn)); return
     if a.clear:
         if not a.merchant or a.category or a.merchant in ("list", "resolve"):

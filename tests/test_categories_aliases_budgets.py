@@ -190,3 +190,28 @@ def test_a_big_import_reports_uncategorized_with_capped_lists(conn):
     r = imports.apply(conn, acct["account_id"], imports.parse(csv))
     assert r["uncategorized"] == r["added"] == 1500 and len(r["uncategorized_merchants"]) == budgets.UNCATEGORIZED_SHOWN
     assert all(len(m["transaction_ids"]) <= budgets.UNCATEGORIZED_SHOWN for m in r["uncategorized_merchants"])
+
+
+def test_removing_an_alias_says_what_was_keyed_on_its_name(conn):
+    # Value: protects against a rule, a budget or a suppression silently stopping when the alias under it goes
+    seed(conn)
+    txn(conn, "f1", "chk", "2026-09-05", 400, "SQ *PMT 8827", None, None, "GENERAL_SERVICES", "GENERAL_SERVICES_OTHER_GENERAL_SERVICES")
+    budgets.alias_set(conn, "SQ *PMT 8827", "fence contractor")
+    budgets.category_set(conn, "fence contractor", "repairs")
+    budgets.budget_set(conn, "yard", 500, merchants=["fence contractor"])
+    r = budgets.alias_remove(conn, "SQ *PMT 8827")
+    assert r["still_keyed_on_it"] == {"category_rules": 1, "budgets": ["yard"]} and "stops covering them" in r["warning"]
+    budgets.alias_set(conn, "SQ *PMT 8827", "fence contractor")
+    budgets.alias_set(conn, "SQ *PMT%", "fence contractor")
+    assert "warning" not in budgets.alias_remove(conn, "SQ *PMT 8827")   # another alias still makes the name
+
+
+def test_uncategorized_is_spending_only(conn):
+    # Value: protects the count from money in and paired transfers, which no budget would count anyway
+    seed(conn)
+    txn(conn, "in1", "chk", "2026-09-01", -2000, "DEPOSIT", None, None, None, None)
+    txn(conn, "out1", "chk", "2026-09-02", 40, "CORNER DELI", None, None, None, None)
+    txn(conn, "out2", "cc", "2026-09-03", 12, "CORNER DELI", "Corner Deli", "mch_deli", None, None)
+    u = budgets.uncategorized(conn)
+    assert u["uncategorized"] == 2 and budgets.overall(conn, AS_OF)["uncategorized"] == 2
+    assert [m["charges"] for m in u["merchants"]] == [2], "one merchant as people see it, whatever its ids"
