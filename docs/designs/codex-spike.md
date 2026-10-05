@@ -132,9 +132,11 @@ Recorded in `tests/fixtures/codex/hooks/`. Every payload carries:
 Yes, with a symlink, and that is all it needs.
 
 **Where Codex keeps credentials:**
-- In 0.157, `cli_auth_credentials_store` defaults to `file`, which is `$CODEX_HOME/auth.json`.
-- `keyring` and `auto` are opt-in. The owner's config sets neither, and `security find-generic-password -s "Codex Auth"` finds no item.
-- So on this machine the login lives only in `~/.codex/auth.json`. Not verified: how a keyring entry is keyed. A household whose config chose `keyring` needs a separate check.
+- Source: `codex-rs/login/src/auth/storage.rs` at `rust-v0.157.0`.
+- `cli_auth_credentials_store` defaults to `file`, which is `$CODEX_HOME/auth.json`.
+- `keyring` keeps the login in the OS keychain, under the service `"Codex Auth"`. The account is `cli|` plus the first 16 hex digits of the sha256 of the canonical `CODEX_HOME`. So a keychain login belongs to one `CODEX_HOME` and is never shared between homes, link or no link.
+- `auto` uses the keychain when one is available, so on macOS it means the keychain.
+- The owner's config sets neither, and `security find-generic-password -s "Codex Auth"` finds no item. So on this machine the login lives only in `~/.codex/auth.json`.
 
 **The test:** a scratch `CODEX_HOME` holding only a `config.toml`, a hook, a skill, and `auth.json` as a symlink to `~/.codex/auth.json`.
 - `codex login status` printed "Logged in using ChatGPT".
@@ -144,16 +146,24 @@ Yes, with a symlink, and that is all it needs.
 - The `context7` and `shadcn` MCP servers from the owner's `~/.codex/config.toml` were absent from the rollout.
 - So the symlink shares only the login.
 - `~/.codex/auth.json` came out unchanged: same sha256, modification time, change time and link count.
+- Afterwards the scratch home was deleted; it held only the link, never a copy.
 
-**Not tried:** a hard link. Making one changes the original inode's change time and link count, which counts as modifying `~/.codex`. It would also share less than a symlink if Codex rewrites the file by renaming a new one into place.
+**A token refresh writes through the link, so both homes stay valid.** I read this from the source rather than forcing a refresh: a live refresh would rotate the owner's real refresh token.
+- `FileAuthStorage::save` writes in place, with `OpenOptions::new().truncate(true).write(true).create(true)` and then `write_all`. It does not write a temporary file and rename it over `auth.json`. On Unix, opening a symlink follows it, so `~/.codex/auth.json` itself gets the new tokens and the link stays a link.
+- `persist_tokens` loads the file, swaps in the new tokens, sets `last_refresh`, and saves.
+- Before refreshing, `AuthManager::auth()` reloads from disk and refreshes only if the on-disk auth is unchanged (`TOKEN_REFRESH_INTERVAL` is 8 days). If the person's own `codex` has just refreshed, the Finnamon home picks up those tokens instead of refreshing again.
+- On a 401, `UnauthorizedRecovery` also reloads from disk first, as long as the account id matches.
+- This is the same mechanism several `codex` processes already rely on when they share `~/.codex` (Agent 007's workers do).
+- What is left is no worse than two processes on one home today:
+  - the refresh lock is per process (a `Semaphore`) and there is no file lock;
+  - the truncate-and-write is not atomic.
 
-**The open risk is a token refresh.** None happened here; the login had last refreshed 3 days earlier. When one does, Codex writes `auth.json`, and what happens next depends on how it writes:
-- **In place:** the write goes through the symlink, both homes stay in step, and the risk is two Codex processes refreshing at once.
-- **Write-new-then-rename:** the symlink is replaced by a private copy holding the new refresh token. ChatGPT rotates refresh tokens, so the person's `~/.codex` login could then be left with a token that no longer works.
+**Constraints for card 2:**
+- **Never run `codex logout` under Finnamon's `CODEX_HOME`.** Its `remove_file` would only remove the link, but logout also revokes the tokens (`auth/revoke.rs`). That would log the person out everywhere.
+- **The link works only with the file store.** If `~/.codex/auth.json` is missing, because the person has no Codex login or uses `keyring`/`auto`, fall back to a separate `codex login` under Finnamon's home.
+- Pin `cli_auth_credentials_store = "file"` in Finnamon's `config.toml`. Otherwise an `auto` default would let a later `codex login` there go to the keychain, and nothing would be shared.
 
-Deciding which takes a forced refresh, which writes to the real login, so it was not tried. Card 2 should test it under a throwaway ChatGPT login: symlink, force a refresh, and check whether the link survives. Until then:
-- Doctor checks that `$CODEX_HOME/auth.json` is still a symlink to `~/.codex/auth.json`.
-- If it is not, doctor re-links it, or asks the person to run `codex login` once.
+**Not tried: a hard link.** Making one changes the original inode's change time and link count, which counts as modifying `~/.codex`. It would also work only until anything replaced the file, so a symlink is the right choice.
 
 **The interactive `codex` (TUI) has no `--ignore-user-config`**; only `exec` has it. The equivalent is the same as above: `CODEX_HOME=<finnamon's>` plus `-c` flags. With the symlinked `auth.json`, the TUI shares the login the same way.
 
@@ -174,9 +184,10 @@ Deciding which takes a forced refresh, which writes to the real login, so it was
 ## What changes in cards 2–6
 
 - **Card 2 (bundle, `CODEX_HOME`, install/doctor):**
-  - Share the login: link `~/.finnamon/codex/auth.json` to `~/.codex/auth.json` (finding 6). There is no second login unless the person has no Codex login at all.
-  - Doctor checks the link and re-makes it.
-  - Test the refresh behaviour under a throwaway account first.
+  - **Share the login instead of a second `codex login`:** symlink `~/.finnamon/codex/auth.json` to `~/.codex/auth.json` and pin `cli_auth_credentials_store = "file"` (finding 6). A refresh writes through the link.
+  - Doctor checks that the link exists and is intact.
+  - A separate `codex login` under Finnamon's home is the fallback, only when there is no `~/.codex/auth.json` (no Codex login, or a keychain one).
+  - Never run `codex logout` there: it revokes the shared tokens.
   - Generate a permission profile (`default_permissions`, `extends = ":workspace"`) and never `sandbox_mode`.
   - Pin hook trust with `hooks.state` hashes from `app-server` `hooks/list`.
   - Close the `~/.agents/skills` leak.
