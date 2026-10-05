@@ -214,9 +214,10 @@ def test_command_surface(home, tg, capsys, monkeypatch, tmp_path):
     assert conn.execute("SELECT reason FROM alerts WHERE transaction_id='t2'").fetchone()[0] == "Never paid this: $412 to a new merchant."
     assert json.loads(run_cli(capsys, "triage"))["groups"] == 0  # nothing left: claude is not invoked
     lst = json.loads(run_cli(capsys, "alerts"))
-    assert len(lst) == 2 and lst[0]["verdict"] == "promote" and "Never paid" in lst[0]["text"] and lst[0]["tier"] == "anomaly"   # the dashboard's unsent filter reads tier
+    assert len(lst) == 1 and lst[0]["verdict"] == "promote" and "Never paid" in lst[0]["text"] and lst[0]["tier"] == "anomaly"   # the dashboard's unsent filter reads tier
+    assert lst[0]["transaction_id"] == "t2" and len(lst[0]["folded"]) == 1   # two detectors on t2: one alert, the other folded in
     assert json.loads(run_cli(capsys, "notify", "--list"))[0]["kind"].startswith("anomaly:")
-    assert json.loads(run_cli(capsys, "notify"))["sent"] == 2 and len([m for m in tg.sent if "All quiet" not in m["text"]]) == 2   # on a Sunday or Monday the roundup says all quiet too
+    assert json.loads(run_cli(capsys, "notify"))["sent"] == 1 and len([m for m in tg.sent if "All quiet" not in m["text"]]) == 1   # one transaction, one message; on a Sunday or Monday the roundup says all quiet too
     n = json.loads(run_cli(capsys, "normal", "--alert", "1", "--note", "fence guy"))
     assert n["canonical"] == "fence contractor" and n["kind"] == "anomaly:first_merchant"
     assert json.loads(run_cli(capsys, "normal", "Whole Foods", "--max-amount", "200", "--account", "chk"))["account_id"] == "chk"
@@ -228,6 +229,9 @@ def test_command_surface(home, tg, capsys, monkeypatch, tmp_path):
         run_cli(capsys, "normal", "--remove", str(n["id"]))
     with pytest.raises(SystemExit):
         run_cli(capsys, "normal", "--roundup-item", "1", "9")
+    assert conn.execute("SELECT count(*) FROM alerts WHERE transaction_id='t2' AND resolution='normal'").fetchone()[0] == 2   # resolving one resolved both
+    assert json.loads(run_cli(capsys, "alerts", "--undo", "2"))["undone"] == "normal"   # and undo on either reopens both
+    assert conn.execute("SELECT count(*) FROM alerts WHERE transaction_id='t2' AND resolved_at IS NULL").fetchone()[0] == 2
     conn.execute("INSERT INTO roundup_items VALUES ('1234567890', 101, 1, 2)")
     assert json.loads(run_cli(capsys, "normal", "--roundup-item", "101", "1"))["kind"] == "anomaly:no_source"
     with pytest.raises(SystemExit):

@@ -378,7 +378,7 @@ finnamon/
                    attempts and the health:triage alert
   telegram.py      send_message(text), send_photo(path, caption), get_updates(offset): three
                    functions over the Bot API with urllib, no SDK
-  notify.py        one Telegram message per alert (sent_at + telegram_message_id on 200; 429 → backoff);
+  notify.py        one Telegram message per transaction (sent_at + telegram_message_id on 200; 429 → backoff);
                    Sunday roundup as one numbered message + roundup_items rows
   run.py           flock → sync → detect → triage → notify → weekly backup; writes state.last_run; on unhandled
                    exception inserts alert health:run:<class>:<date> (deduped) and falls back to a
@@ -420,7 +420,7 @@ tests/
                      MUTATION restart, ITEM_LOGIN_REQUIRED, PRODUCT_NOT_READY, first_synced_at
   test_detectors.py  each detector against a fixture DB with a fixed as_of; prelude tested once;
                      EXPLAIN QUERY PLAN asserts no full scan of transactions per detector
-  test_notify.py     one message per alert; HTML escaping; 4096 split; 429 backoff; item_linked
+  test_notify.py     one message per transaction; HTML escaping; 4096 split; 429 backoff; item_linked
   test_daemon.py     sync thread clock; serial queue; claude -p timeout → failure message; offset
                      advanced after handling; non-owner dropped; NO_REPLY sends nothing
   test_cli.py        init/link with injected stdin; secrets.toml 0600 + atomic; scheduler golden files
@@ -552,7 +552,7 @@ A single transaction can trip several candidates; that is expected and handled i
 1. `finnamon alerts --untriaged --json` to get candidates grouped by transaction.
 2. For each group, whatever lookups it needs: `finnamon query "..."` (read-only SQL) for the merchant's history, the account's typical amounts, recent similar transactions; `finnamon budget list`; `finnamon normal --list` to see what Bill already called normal.
 3. Decide, as this person's finance assistant reading their statement, whether to mention each transaction, with confidence high (looks like fraud, an error, or money leaving with no clear source) or low (unusual but plausible), and one sentence why.
-4. `finnamon triage set <transaction_id> promote|suppress high|low -` per group, the reason on stdin through a quoted heredoc. It refuses a reason given as an argument: a double-quoted one has lost its `$` signs before the command sees it (#63). Run by a person (never a Claude session: triage or chat) on a group with nothing left untriaged, the same verdict replaces only the reason of its stamped candidates (a repair); verdict, confidence and sent state stay. That command is the only write; it stamps every candidate in the group.
+4. `finnamon triage set <transaction_id> promote|suppress high|low -` per group, the reason on stdin through a quoted heredoc. It refuses a reason given as an argument: a double-quoted one has lost its `$` signs before the command sees it (#63). Run by a person (never a Claude session: triage or chat) on a group with nothing left untriaged, the same verdict replaces only the reason of its stamped candidates (a repair); verdict, confidence and sent state stay. That command is the only write; it stamps every candidate in the group, and a single candidate's key stamps its whole transaction, so two detectors on one transaction can never split promote/suppress. A detector that fires after its transaction was judged or resolved takes that verdict and resolution (`detect.join_family`).
 
 `triage.py` shrinks to: run the skill, then verify every untriaged group now has a verdict. Any group still `NULL` after the run increments `triage_attempts`; on the third consecutive failure the group is marked `suppress` with reason `triage_unavailable` AND a rule alert `health:triage:<local date>` is inserted so Bill is messaged that triage is down, the same way he'd be messaged about a dead sync.
 
@@ -569,7 +569,7 @@ The LLM can only promote or suppress rows that SQL produced. Every suppression i
 ### Delivery mechanics (milestone 1)
 
 - `telegram.py` is three functions over `https://api.telegram.org/bot<token>/`: `sendMessage` (text, `parse_mode=HTML` with escaping applied to every merchant string), `sendPhoto` (multipart, for charts), `getUpdates` (long-poll, `offset`, `timeout=25`). urllib, no SDK. Everything is sent to the household chat in `state.chat_id`; `owners.telegram_user_id` is used to accept messages only from household members and to label who is speaking.
-- One Telegram message per alert, so `telegram_message_id` is unique per alert and a quoted reply resolves exactly (eng review 5A). A burst (a bad first sync) is throttled with a sleep to stay under Telegram's per-chat rate. The 4096-char limit is enforced by splitting. `sent_at` and `telegram_message_id` are set per alert only on a 200; a 429 backs off and leaves the alert unsent for the next run.
+- One Telegram message per transaction (`store.ALERT_GROUP`: the alert's `transaction_id`, else account + date + amount + name for an anomaly, else its key), so every alert sharing a `telegram_message_id` is one transaction and a quoted reply resolves exactly (eng review 5A). The clearest of its alerts is the line; all are stamped together, and one that fires after the transaction was told joins that message unsent. `finnamon alerts` (and so the dashboard) shows one alert per transaction with the rest under `folded`; Dismiss, `normal --alert` and Undo cover them all. A burst (a bad first sync) is throttled with a sleep to stay under Telegram's per-chat rate. The 4096-char limit is enforced by splitting. `sent_at` and `telegram_message_id` are set per alert only on a 200; a 429 backs off and leaves the alert unsent for the next run.
 - `run.py` catches any unhandled exception, logs it, and inserts a rule alert keyed `health:run:<error class>:<local date>` so a persistent failure is one message a day, not four (eng review 6A). Only if that insert itself fails does it attempt a direct send. If Telegram is unreachable, the log is the record and the heartbeat retries hourly; a Telegram outage is the one silence this design accepts.
 
 ### Scheduling (milestone 1)

@@ -211,7 +211,7 @@ def normal(conn: sqlite3.Connection, canonical: str | None = None, kind: str | N
     cur = conn.execute("INSERT INTO suppressions (kind, canonical, account_id, max_amount, note, stream_id) VALUES (?,?,?,?,?,?)",
                        (kind, canonical, account_id, max_amount, note, stream_id))
     if alert_id:   # the rule it wrote is recorded, so an undo removes that one and never another
-        conn.execute("UPDATE alerts SET resolved_at=datetime('now','localtime'), resolution='normal', suppression_id=? WHERE id=?", (cur.lastrowid, alert_id))
+        _resolve(conn, alert_id, "normal", cur.lastrowid)
     return {"id": cur.lastrowid, "kind": kind, "canonical": canonical, "account_id": account_id, "max_amount": max_amount, "note": note,
             "stream_id": stream_id}
 
@@ -233,11 +233,18 @@ def _alert(conn: sqlite3.Connection, alert_id: int) -> sqlite3.Row:
     return a
 
 
+def _resolve(conn: sqlite3.Connection, alert_id: int, resolution: str, suppression_id: int | None) -> None:
+    """Resolve the alert and every other open alert on its transaction: one transaction, one alert, one Dismiss."""
+    ids = store.alert_group(conn, alert_id)
+    conn.execute(f"UPDATE alerts SET resolved_at=datetime('now','localtime'), resolution=?, suppression_id=? WHERE id IN ({','.join('?' * len(ids))}) "
+                 "AND (id=? OR resolved_at IS NULL)", (resolution, suppression_id, *ids, alert_id))
+
+
 def dismiss(conn: sqlite3.Connection, alert_id: int) -> dict:
     """Resolve one alert and write no rule: fine this once, and the next such event still alerts."""
     if _alert(conn, alert_id)["resolved_at"]:
         raise ValueError(f"alert {alert_id} is already resolved")
-    conn.execute("UPDATE alerts SET resolved_at=datetime('now','localtime'), resolution='dismissed', suppression_id=NULL WHERE id=?", (alert_id,))
+    _resolve(conn, alert_id, "dismissed", None)
     return {"id": alert_id, "resolution": "dismissed"}
 
 
@@ -249,6 +256,8 @@ def undo(conn: sqlite3.Connection, alert_id: int) -> dict:
     if a["resolution"] not in ("normal", "dismissed"):
         raise ValueError(f"alert {alert_id} was resolved by Finnamon or before it recorded how; nothing to undo "
                          "(`finnamon normal --list` and `--remove` for a rule)")
+    ids = store.alert_group(conn, alert_id)   # the transaction reopens as it was resolved: the members this same action resolved
+    conn.execute(f"UPDATE alerts SET resolved_at=NULL, resolution=NULL, suppression_id=NULL WHERE id IN ({','.join('?' * len(ids))}) "
+                 "AND (id=? OR (resolution=? AND suppression_id IS ?))", (*ids, alert_id, a["resolution"], a["suppression_id"]))
     removed = normal_remove(conn, a["suppression_id"])["removed"] if a["suppression_id"] is not None else None
-    conn.execute("UPDATE alerts SET resolved_at=NULL, resolution=NULL, suppression_id=NULL WHERE id=?", (alert_id,))
     return {"id": alert_id, "undone": a["resolution"], "removed_rule": removed}

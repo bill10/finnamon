@@ -39,9 +39,10 @@ def test_failed_send_leaves_alert_unsent(conn, tg):
 def test_anomaly_delivery_split(conn, tg):
     seed(conn)
     p = {"merchant": "SQ *PMT 8827", "amount": 412, "date": "2026-09-16", "account": "Sapphire", "mask": "7710"}
-    alert(conn, "anomaly:no_source", "a1", "anomaly", p, "promote", "high", "You've never paid this merchant.")
-    alert(conn, "anomaly:first_merchant", "a2", "anomaly", p, "promote", "low", "New coffee spot.")
-    alert(conn, "anomaly:new_category", "a3", "anomaly", p, "suppress", "low", "normal")
+    on = lambda d: {**p, "date": d}   # four transactions: one per verdict
+    alert(conn, "anomaly:no_source", "a1", "anomaly", on("2026-09-13"), "promote", "high", "You've never paid this merchant.")
+    alert(conn, "anomaly:first_merchant", "a2", "anomaly", on("2026-09-14"), "promote", "low", "New coffee spot.")
+    alert(conn, "anomaly:new_category", "a3", "anomaly", on("2026-09-15"), "suppress", "low", "normal")
     alert(conn, "anomaly:new_category", "a4", "anomaly", p)  # untriaged
     assert notify.send_pending(conn) == 1 and "never paid" in tg.sent[0]["text"]
     assert notify.send_roundup(conn, "2026-09-19 18:00:00") is None   # Saturday: no roundup

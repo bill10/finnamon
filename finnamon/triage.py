@@ -18,27 +18,28 @@ MAX_ATTEMPTS = 3
 
 
 def untriaged(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    return conn.execute("SELECT * FROM alerts WHERE tier='anomaly' AND verdict IS NULL ORDER BY transaction_id, id").fetchall()
+    return conn.execute(f"SELECT *, {store.ALERT_GROUP} AS grp FROM alerts WHERE tier='anomaly' AND verdict IS NULL ORDER BY grp, id").fetchall()
 
 
 def groups(conn: sqlite3.Connection) -> list[dict]:
     """Candidates grouped by transaction (stream candidates are their own group). This is the JSON the skill reads."""
     out: dict[str, dict] = {}
     for a in untriaged(conn):
-        gid = a["transaction_id"] or a["key"]
+        gid = a["grp"]
         g = out.setdefault(gid, {"group": gid, "transaction_id": a["transaction_id"], "candidates": []})
         g["candidates"].append({"alert_id": a["id"], "kind": a["kind"], "key": a["key"], "payload": json.loads(a["payload_json"])})
     return list(out.values())
 
 
 def set_verdict(conn: sqlite3.Connection, group: str, verdict: str, confidence: str, reason: str, repair: bool = False) -> int:
-    """Stamp every untriaged candidate in the group. `group` is a transaction_id or an alert key.
+    """Stamp every untriaged candidate in the group. `group` is a transaction_id, a group id, or any one candidate's key,
+    which stamps its whole transaction: two detectors on one transaction get one verdict, never a promote and a suppress.
 
     With `repair` (a person, never a Claude session) and nothing left untriaged in the group, the candidates that
     already have this verdict get the new reason instead (a damaged sentence, #63); verdict, confidence and sent state stay."""
     if verdict not in ("promote", "suppress") or confidence not in ("high", "low"):
         raise ValueError("verdict must be promote|suppress and confidence high|low")
-    group_rows = "tier='anomaly' AND (transaction_id=? OR key=?)"
+    group_rows = f"tier='anomaly' AND {store.ALERT_GROUP} IN (?, (SELECT {store.ALERT_GROUP} FROM alerts WHERE key=?))"
     if repair and not conn.execute(f"SELECT 1 FROM alerts WHERE {group_rows} AND verdict IS NULL", (group, group)).fetchone():
         cur = conn.execute(f"UPDATE alerts SET reason=? WHERE {group_rows} AND verdict=?", (reason.strip()[:500], group, group, verdict))
     else:
@@ -69,11 +70,11 @@ def run_if_needed(conn: sqlite3.Connection, timeout: int = 300) -> dict:
 def _bump_attempts(conn: sqlite3.Connection, last_error: str | None, groups_seen: list[str]) -> int:
     """Count a failed attempt for every group Claude was shown and left untriaged; give up loudly on the third."""
     for gid in groups_seen:
-        conn.execute("UPDATE alerts SET triage_attempts = triage_attempts + 1 WHERE tier='anomaly' AND verdict IS NULL AND (transaction_id=? OR key=?)", (gid, gid))
-    exhausted = conn.execute("SELECT DISTINCT COALESCE(transaction_id, key) FROM alerts WHERE tier='anomaly' AND verdict IS NULL AND triage_attempts >= ?",
+        conn.execute(f"UPDATE alerts SET triage_attempts = triage_attempts + 1 WHERE tier='anomaly' AND verdict IS NULL AND {store.ALERT_GROUP}=?", (gid,))
+    exhausted = conn.execute(f"SELECT DISTINCT {store.ALERT_GROUP} FROM alerts WHERE tier='anomaly' AND verdict IS NULL AND triage_attempts >= ?",
                              (MAX_ATTEMPTS,)).fetchall()
     for (gid,) in exhausted:
-        conn.execute("UPDATE alerts SET verdict='suppress', confidence='low', reason='triage_unavailable' WHERE tier='anomaly' AND verdict IS NULL AND (transaction_id=? OR key=?)", (gid, gid))
+        conn.execute(f"UPDATE alerts SET verdict='suppress', confidence='low', reason='triage_unavailable' WHERE tier='anomaly' AND verdict IS NULL AND {store.ALERT_GROUP}=?", (gid,))
     if exhausted:
         as_of = store.now_local()
         conn.execute("INSERT OR IGNORE INTO alerts (tier, kind, key, payload_json, as_of) VALUES ('rule','triage_error',?,?,?)",

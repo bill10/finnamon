@@ -178,3 +178,18 @@ def set_state(conn: sqlite3.Connection, key: str, value) -> None:
 
 def now_local() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+# One transaction, one alert: every alert on the same transaction shares this group, whichever detectors raised it, so
+# delivery, triage and resolution treat them as one. An anomaly with no transaction_id falls back to account + date +
+# amount + name; anything else (a stream, a bank, a budget) is its own group.
+ALERT_GROUP = ("COALESCE(transaction_id, CASE WHEN tier='anomaly' AND json_extract(payload_json,'$.date') IS NOT NULL "
+               "AND json_extract(payload_json,'$.amount') IS NOT NULL THEN 'tx:' || COALESCE(account_id,'') || '|' || json_extract(payload_json,'$.date') "
+               "|| '|' || json_extract(payload_json,'$.amount') || '|' || lower(trim(COALESCE(json_extract(payload_json,'$.merchant'), "
+               "json_extract(payload_json,'$.name'), ''))) END, key)")
+
+
+def alert_group(conn: sqlite3.Connection, alert_id: int) -> list[int]:
+    """Ids of every alert on the same transaction as this one, itself included."""
+    return [r[0] for r in conn.execute(f"SELECT id FROM alerts WHERE {ALERT_GROUP} = (SELECT {ALERT_GROUP} FROM alerts WHERE id=?) ORDER BY id",
+                                       (alert_id,))] or [alert_id]
