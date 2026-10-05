@@ -1,4 +1,4 @@
-"""Telegram Bot API over urllib. Four calls. Every merchant string is HTML-escaped before it goes out.
+"""Telegram Bot API over urllib. Every merchant string is HTML-escaped before it goes out.
 
 FINNAMON_TELEGRAM_BASE overrides the API base (tests point it at a fake server)."""
 from __future__ import annotations
@@ -77,15 +77,30 @@ def split_message(text: str, limit: int = MAX_MESSAGE) -> list[str]:
     return out
 
 
-def send_message(chat_id: int | str, text: str, reply_to: int | None = None, token: str | None = None) -> int:
-    """Returns the message_id (of the first part, if split). `text` is HTML; callers escape user data with esc()."""
+def send_message(chat_id: int | str, text: str, reply_to: int | None = None, token: str | None = None, reply_markup: dict | None = None) -> int:
+    """Returns the message_id (of the first part, if split). `text` is HTML; callers escape user data with esc().
+    reply_markup (inline buttons) goes on the last part."""
     first = None
-    for part in split_message(text):
+    parts = split_message(text)
+    for i, part in enumerate(parts):
         data, headers = _form({"chat_id": chat_id, "text": part, "parse_mode": "HTML",
-                               "reply_to_message_id": reply_to if first is None else None, "disable_web_page_preview": True})
+                               "reply_to_message_id": reply_to if first is None else None, "disable_web_page_preview": True,
+                               "reply_markup": json.dumps(reply_markup) if reply_markup and i == len(parts) - 1 else None})
         mid = _call("sendMessage", data, headers, token=token)["message_id"]
         first = first if first is not None else mid
     return first
+
+
+def edit_message(chat_id: int | str, message_id: int, text: str, token: str | None = None) -> None:
+    """Replace a message's text (HTML) and drop its inline buttons."""
+    data, headers = _form({"chat_id": chat_id, "message_id": message_id, "text": text[:MAX_MESSAGE], "parse_mode": "HTML", "disable_web_page_preview": True})
+    _call("editMessageText", data, headers, token=token)
+
+
+def answer_callback(callback_id: str, text: str = "", token: str | None = None) -> None:
+    """Stop the pressed button's spinner; text shows as a brief notice to whoever pressed it."""
+    data, headers = _form({"callback_query_id": callback_id, "text": text[:200] or None})
+    _call("answerCallbackQuery", data, headers, token=token)
 
 
 def send_photo(chat_id: int | str, path: str, caption: str = "", token: str | None = None) -> int:
@@ -111,5 +126,5 @@ def pending_updates(token: str | None = None, timeout: int = 30) -> int:
 
 
 def get_updates(offset: int | None = None, timeout: int = 25, token: str | None = None) -> list[dict]:
-    q = urllib.parse.urlencode({k: v for k, v in {"offset": offset, "timeout": timeout, "allowed_updates": json.dumps(["message"])}.items() if v is not None})
+    q = urllib.parse.urlencode({k: v for k, v in {"offset": offset, "timeout": timeout, "allowed_updates": json.dumps(["message", "callback_query"])}.items() if v is not None})
     return _call(f"getUpdates?{q}", timeout=timeout + 10, token=token)

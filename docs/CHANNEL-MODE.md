@@ -12,7 +12,7 @@ An existing install keeps the mode it has; `finnamon update` mentions `finnamon 
 
 ```
 finnamon channel session      # the daemon keeps polling; prints the next step
-finnamon update --no-pull     # restarts the dashboard, whose session now drops the web tools and takes the chat
+finnamon update --no-pull     # restarts the dashboard, whose session now takes the chat
 ```
 
 The daemon stays the bot's only `getUpdates` reader, with every check it has in daemon mode (household chat only,
@@ -27,6 +27,11 @@ session is still starting, the chat is told to resend. A dashboard started in an
 restarted. `finnamon doctor` shows the mode, and fails it when session mode has no dashboard to type into. Switching is
 safe in any direction: from `channel`, the plugin's last batch is not answered twice (`inbound_off_at`), and only one
 program reads the bot in either of the daemon-polled modes.
+
+The session runs in ask mode, so anything off the allow list, a web search or fetch included, asks first. During a
+phone turn the request also goes to the chat (`finnamon hook permission`): one line naming the command, the site or the
+path, with Allow and Deny buttons that only household members in that chat can press. The first answer, phone or
+dashboard, wins; ten minutes with neither is a deny, and the chat is told.
 
 What differs from `channel`: who may talk is decided in code, not by the plugin's allow list, and a reply to an alert
 carries its id. What differs from `daemon`: what is said in the chat is in the dashboard's thread and vice versa, and a

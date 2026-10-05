@@ -142,6 +142,16 @@ test('a call: utterance → one typed line → progress → reply → audio; a r
   } finally { talk.stop(); srv.close(); rmSync(d, { recursive: true, force: true }); }
 });
 
+test('a dialog on the screen is never typed into: a spoken line\'s Enter would answer it Yes', () => {
+  let asking = true;
+  const talk = createTalk({ write: () => {}, type: () => assert.fail('typed into a dialog'), transcript: () => '/nonexistent', broadcast: () => {}, asking: () => asking });
+  try {
+    assert.match(talk.heard('allow it', { utterance: 'utterance-10' }).error, /asking something/);
+    asking = false;
+    assert.throws(() => talk.heard('allow it', { utterance: 'utterance-11' }), /typed into a dialog/, 'once it is gone, the line goes in');
+  } finally { talk.stop(); }
+});
+
 test('without a session there is nothing to type into, and the routes say so', async () => {
   const talk = createTalk({ write: () => {}, type: () => assert.fail('typed'), transcript: () => null, broadcast: () => {} });
   assert.match(talk.heard('hello', { utterance: 'utterance-9' }).error, /not running/);
@@ -428,4 +438,73 @@ test('relay route: bearer key only, only in session mode, and the relay\'s answe
     assert.equal(wrong.status, 409); assert.match((await wrong.json()).error, /restart/);
     assert.equal(asked.length, 2);
   } finally { session.close(); daemon.close(); }
+});
+
+test('an open tool call is a dialog nothing may type into, until its result, the turn\'s end, or a restart of the session', async () => {
+  const { openToolCall, createRelay } = await import('../talk.js');
+  const d = mkdtempSync(join(tmpdir(), 'finnamon-open-'));
+  const file = join(d, 'session.jsonl');
+  const now = Date.parse('2026-10-04T12:00:00Z');
+  const call = (id, at = now) => ({ type: 'assistant', timestamp: new Date(at).toISOString(), message: { content: [{ type: 'tool_use', id, name: 'WebFetch', input: {} }] } });
+  const result = (id) => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] } });
+  const put = (...es) => writeFileSync(file, es.map(e => JSON.stringify(e)).join('\n') + '\n');
+  try {
+    assert.equal(openToolCall(join(d, 'none.jsonl'), now), false, 'no transcript, nothing open');
+    put(user('[telegram · bill] hi'), call('a'));
+    assert.equal(openToolCall(file, now), true);
+    put(user('[telegram · bill] hi'), call('a'), result('a'));
+    assert.equal(openToolCall(file, now), false, 'answered (run, or No at the dashboard)');
+    put(user('hi'), call('a'), said('end_turn', text('done')));
+    assert.equal(openToolCall(file, now), false, 'a turn that ended');
+    put(call('a'), user('[telegram · jane] next question'));
+    assert.equal(openToolCall(file, now), false, 'a new prompt: a call a stream error left without a result is not waiting');
+    put(call('a'), user('<system-reminder>x</system-reminder>'));
+    assert.equal(openToolCall(file, now), true, 'Claude Code\'s own tags are not a prompt');
+    put(call('a', now - 1));
+    assert.equal(openToolCall(file, now), false, 'from before this session started: left behind by a crash or restart');
+    put(call('a', now - 6 * 3600_000));
+    assert.equal(openToolCall(file, now - 7 * 3600_000), true, 'a dashboard dialog may wait for hours, and still blocks');
+
+    // the relay: a quiet session with an open call is a dialog whose footer a redraw hid; the phone line waits
+    put(user('[telegram · bill] first'), call('a'));
+    const typed = [];
+    let asking = false;
+    const relay = createRelay({ write: () => {}, transcript: () => file, pollMs: 5, idle: () => true, asking: () => asking,
+                                open: (p) => openToolCall(p, now), type: (_w, line) => typed.push(line) });
+    const p = relay.ask({ from: 'jane', text: 'second' }, 1000);
+    await new Promise(r => setTimeout(r, 40));
+    assert.deepEqual(typed, [], 'never typed into the open dialog');
+    put(user('[telegram · bill] first'), call('a'), result('a'));
+    await new Promise(r => setTimeout(r, 40));
+    assert.deepEqual(typed, ['[telegram · jane] second']);
+    appendFileSync(file, [user(typed[0]), said('end_turn', text('ok'))].map(e => JSON.stringify(e)).join('\n') + '\n');
+    assert.deepEqual(await p, { reply: 'ok' });
+
+    // a dialog's time is not the turn's: a 1s turn outlives 1s while the session asks
+    asking = true;
+    const q = relay.ask({ from: 'jane', text: 'third' }, 1000);
+    await new Promise(r => setTimeout(r, 1300));
+    asking = false;
+    appendFileSync(file, [user(typed[1]), said('end_turn', text('late'))].map(e => JSON.stringify(e)).join('\n') + '\n');
+    assert.deepEqual(await q, { reply: 'late' });
+
+    // and so is a dialog whose footer a redraw hid: quiet, with the turn's tool call open
+    const r2 = createRelay({ write: () => {}, transcript: () => file, pollMs: 5, idle: () => true, asking: () => false,
+                             open: (p) => openToolCall(p, now), type: (_w, line) => {
+                               typed.push(line); appendFileSync(file, [user(line), call('h')].map(e => JSON.stringify(e)).join('\n') + '\n'); } });
+    const h = r2.ask({ from: 'jane', text: 'fourth' }, 1000);
+    await new Promise(r => setTimeout(r, 1300));
+    appendFileSync(file, [result('h'), said('end_turn', text('after the dialog'))].map(e => JSON.stringify(e)).join('\n') + '\n');
+    assert.deepEqual(await h, { reply: 'after the dialog' });
+
+    // Talk: the same guard, but only for a quiet session (a running tool keeps output coming, and a line is queued)
+    put(user('hi'), call('b', Date.now()));
+    let idle = true;
+    const talk = createTalk({ write: () => {}, type: () => assert.fail('typed into a dialog'), transcript: () => file, broadcast: () => {}, idle: () => idle, since: () => now });
+    try {
+      assert.match(talk.heard('yes', { utterance: 'utterance-20' }).error, /asking something/);
+      idle = false;
+      assert.throws(() => talk.heard('and another thing', { utterance: 'utterance-21' }), /typed into a dialog/, 'working: typed (queued) as before');
+    } finally { talk.stop(); }
+  } finally { rmSync(d, { recursive: true, force: true }); }
 });

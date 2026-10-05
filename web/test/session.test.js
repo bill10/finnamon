@@ -18,13 +18,14 @@ function fakeSpawn() {
   return { spawn, procs };
 }
 
-test('claudeArgs: dontAsk always; the Telegram channel only in channel mode', () => {
-  assert.deepEqual(claudeArgs('daemon'), ['--permission-mode', 'dontAsk', '--setting-sources', 'project', '--strict-mcp-config'],
+test('claudeArgs: ask mode outside channel mode; the web is only taken away from the channel session', () => {
+  assert.deepEqual(claudeArgs('daemon'), ['--permission-mode', 'default', '--setting-sources', 'project', '--strict-mcp-config'],
     'the daemon reads the bot: a Telegram plugin enabled in the person\'s config must not start here and poll it too');
   assert.deepEqual(claudeArgs('channel'), ['--permission-mode', 'dontAsk', '--channels', 'plugin:telegram@claude-plugins-official', '--disallowedTools', 'WebSearch', 'WebFetch'],
-    'the channel session reads bank memos with nobody at the dashboard: no web, as in every claude -p Finnamon spawns');
-  assert.deepEqual(claudeArgs('session'), ['--permission-mode', 'dontAsk', '--setting-sources', 'project', '--strict-mcp-config', '--disallowedTools', 'WebSearch', 'WebFetch'],
-    'session mode: the daemon types the chat in, so the same no-web rule, and sealed against the plugin');
+    'channel mode is left as it was: the plugin would relay every dialog to paired phones, so no dialogs and no web');
+  assert.deepEqual(claudeArgs('session'), ['--permission-mode', 'default', '--setting-sources', 'project', '--strict-mcp-config'],
+    'session mode: no dontAsk and no web ban; every fetch asks, on the dashboard and (a Telegram turn) on the phone');
+  assert.ok(!claudeArgs('session').includes('dontAsk') && !claudeArgs('session').includes('--disallowedTools'));
   assert.ok(!claudeArgs('channel').includes('--strict-mcp-config') && !claudeArgs('channel').includes('--setting-sources'), 'channel mode is the one that loads the plugin');
 });
 
@@ -93,6 +94,16 @@ test('state: WORKING while output flows, then WAITING at the prompt or QUESTION 
   assert.equal(s.session.state, 'WORKING', 'fresh output');
   t.mock.timers.tick(3000);
   assert.equal(s.session.state, 'QUESTION');
+  // a permission dialog: a QUESTION at once, even while the title spinner keeps output coming (nothing may type into it)
+  procs[0].data('\x1b[1C1.\x1b[1CYes\r\n3.\x1b[1CNo\r\n\r\nEsc\x1b[1Cto\x1b[1Ccancel\x1b[1C·\x1b[1CTab\x1b[1Cto\x1b[1Camend\r\n');
+  procs[0].data('\x1b]0;◑ Touch RAN_IT\x07');
+  procs[0].data('\x1b]0;◒ Touch RAN_IT\x1b\\');   // a title ended by ST, not BEL: still not a line of text
+  assert.match(s.session.lastLine, /Esc\s*to\s*cancel/);
+  t.mock.timers.tick(1000);
+  assert.equal(s.session.state, 'QUESTION', 'the dialog footer wins over fresh output');
+  procs[0].data('⏺ Bash(touch RAN_IT)\r\n');
+  t.mock.timers.tick(1000);
+  assert.equal(s.session.state, 'WORKING', 'answered: the dialog is gone');
   s.stop(); procs[0].exit({ exitCode: 0 });                 // a stopped session goes DOWN and is not restarted
   assert.equal(s.session.state, 'DOWN');
   t.mock.timers.tick(60_000);

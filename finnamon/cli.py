@@ -574,7 +574,29 @@ def cmd_hook(a) -> None:
     """Claude Code PreToolUse hooks (see the assistant bundle's .claude/settings.json). reply-guard: the channel plugin's `reply` tool takes any chat
     id and any file path, and the session runs with dontAsk. browser-guard: in the browser-import session every Bash
     command must fit browser_command_ok; outside it the hook is a no-op. Exit 2 blocks the call; the message goes back
-    to the assistant."""
+    to the assistant. permission: the intercom's PermissionRequest hook (finnamon/approval.py); it prints a decision or
+    nothing, and nothing (also on any error) leaves the dialog to the person at the dashboard."""
+    if a.name == "secret-guard":   # every tool call, before any permission check: the protected paths are no one's to approve
+        from . import approval
+        try:
+            event = json.load(sys.stdin)
+            hit = approval.protected_path(str(event.get("tool_name") or ""), event.get("tool_input") or {})
+        except Exception as e:  # noqa: BLE001 - a guard that cannot read the call blocks it
+            die(f"blocked: secret-guard could not run ({e})", 2)
+        if hit:
+            die(f"blocked: {hit} is off limits to every tool (the household's secrets, database, keys and browser profiles); "
+                "nobody can approve it here or on the phone. If a person needs it, they do it themselves in a terminal.", 2)
+        return
+    if a.name == "permission":
+        from . import approval
+        try:
+            decision = approval.ask(json.load(sys.stdin), store.connect())
+        except Exception as e:  # noqa: BLE001 - never a decision by accident
+            print(f"finnamon: permission hook: {e}", file=sys.stderr)
+            return
+        if decision:
+            print(json.dumps(decision))
+        return
     try:   # a guard that crashes must still block (only exit 2 blocks; settings.json also maps any other failure to 2)
         event = json.load(sys.stdin)
         tool_input = event.get("tool_input") or {}
@@ -1831,7 +1853,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--new-group", action="store_true", help="the code may come from a new group, which becomes the household chat"); s.set_defaults(fn=cmd_owner)
     s = sp.add_parser("channel", help="who answers Telegram: session (default: the dashboard's conversation), on (Claude Code's channel plugin) or off (legacy: the daemon's own session)",
                      description="session: the daemon polls Telegram and types each message into the dashboard's intercom session (the default for new installs, no plugin). on: Claude Code's Telegram channel plugin reads the chat. off: the legacy mode, the daemon answers with its own separate claude -p session."); s.add_argument("action", choices=["on", "session", "off", "status"]); s.set_defaults(fn=cmd_channel)
-    s = sp.add_parser("hook", help="Claude Code hooks (stdin: the hook event JSON)"); s.add_argument("name", choices=["reply-guard", "browser-guard"]); s.set_defaults(fn=cmd_hook)
+    s = sp.add_parser("hook", help="Claude Code hooks (stdin: the hook event JSON)"); s.add_argument("name", choices=["reply-guard", "browser-guard", "permission", "secret-guard"]); s.set_defaults(fn=cmd_hook)
     s = sp.add_parser("property", help="stated assets a bank doesn't report (house, car), counted into net worth"); s.add_argument("action", choices=["list", "set", "remove"], nargs="?", default="list"); s.add_argument("name", nargs="?"); s.add_argument("value", nargs="?"); s.set_defaults(fn=cmd_property)
     s = sp.add_parser("account", help="list | add \"<name>\" --institution <bank> (a manual account, fed by import) | remove \"<name>\" (a manual account and its transactions) | type <account_id> <type>|--clear | merge | unmerge | failover | owner"); s.add_argument("action", choices=["list", "add", "remove", "type", "kind", "merge", "unmerge", "failover", "owner"]); s.add_argument("new", nargs="?"); s.add_argument("existing", nargs="?")
     s.add_argument("--institution", help="add: the bank's name (default: the first word of the account name)"); s.add_argument("--type", choices=list(imports.KINDS), default="checking"); s.add_argument("--owner"); s.add_argument("--mask", help="last 4 digits"); s.add_argument("--yes", action="store_true", help="remove: don't ask"); s.add_argument("--clear", action="store_true", help="type: back to the bank's own type")

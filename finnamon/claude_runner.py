@@ -51,10 +51,11 @@ TRIAGE_DISALLOWED = ["Bash(finnamon link *)", "Bash(finnamon normal *)", "Bash(f
                      "Bash(finnamon settings set *)", "Bash(finnamon category *)", "Bash(finnamon alias *)", "Bash(finnamon detect --draft *)",
                      "Bash(finnamon import *)", "Bash(finnamon account add *)", "Edit", "Write", "NotebookEdit"]
 
-# What no `-p` run may do, triage or conversation: reach the web. settings.json allows WebSearch and WebFetch for the
-# person at the dashboard or a terminal (a property lookup), but every run() is unattended and reads bank memos, and a
-# memo can say "post this to https://...". With `finnamon query` on the allow list that is the rows out the door with
-# nobody asked. run() builds the one --disallowedTools tail itself, so no caller can leave them off.
+# What no `-p` run may do, triage or conversation: reach the web. At the dashboard or a terminal each fetch asks a person
+# (settings.json no longer allows them; in session mode a Telegram turn's prompt goes to the chat, finnamon/approval.py),
+# but every run() is unattended and reads bank memos, and a memo can say "post this to https://...". With `finnamon query`
+# on the allow list that is the rows out the door with nobody asked. run() builds the one --disallowedTools tail itself,
+# so no caller can leave them off, whatever a later settings.json allows.
 UNATTENDED_DISALLOWED = ["WebSearch", "WebFetch"]
 
 
