@@ -4,7 +4,7 @@ A local page in Finnamon's own colours: net worth as a figure with its monthly c
 liabilities with each one's share (click the Property row to state what the house or the car is worth) beside a
 3, 6 or 12-month trend, an **Add account** menu (Link account: Plaid Link runs in
 the page, the bank's login opens in the same tab, nothing to copy; or Import CSV for a bank Plaid can't reach, a window that adds the manual account and takes its file, with a Fetch by AI option that runs the browser import in its own session, shown as an Import tab in the intercom), budgets as an overall bar plus the categories
-that matter with a **Manage** mode to change, add or remove them, the alerts sent to the household lately, or about
+that matter (a line under one says what it covers when its name doesn't: several categories, a merchant, or `fixed`) with a **Manage** mode to change, add or remove them, the alerts sent to the household lately, or about
 to be (open or unsent, each with **It's normal** and **Dismiss**, except a bank that needs a re-login or whose connection
 is expiring, which gets **Reconnect** in place of It's normal, as it does beside "needs a new login" in the accounts list:
 it opens Plaid's login page for that bank in a new tab, and within a minute of the login Finnamon syncs the bank, resolves
