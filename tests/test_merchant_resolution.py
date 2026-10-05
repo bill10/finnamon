@@ -136,8 +136,8 @@ def test_clear_removes_a_rule_written_as_typed_and_shows_an_ambiguous_name(house
 
 
 def test_a_recurring_changed_rule_by_name_also_keys_on_the_stream(house):
-    budgets.alias_set(house, "NETFLIX.COM", "Netflix Streaming")
     txn(house, "n1", "cc", "2026-09-05", 15.49, "NETFLIX.COM", None, None)
+    budgets.alias_set(house, "NETFLIX.COM", "Netflix Streaming")
     house.execute("INSERT INTO recurring (stream_id, account_id, direction, merchant_name, status, first_seen_at) VALUES ('s9','cc','outflow',NULL,'MATURE',?)", (AS_OF,))
     house.execute("UPDATE recurring SET description='NETFLIX.COM' WHERE stream_id='s9'")
     r = budgets.normal(house, "Netflix Streaming", kind="recurring_changed")

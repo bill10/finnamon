@@ -180,7 +180,7 @@ def test_command_surface(home, tg, capsys, monkeypatch, tmp_path):
     assert json.loads(run_cli(capsys, "budget", "remove", "groceries"))["removed"] is True
     with pytest.raises(SystemExit):
         run_cli(capsys, "budget", "set", "other", "10")
-    assert "Candidates:" in capsys.readouterr().err
+    assert "is not a category" in capsys.readouterr().err
     with pytest.raises(SystemExit):
         run_cli(capsys, "budget", "set", "zzzz", "10")
     assert "category list" in capsys.readouterr().err
@@ -198,7 +198,17 @@ def test_command_surface(home, tg, capsys, monkeypatch, tmp_path):
     with pytest.raises(SystemExit):
         run_cli(capsys, "category", "Whole Foods", "zzzz")
     assert json.loads(run_cli(capsys, "alias", "SQ *PMT 8827", "fence contractor"))["canonical"] == "fence contractor"
+    with pytest.raises(SystemExit):
+        run_cli(capsys, "alias", "Loan Payment Confirmation#%", "Bank of America mortgage")   # no such charge yet
+    assert "matches no transaction" in capsys.readouterr().err
+    txn(conn, "lp", "chk", "2026-09-11", 2400, "Loan Payment Confirmation# 998877", None, None)
     assert json.loads(run_cli(capsys, "alias", "Loan Payment Confirmation#%", "Bank of America mortgage"))["name"] == "Loan Payment Confirmation#%"
+    assert [a["matches"] for a in json.loads(run_cli(capsys, "alias", "--list"))] == [1, 1]
+    assert json.loads(run_cli(capsys, "alias", "--remove", "loan payment confirmation#%"))["removed"]["canonical"] == "Bank of America mortgage"
+    with pytest.raises(SystemExit):
+        run_cli(capsys, "alias", "--remove", "fence contractor")   # a merchant, not an alias's name: says which names to remove
+    assert "SQ *PMT 8827" in capsys.readouterr().err
+    conn.execute("DELETE FROM transactions WHERE transaction_id='lp'")   # the detectors below count the seed's charges only
     with pytest.raises(SystemExit):
         run_cli(capsys, "alias", "%", "everything")
     assert "literal characters" in capsys.readouterr().err

@@ -79,6 +79,7 @@ def test_sync_and_import_refresh_the_board(home, conn, monkeypatch, capsys):
 
 def test_a_failing_refresh_never_fails_the_write(home, conn, monkeypatch, capsys):
     seed(conn)
+    txn(conn, "t1", "chk", today(), 50, "WHOLEFDS #123", "Whole Foods")
     monkeypatch.setattr(charts, "refresh", lambda c=None: 1 / 0)
     cli.main(["alias", "WHOLEFDS #123", "WFM"])
     assert "charts not refreshed" in capsys.readouterr().err

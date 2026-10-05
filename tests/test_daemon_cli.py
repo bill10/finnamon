@@ -286,7 +286,7 @@ def test_budget_set_list_suggest_threshold_category_normal(conn):
     txn(conn, "now", "chk", "2026-09-10", 210, "WF", "Whole Foods", "mch_wf")
     assert budgets.budget_set(conn, "Groceries", 600)["category"] == "FOOD_AND_DRINK_GROCERIES"
     assert budgets.budget_set(conn, "shopping", 300, "amazon")["category"] == "GENERAL_MERCHANDISE_ONLINE_MARKETPLACES"
-    with pytest.raises(budgets.ResolveError):
+    with pytest.raises(ValueError, match="is not a category"):
         budgets.budget_set(conn, "stuff", 10)
     lst = budgets.budget_list(conn, "2026-09-19 12:00:00")
     g = next(b for b in lst if b["name"] == "groceries")

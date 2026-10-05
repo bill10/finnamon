@@ -19,7 +19,10 @@ def test_budget_remove_category_guard_alias_and_resolve_errors(conn):
     with pytest.raises(ValueError, match="detailed category"):
         budgets.category_set(conn, "Costco", "food")
     # aliases feed canonical_for; entity id still wins when Plaid knows the merchant
-    assert budgets.alias_set(conn, " SQ *PMT 8827 ", " fence contractor ") == {"name": "SQ *PMT 8827", "canonical": "fence contractor", "matches": 0, "distinct_names": 0}
+    with pytest.raises(ValueError, match="matches no transaction"):   # a typo, or a payee not seen yet, would alias nothing
+        budgets.alias_set(conn, " SQ *PMT 8827 ", " fence contractor ")
+    txn(conn, "sq", "chk", "2026-09-09", 412, "SQ *PMT 8827", None, None, "GENERAL_SERVICES", "GENERAL_SERVICES_OTHER_GENERAL_SERVICES")
+    assert budgets.alias_set(conn, " SQ *PMT 8827 ", " fence contractor ") == {"name": "SQ *PMT 8827", "canonical": "fence contractor", "matches": 1, "distinct_names": 1}
     assert budgets.canonical_for(conn, "sq *pmt 8827") == "fence contractor"
     assert budgets.canonical_for(conn, "Unknown Shop") == "Unknown Shop"
     txn(conn, "t", "chk", "2026-09-10", 10, "COSTCO WHSE", "Costco", "mch_costco")
@@ -48,11 +51,13 @@ def test_budget_remove_category_guard_alias_and_resolve_errors(conn):
     assert r["canonical"] == "fence contractor" and r["category"] == "HOME_IMPROVEMENT_REPAIR_AND_MAINTENANCE"  # override keyed on the alias canonical, as the prelude will compute it
     # resolution errors carry the candidate list (or none)
     with pytest.raises(budgets.ResolveError) as e:
-        budgets.budget_set(conn, "other", 1)
+        budgets.budget_set(conn, "other", 1, ["other"])
     assert e.value.candidates and "matches" in str(e.value)
     with pytest.raises(budgets.ResolveError) as e:
-        budgets.budget_set(conn, "zzzz", 1)
+        budgets.resolve_category("zzzz")
     assert e.value.candidates == [] and "no category" in str(e.value)
+    with pytest.raises(ValueError, match=r"'other' is not a category.*maybe \"Other income\" or .*, …\) or --merchant"):   # a budget's own name: what to say instead
+        budgets.budget_set(conn, "other", 1)
     # taxonomy leftovers: a lone token that hits exactly one code, and the listing
     assert taxonomy.resolve("sewage") == ("RENT_AND_UTILITIES_SEWAGE_AND_WASTE_MANAGEMENT", [])
     assert taxonomy.resolve("food-and-drink") == ("FOOD_AND_DRINK", [])
@@ -70,7 +75,7 @@ def test_normal_every_shape(conn):
     assert (r["canonical"], r["account_id"], r["max_amount"], r["kind"]) == ("mch_wf", "chk", 150, None)
     # an entity id is taken as-is; an ambiguous account is refused
     assert budgets.normal(conn, "mch_zzz")["canonical"] == "mch_zzz"
-    with pytest.raises(ValueError, match="matches 0 accounts"):
+    with pytest.raises(ValueError, match="matches no account; the closest"):
         budgets.normal(conn, "x", account="nothing-like-this")
     # from an alert on a stream (no transaction): merchant and kind come from the payload, alert gets resolved
     conn.execute("INSERT INTO alerts (tier, kind, key, payload_json, as_of) VALUES ('anomaly','anomaly:recurring_changed','anom:rec:s1','{\"merchant\": \"Comcast\"}',?)", (AS_OF,))

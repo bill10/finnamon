@@ -3,6 +3,8 @@ resolution: exact code → synonym → token match on Plaid's names → (ambiguo
 No model here, on purpose: a wrong budget category silently miscounts for months."""
 from __future__ import annotations
 
+import difflib
+
 # https://plaid.com/docs/api/products/transactions/#personal-finance-category-taxonomy
 DETAILED: dict[str, list[str]] = {
     "INCOME": ["DIVIDENDS", "INTEREST_EARNED", "RETIREMENT_PENSION", "TAX_REFUND", "UNEMPLOYMENT", "WAGES", "OTHER_INCOME"],
@@ -39,19 +41,19 @@ SYNONYMS: dict[str, str] = {
     "gas": "TRANSPORTATION_GAS", "fuel": "TRANSPORTATION_GAS", "car": "TRANSPORTATION", "auto": "TRANSPORTATION", "transport": "TRANSPORTATION",
     "transportation": "TRANSPORTATION", "parking": "TRANSPORTATION_PARKING", "rideshare": "TRANSPORTATION_TAXIS_AND_RIDE_SHARES",
     "uber": "TRANSPORTATION_TAXIS_AND_RIDE_SHARES", "transit": "TRANSPORTATION_PUBLIC_TRANSIT",
-    "rent": "RENT_AND_UTILITIES_RENT", "utilities": "RENT_AND_UTILITIES", "internet": "RENT_AND_UTILITIES_INTERNET_AND_CABLE",
+    "rent": "RENT_AND_UTILITIES_RENT", "internet": "RENT_AND_UTILITIES_INTERNET_AND_CABLE",
     "phone": "RENT_AND_UTILITIES_TELEPHONE", "electric": "RENT_AND_UTILITIES_GAS_AND_ELECTRICITY", "power": "RENT_AND_UTILITIES_GAS_AND_ELECTRICITY",
     "shopping": "GENERAL_MERCHANDISE", "amazon": "GENERAL_MERCHANDISE_ONLINE_MARKETPLACES", "clothes": "GENERAL_MERCHANDISE_CLOTHING_AND_ACCESSORIES",
     "clothing": "GENERAL_MERCHANDISE_CLOTHING_AND_ACCESSORIES", "electronics": "GENERAL_MERCHANDISE_ELECTRONICS",
     "pets": "GENERAL_MERCHANDISE_PET_SUPPLIES", "pet": "GENERAL_MERCHANDISE_PET_SUPPLIES", "vet": "MEDICAL_VETERINARY_SERVICES",
-    "subscriptions": "ENTERTAINMENT", "streaming": "ENTERTAINMENT_TV_AND_MOVIES", "entertainment": "ENTERTAINMENT", "games": "ENTERTAINMENT_VIDEO_GAMES",
+    "streaming": "ENTERTAINMENT_TV_AND_MOVIES", "entertainment": "ENTERTAINMENT", "games": "ENTERTAINMENT_VIDEO_GAMES",
     "music": "ENTERTAINMENT_MUSIC_AND_AUDIO", "movies": "ENTERTAINMENT_TV_AND_MOVIES",
     "medical": "MEDICAL", "health": "MEDICAL", "doctor": "MEDICAL_PRIMARY_CARE", "pharmacy": "MEDICAL_PHARMACIES_AND_SUPPLEMENTS", "dentist": "MEDICAL_DENTAL_CARE",
     "gym": "PERSONAL_CARE_GYMS_AND_FITNESS_CENTERS", "fitness": "PERSONAL_CARE_GYMS_AND_FITNESS_CENTERS", "haircut": "PERSONAL_CARE_HAIR_AND_BEAUTY",
     "personal care": "PERSONAL_CARE", "beauty": "PERSONAL_CARE_HAIR_AND_BEAUTY",
     "travel": "TRAVEL", "flights": "TRAVEL_FLIGHTS", "hotels": "TRAVEL_LODGING", "lodging": "TRAVEL_LODGING",
     "insurance": "GENERAL_SERVICES_INSURANCE", "childcare": "GENERAL_SERVICES_CHILDCARE", "daycare": "GENERAL_SERVICES_CHILDCARE",
-    "education": "GENERAL_SERVICES_EDUCATION", "tuition": "GENERAL_SERVICES_EDUCATION", "kids": "GENERAL_SERVICES_CHILDCARE",
+    "education": "GENERAL_SERVICES_EDUCATION", "tuition": "GENERAL_SERVICES_EDUCATION",
     "home": "HOME_IMPROVEMENT", "furniture": "HOME_IMPROVEMENT_FURNITURE", "hardware": "HOME_IMPROVEMENT_HARDWARE", "repairs": "HOME_IMPROVEMENT_REPAIR_AND_MAINTENANCE",
     "donations": "GOVERNMENT_AND_NON_PROFIT_DONATIONS", "charity": "GOVERNMENT_AND_NON_PROFIT_DONATIONS", "taxes": "GOVERNMENT_AND_NON_PROFIT_TAX_PAYMENT",
     "fees": "BANK_FEES", "bank fees": "BANK_FEES",
@@ -61,6 +63,15 @@ SYNONYMS: dict[str, str] = {
 EXACT: dict[str, str] = {
     "transfer": "TRANSFER_OUT_ACCOUNT_TRANSFER", "internal transfer": "TRANSFER_OUT_ACCOUNT_TRANSFER", "own transfer": "TRANSFER_OUT_ACCOUNT_TRANSFER",
     "mortgage": "LOAN_PAYMENTS_MORTGAGE_PAYMENT",
+}
+
+
+# A name that is several categories, never one: "utilities" is not rent (a renter would be over budget on the 1st).
+# Used where a list fits (a budget's name); `resolve` alone still refuses them with these as the candidates.
+# "subscriptions" and "kids" are in no category at all (a gym, Netflix, school shoes): they resolve to nothing, so a budget
+# by that name is refused and asks for its categories or merchants.
+GROUPS: dict[str, list[str]] = {
+    "utilities": [f"RENT_AND_UTILITIES_{d}" for d in DETAILED["RENT_AND_UTILITIES"] if d != "RENT"],
 }
 
 
@@ -76,6 +87,30 @@ def label(code: str) -> str:
     return (code[len(p) + 1:] if p else code).replace("_", " ").capitalize()
 
 
+def describe(code: str) -> str:
+    """What a category covers, as a person reads it: "Food and drink › Restaurant", or a primary with its parts
+    ("Rent and utilities: gas and electricity, internet and cable, rent, …"), so "all of it" is never a surprise."""
+    p = CODES.get(code)
+    if p:
+        return f"{label(p)} › {label(code)}"
+    return f"{label(code)} (all of it: {', '.join(label(f'{code}_{d}').lower() for d in DETAILED.get(code, []))})"
+
+
+def guessed(text: str, code: str) -> bool:
+    """True when `text` named `code` only through a synonym or a word match ("dining" → Restaurant), not as its code or label."""
+    t = text.strip().lower().replace("-", " ").replace("_", " ")
+    return t not in (code.lower().replace("_", " "), label(code).lower())
+
+
+def suggestions(text: str, limit: int = 4) -> list[str]:
+    """Categories a name that matched none might mean: each word's synonym ("car insurance" → Transportation, Insurance), then close spellings."""
+    words = text.lower().replace("-", " ").replace("_", " ").split()
+    hits = [SYNONYMS[w] for w in words if w in SYNONYMS]
+    names = {**SYNONYMS, **{label(c).lower(): c for c in list(DETAILED) + list(CODES)}}
+    hits += [names[m] for m in difflib.get_close_matches(text.lower().strip(), list(names), n=limit, cutoff=0.7)]
+    return list(dict.fromkeys(hits))[:limit]
+
+
 def resolve(text: str) -> tuple[str | None, list[str]]:
     """Returns (code, candidates). code is set when exactly one match; candidates lists options otherwise."""
     t = text.strip()
@@ -84,8 +119,13 @@ def resolve(text: str) -> tuple[str | None, list[str]]:
         return up, []
     if t.lower() in EXACT:
         return EXACT[t.lower()], []
+    by_label = [c for c in list(DETAILED) + list(CODES) if label(c).lower() == t.lower()]   # the name a picker or a reply showed: "Gas and electricity"
+    if len(by_label) == 1:
+        return by_label[0], []
     if t.lower() in SYNONYMS:
         return SYNONYMS[t.lower()], []
+    if t.lower() in GROUPS:
+        return None, GROUPS[t.lower()]
     words = t.lower().replace("-", " ").replace("_", " ").split()
     syn_hits = {SYNONYMS[w] for w in words if w in SYNONYMS}
     if len(syn_hits) == 1:
@@ -94,7 +134,7 @@ def resolve(text: str) -> tuple[str | None, list[str]]:
     hits = [c for c in list(DETAILED) + list(CODES) if all(w in c for w in tokens)] if tokens else []
     if len(hits) == 1:
         return hits[0], []
-    return None, hits
+    return None, hits or sorted(syn_hits)
 
 
 def listing() -> str:
