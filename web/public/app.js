@@ -723,7 +723,7 @@ function renderAlerts(s) {
       `<span class="tag ${tag[0]}">${tag[1]}</span></li>`;
   }).join('');
   const how = (a) => a.resolution === 'normal' ? `It’s normal${a.suppression_id ? ` (rule ${Number(a.suppression_id)})` : ''}` : a.resolution === 'dismissed' ? 'Dismissed'
-    : ({ reconnected: 'Reconnected', recovered: 'Synced again', unlinked: 'Bank removed' })[a.resolution] || 'Resolved';
+    : ({ reconnected: 'Reconnected', recovered: 'Synced again', superseded: 'Replaced by a newer alert', unlinked: 'Bank removed' })[a.resolution] || 'Resolved';
   $('alerts-resolved').hidden = !done.length;
   $('alerts-resolved-n').textContent = done.length;
   $('alerts-resolved-body').innerHTML = done.map(a => item(a, `<div class="when">${esc(how(a))} · ${esc(when(a.resolved_at))}</div></span>`) +

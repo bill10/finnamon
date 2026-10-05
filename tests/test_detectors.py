@@ -309,12 +309,12 @@ def test_sync_health_closes_on_the_next_good_sync_and_when_replaced(conn):
     conn.execute("UPDATE items SET status='ITEM_LOGIN_REQUIRED'")   # the stale bank turns out to want a login: one alert, the new one
     detect.run(conn, "2026-09-20 06:00:00", only=["sync_health"])
     old, login = alerts(conn, "sync_health")
-    assert (old["resolution"], login["resolved_at"]) == ("recovered", None)
+    assert (old["resolution"], login["resolved_at"]) == ("superseded", None)   # not "synced again": the bank has not synced
     detect.run(conn, "2026-09-21 06:00:00", only=["sync_health"])
     assert len(alerts(conn, "sync_health")) == 1 + 1 and alerts(conn, "sync_health")[-1]["resolved_at"] is None   # still one open
     conn.execute("UPDATE items SET status='good', last_synced_at='2026-09-21 07:00:00'")   # the bank came back by itself
     assert detect.run(conn, "2026-09-21 08:00:00", only=["sync_health"]) == []
-    assert [a["resolution"] for a in alerts(conn, "sync_health")] == ["recovered", "recovered"]
+    assert [a["resolution"] for a in alerts(conn, "sync_health")] == ["superseded", "recovered"]
     conn.execute("UPDATE items SET last_synced_at='2026-09-21 07:00:00'")
     assert len(detect.run(conn, "2026-09-23 08:00:00", only=["sync_health"])) == 1   # breaks again later: a new problem, a new alert
 
@@ -472,17 +472,34 @@ def test_recurring_price_hit_names_both_prices_and_dedups(conn):
     assert run(conn, "recurring_price", "2026-10-16 08:00:00") == []   # the new price, again: nothing changed
 
 
-@pytest.mark.parametrize("case", ["same_price", "variable_bill", "too_few_charges", "early_detection", "inactive", "old_charge", "normal_on_stream", "kindless_normal"])
+def test_recurring_price_accepted_then_raised_again_alerts(conn):
+    netflix(conn, [15.49, 15.49, 15.49, 17.99])
+    run(conn, "recurring_price")
+    budgets.normal(conn, alert_id=alerts(conn)[0]["id"])   # "that's expected": $17.99 is the price now
+    conn.execute("UPDATE suppressions SET created_at='2026-09-01'")
+    for i, d in ((4, "2026-10-15"), (5, "2026-11-15")):
+        txn(conn, f"netflix{i}", "cc", d, 17.99 if i == 4 else 22.99, "NETFLIX.COM", "Netflix", "mch_netflix", "ENTERTAINMENT", "ENTERTAINMENT_TV_AND_MOVIES")
+    conn.execute("UPDATE recurring SET last_amount=22.99, last_date='2026-11-15'")
+    assert len(run(conn, "recurring_price", "2026-11-16 08:00:00")) == 1   # above the accepted price: news again
+
+
+@pytest.mark.parametrize("case", ["same_price", "variable_bill", "too_few_charges", "early_detection", "inactive", "old_charge", "normal_on_stream", "kindless_normal",
+                                  "backfill", "second_plan_at_the_merchant"])
 def test_recurring_price_misses(conn, case):
     amounts = {"same_price": [15.49] * 3, "variable_bill": [82.10, 95.40, 101.75], "too_few_charges": [15.49, 17.99]}.get(case, [15.49, 15.49, 17.99])
     netflix(conn, amounts, status="EARLY_DETECTION" if case == "early_detection" else "MATURE", active=0 if case == "inactive" else 1)
+    if case == "backfill":   # the re-price happened before the first sync
+        conn.execute("UPDATE items SET first_synced_at='2026-09-16 00:00:00'")
+    if case == "second_plan_at_the_merchant":   # two live Netflix plans on one card: whose charge is whose is a guess
+        conn.execute("INSERT INTO recurring (stream_id, account_id, direction, merchant_name, merchant_entity_id, frequency, avg_amount, last_amount, first_date, last_date, "
+                     "status, first_seen_at) VALUES ('netflix-b','cc','outflow','Netflix','mch_netflix','MONTHLY',6.99,6.99,'2026-01-03','2026-09-03','MATURE','2026-02-01 00:00:00')")
     as_of = "2026-10-20 08:00:00" if case == "old_charge" else AS_OF
     if case == "kindless_normal":
         conn.execute("INSERT INTO suppressions (canonical, created_at) VALUES ('mch_netflix', '2026-09-01')")
     if case == "normal_on_stream":
         run(conn, "recurring_price")
         r = budgets.normal(conn, alert_id=alerts(conn)[0]["id"])
-        assert (r["kind"], r["stream_id"], r["canonical"], r["account_id"]) == ("recurring_price", "netflix", "mch_netflix", "cc")
+        assert (r["kind"], r["stream_id"], r["canonical"], r["account_id"], r["max_amount"]) == ("recurring_price", "netflix", "mch_netflix", "cc", 17.99)
         conn.execute("UPDATE suppressions SET created_at='2026-09-01'")
         conn.execute("DELETE FROM alerts")
     assert run(conn, "recurring_price", as_of) == []

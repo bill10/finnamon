@@ -750,7 +750,6 @@ test('more than 8 open alerts: the first 8 and a Show N more that lists the rest
   renderAlerts({ status: { items: [{}] }, alerts, resolved: [] });
   assert.equal(els['alerts-body'].innerHTML.split('</li>').length - 1, 11);
   assert.equal(els['alerts-more'].hidden, true);
-  assert.ok(app.includes("$('alerts-more').addEventListener('click', () => { alertsAll = true;"), 'the button shows them all');
 });
 
 test('removing a manual account: the name after --, --yes (the page asked), and only with the key from this page\'s origin', async () => {

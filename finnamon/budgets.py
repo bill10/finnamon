@@ -352,7 +352,7 @@ NO_RULE_NOTES = {
                    "To change the limit: finnamon budget set \"{budget}\" <amount>.",
     "budget_pace:over": "Resolved for this month; the {budget} budget is over its limit and alerts again next month if it goes over again. "
                         "To change the limit: finnamon budget set \"{budget}\" <amount>.",
-    "sync_health": "Resolved; it alerts again only if {institution} syncs and then has a new problem. Run finnamon doctor to see why it "
+    "sync_health": "Resolved; it alerts again if {institution}'s problem changes, or if it syncs and then breaks again. Run finnamon doctor to see why it "
                    "isn't syncing; if the bank wants a new login, reconnect it from the dashboard's Accounts.",
 }
 
@@ -413,6 +413,7 @@ def normal(conn: sqlite3.Connection, canonical: str | None = None, kind: str | N
         if kind == "recurring_price" == a["kind"]:   # "that's expected" is this subscription's new price, not every price at the merchant
             stream_id = p.get("stream_id")
             account_id = account_id or a["account_id"]
+            max_amount = max_amount if max_amount is not None else p.get("amount")   # a later rise above the accepted price still alerts
         if kind == "duplicate_charge":   # "normal" means this charge twice is fine, not every duplicate at the merchant
             # ponytail: a cap, so a smaller duplicate there stays muted too; an exact-amount column if that bites
             account_id = account_id or a["account_id"]
