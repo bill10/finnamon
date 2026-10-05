@@ -480,7 +480,7 @@ def alias_remove(conn: sqlite3.Connection, name: str) -> dict:
     ids = [x[0] for x in conn.execute("SELECT transaction_id FROM transactions WHERE name = ? OR (instr(?, '%') > 0 AND name LIKE ?)", (r["name"],) * 3)]
     def state() -> tuple[dict, dict]:
         marks = "SELECT value FROM json_each(:ids)"
-        rows = {x[0]: (x[1], x[2]) for x in conn.execute(f"SELECT transaction_id, canonical, category FROM tx_now WHERE transaction_id IN ({marks})", {"ids": json.dumps(ids)})}
+        rows = {x[0]: (x[1], x[2], x[3]) for x in conn.execute(f"SELECT transaction_id, canonical, category, account_id FROM tx_now WHERE transaction_id IN ({marks})", {"ids": json.dumps(ids)})}
         counted = {b[1]: {x[0] for x in conn.execute(f"SELECT transaction_id FROM tx_now t WHERE transaction_id IN ({marks}) AND pending=0 AND {SPEND} AND {MATCH}",
                                                        {"ids": json.dumps(ids), "bid": b[0]})} for b in conn.execute("SELECT id, name FROM budgets WHERE active=1")}
         return rows, counted
@@ -489,12 +489,14 @@ def alias_remove(conn: sqlite3.Connection, name: str) -> dict:
         conn.execute("DELETE FROM merchant_alias WHERE name=?", (r["name"],))
         after, counted_after = state()
     out = {"removed": {"name": r["name"], "canonical": r["canonical"]}, "matches": len(ids)}
-    renamed = {before[t][0].lower() for t in before if t in after and after[t][0] != before[t][0]}
+    # a "normal" rule the way the prelude applies it: that exact canonical, that account or any; never a subscription's (keyed on its stream)
+    renamed = [{"c": before[t][0], "a": before[t][2]} for t in before if t in after and after[t][0] != before[t][0]]
     keyed = {k: v for k, v in (
         ("budgets", sorted(n for n, got in counted_before.items() if got - counted_after.get(n, set()))),
         ("charges_recategorized", sum(1 for t in before if t in after and after[t][1] != before[t][1])),
-        ("suppressions", conn.execute("SELECT count(*) FROM suppressions WHERE lower(canonical) IN (SELECT value FROM json_each(?))",
-                                      (json.dumps(sorted(renamed)),)).fetchone()[0])) if v}
+        ("suppressions", conn.execute("SELECT count(DISTINCT s.id) FROM suppressions s JOIN json_each(?) r ON s.canonical = json_extract(r.value, '$.c') "
+                                      "AND (s.account_id IS NULL OR s.account_id = json_extract(r.value, '$.a')) AND COALESCE(s.kind, '') <> 'anomaly:recurring_changed'",
+                                      (json.dumps(renamed),)).fetchone()[0])) if v}
     if keyed:
         out["still_keyed_on_it"] = keyed
         out["warning"] = (f"'{r['canonical']}' no longer names those charges, so what was set up under that name stops covering them: "

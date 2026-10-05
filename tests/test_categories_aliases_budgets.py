@@ -208,6 +208,12 @@ def test_removing_an_alias_says_what_stops_covering_its_charges(conn):
     budgets.alias_set(conn, "BOFA MTG", "BofA mortgage")
     budgets.category_set(conn, "BofA mortgage", "mortgage")
     assert budgets.alias_remove(conn, "Loan Payment Confirmation#%")["still_keyed_on_it"] == {"charges_recategorized": 1}
+    # a "normal" rule counts only where the prelude would apply it to these charges
+    txn(conn, "n1", "cc", "2026-09-06", 15, "NETFLIX.COM 123", None, None, "ENTERTAINMENT", "ENTERTAINMENT_TV_AND_MOVIES")
+    budgets.alias_set(conn, "NETFLIX.COM 123", "Netflix")
+    for kind, canonical, account in (("anomaly:recurring_changed", "Netflix", None), (None, "Netflix", "chk"), (None, "NETFLIX", None), (None, "Netflix", "cc")):
+        conn.execute("INSERT INTO suppressions (kind, canonical, account_id) VALUES (?,?,?)", (kind, canonical, account))
+    assert budgets.alias_remove(conn, "NETFLIX.COM 123")["still_keyed_on_it"] == {"suppressions": 1}
     # charges Plaid names by entity id keep their name and their budget: no warning
     txn(conn, "e1", "cc", "2026-09-07", 30, "RECOLOGY 123", "Recology", "mch_rec", "RENT_AND_UTILITIES", "RENT_AND_UTILITIES_SEWAGE_AND_WASTE_MANAGEMENT")
     budgets.alias_set(conn, "RECOLOGY 123", "trash")
