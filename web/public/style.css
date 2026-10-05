@@ -224,9 +224,11 @@ details.bank .note button.link { font-size: 13px; margin-left: 4px; }   /* Recon
 .prev-t td.pn { white-space: normal; width: 100%; overflow-wrap: anywhere; }
 .prev-t td.out { color: var(--neg); } .prev-t td.in { color: var(--mint-700); }
 .prev .flip { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin-top: 8px; cursor: pointer; }
+.eactions .err:empty { display: none; }
+.prev .flip .hint { flex-basis: 100%; margin: 0 0 0 26px; color: var(--muted); font-size: 13px; }
 .prev .flip input { width: 18px; height: 18px; margin: 0; }
-.eactions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 10px; }
-.eactions .err { margin-right: auto; color: var(--error); font-size: 13px; }
+.eactions { flex-wrap: wrap; display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 10px; }
+.eactions .err { flex: 1 0 100%; margin-right: auto; color: var(--error); font-size: 13px; }
 
 /* budgets */
 .overall .row { align-items: baseline; }

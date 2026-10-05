@@ -481,7 +481,7 @@ function renderImport(s) {
     if (n !== ticket) return;
     if (r?.status === 401) return lock();
     if (!r || !r.ok) { box.hidden = true; $('i-err').textContent = out.error || 'The page lost the server; reload to see where things stand.'; return; }
-    if (!out.rows) { box.hidden = true; $('i-err').textContent = `No rows could be read${out.skipped ? ` (${plural(out.skipped, 'row')} skipped)` : ''}. Dates should read like 2026-09-30 or 09/30/2026 and amounts like 1234.56; a file with 1.234,56 amounts is not understood.`; return; }
+    if (!out.rows) { box.hidden = true; $('i-err').textContent = `No rows could be read${out.skipped ? ` (${plural(out.skipped, 'row')} skipped)` : ''}. Dates need to look like 2026-09-30 or 09/30/2026, and amounts like 1234.56 (not 1.234,56).`; return; }
     box.innerHTML = `<p class="muted">${plural(out.rows, 'row')} read${out.skipped ? `, ${plural(out.skipped, 'row')} unreadable` : ''}; the first ${out.sample.length}:</p>` +
       `<table class="prev-t"><tbody>${out.sample.map(x => `<tr><td>${esc(x.date)}</td><td class="pn">${esc(x.name)}</td><td class="num">${money(Math.abs(x.amount))}</td><td class="${x.reads_as === 'spending' ? 'out' : 'in'}">${x.reads_as}</td></tr>`).join('')}</tbody></table>` +
       `<label class="flip"><input type="checkbox" id="i-flip"${flip ? ' checked' : ''}> Flip signs <span class="hint">if purchases show as money in (some card exports list spending as positive)</span></label>`;
