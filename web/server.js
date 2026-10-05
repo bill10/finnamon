@@ -402,7 +402,7 @@ export function createSession({ spawn = spawnPty, inbound = 'daemon', cmd = conf
     session.pty = pty; session.startedAt = Date.now(); setState('WORKING'); onStart();
     pty.onData((data) => {
       push(data); session.lastOutputAt = Date.now();
-      const text = data.replace(/\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r/g, '');
+      const text = data.replace(/\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\r/g, '');   // OSC ends in BEL or ST
       const lines = text.split('\n').map(s => s.trim()).filter(Boolean);
       if (lines.length) session.lastLine = lines[lines.length - 1];
       onOutput(data);
@@ -809,9 +809,9 @@ export async function main() {
   // Talk to Finnamon, and in session mode Telegram, type into the household session and read the answer off its own transcript.
   const sessionTranscript = () => (term?.session.pty && intercom ? transcriptPath(config.assistant, intercom.get().id) : null);
   const talk = createTalk({ write: (d) => term?.write(d), broadcast, idle: () => term?.session.state === 'WAITING', asking: () => term?.session.state === 'QUESTION',
-                            transcript: sessionTranscript });
+                            since: () => term?.session.startedAt || 0, transcript: sessionTranscript });
   const relay = createRelay({ write: (d) => term?.write(d), idle: () => term?.session.state === 'WAITING', asking: () => term?.session.state === 'QUESTION',
-                              transcript: sessionTranscript });
+                              since: () => term?.session.startedAt || 0, transcript: sessionTranscript });
   const app = buildApp({ inbound, allowHost: lo.host, allowOrigin: lo.origin, startImport: (bank) => imports.start(bank), talk, relay, update: process.env.FINNAMON_DEMO ? null : updater() });   // a demo has nothing to update: `finnamon update` would act on the household
   const server = createServer(app);
   // A browser sends the page's Origin; a non-browser client on this machine (wscat, a test) sends none. Any other origin

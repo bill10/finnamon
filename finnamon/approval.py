@@ -61,10 +61,12 @@ def describe(tool: str, inp: dict) -> tuple[str, bool]:
                 detail += " (host not a valid name)"
     elif tool == "WebSearch":
         detail = str(inp.get("query") or "")
-    else:
-        detail = next((str(inp[k]) for k in ("command", "file_path", "notebook_path", "path", "url", "pattern") if inp.get(k)), "")
-        if not detail:
-            detail = next((str(v) for v in inp.values() if isinstance(v, str) and v), "")
+    elif tool == "Bash":
+        detail = str(inp.get("command") or "")
+    elif tool == "Read" and set(inp) <= {"file_path", "offset", "limit"}:
+        detail = str(inp.get("file_path") or "")
+    else:   # Write's content, Edit's old and new text, an agent's prompt: the whole input, or no Allow
+        detail = json.dumps(inp, ensure_ascii=False, indent=1)
     shown = esc(_hidden(detail))
     whole = len(shown) <= DETAIL_MAX
     if not whole:
@@ -73,14 +75,27 @@ def describe(tool: str, inp: dict) -> tuple[str, bool]:
     return f"🔐 The assistant asks to {esc(what)}: <code>{shown}</code>", whole
 
 
-def _entries(path: str, offset: int = 0) -> tuple[list[dict], int]:
-    """Whole lines of the transcript from offset; a line still being written waits for the next read."""
+TAIL_BYTES = 2 << 20   # the first read: the newest prompt and its tool call sit at the end of a transcript that only grows
+
+
+def _entries(path: str, offset: int | None = None) -> tuple[list[dict], int]:
+    """Whole lines of the transcript from offset (None: its last TAIL_BYTES); a line still being written waits for the
+    next read. A turn whose prompt lies further back than the tail is not recognised as a phone turn: the dashboard's
+    dialog still asks, the phone just is not told."""
     try:
         with open(path, "rb") as f:
+            if offset is None:
+                offset = max(0, f.seek(0, os.SEEK_END) - TAIL_BYTES)
+                skip = offset > 0
+            else:
+                skip = False
             f.seek(offset)
             data = f.read()
     except OSError:
-        return [], offset
+        return [], offset or 0
+    if skip:   # started mid-line
+        cut = data.find(b"\n") + 1
+        data, offset = data[cut:], offset + cut
     end = data.rfind(b"\n") + 1
     out = []
     for line in data[:end].splitlines():
@@ -105,7 +120,7 @@ def telegram_turn(entries: list[dict]) -> bool:
         if e.get("type") != "user" or e.get("isMeta") or e.get("isSidechain"):
             continue
         t = _user_text(e).strip()
-        if t and not t.startswith("<"):
+        if t and (not t.startswith("<") or t.startswith(("<command-name>", "<bash-input>"))):   # a dashboard /command or ! line is a prompt too
             last = t
     return last.startswith(TAG)
 
@@ -121,11 +136,12 @@ def results(entries: list[dict]) -> set:
 
 
 def tool_use_id(entries: list[dict], tool: str, inp, done: set) -> str | None:
-    """The newest call of this tool with this input that has no result yet: the one the dialog is about. An input that
-    differs (Claude Code adding a field) falls back to the newest open call of the same tool."""
-    open_calls = [b for e in entries if e.get("type") == "assistant" for b in _blocks(e, "tool_use") if b.get("name") == tool and b.get("id") not in done]
-    exact = [b for b in open_calls if b.get("input") == inp]
-    return (exact or open_calls or [{}])[-1].get("id")
+    """The newest call of this tool with exactly this input that has no result yet: the one the dialog is about. No
+    guessing on a near match: a parallel call of the same tool finishing would read as the dashboard's answer and take
+    the buttons away from a dialog still up. Without a match the phone keeps its buttons until a tap or the timeout."""
+    calls = [b for e in entries if e.get("type") == "assistant" for b in _blocks(e, "tool_use")
+             if b.get("name") == tool and b.get("input") == inp and b.get("id") not in done]
+    return calls[-1].get("id") if calls else None
 
 
 def denied_by(tool: str, inp: dict, deny: list[str]) -> str | None:
@@ -184,7 +200,8 @@ def ask(event: dict, conn: sqlite3.Connection, *, deny: list[str] | None = None,
     if not chat:
         return None
     # A hook killed before its finally (claude restarted under it) leaves its row; nothing can answer it now.
-    conn.execute("DELETE FROM state WHERE key LIKE ? AND json_extract(value, '$.deadline') < ?", (KEY + "%", time.time()))
+    # A wall-clock margin of a whole wait: a clock stepped forward (a wake from sleep) must not take a live row.
+    conn.execute("DELETE FROM state WHERE key LIKE ? AND json_extract(value, '$.deadline') < ?", (KEY + "%", time.time() - wait_s))
     done = results(entries)
     tid = tool_use_id(entries, tool, inp, done)
     entries = []   # from here on only what is new is read: the household's transcript only grows
@@ -193,13 +210,19 @@ def ask(event: dict, conn: sqlite3.Connection, *, deny: list[str] | None = None,
     buttons = [{"text": "✅ Allow", "callback_data": f"perm:{rid}:allow"}] if whole else []
     buttons.append({"text": "❌ Deny", "callback_data": f"perm:{rid}:deny"})
     ask_line = "Allow it? (or answer at the dashboard)" if whole else "Too long to approve from here: answer at the dashboard, or deny it."
+    # The row goes in before the buttons go out: a tap can reach the daemon before send_message returns here.
+    row = {"status": "waiting", "chat": str(chat), "message_id": None, "text": text, "whole": whole, "deadline": time.time() + wait_s}
+    waiting = json.dumps(row)
+    store.set_state(conn, KEY + rid, waiting)
     try:
         mid = telegram.send_message(chat, f"{text}\n{ask_line}", reply_markup={"inline_keyboard": [buttons]})
     except telegram.TelegramError as e:
         print(f"finnamon: permission prompt not sent to Telegram: {e}", file=sys.stderr)
+        conn.execute("DELETE FROM state WHERE key=?", (KEY + rid,))
         return None
-    waiting = json.dumps({"status": "waiting", "chat": str(chat), "message_id": mid, "text": text, "whole": whole, "deadline": time.time() + wait_s})
-    store.set_state(conn, KEY + rid, waiting)
+    with_mid = json.dumps({**row, "message_id": mid})
+    if _settle(conn, rid, waiting, json.loads(with_mid)):   # else a tap already settled it; the loop reads it
+        waiting = with_mid
     deadline = clock() + wait_s
 
     def finish(note: str) -> None:
@@ -225,9 +248,16 @@ def ask(event: dict, conn: sqlite3.Connection, *, deny: list[str] | None = None,
         except (ValueError, OSError):   # not the main thread (a test runner): the expired-row sweep above covers it
             pass
     settled = False
+    parent = os.getppid()
     try:
         while True:
+            if os.getppid() != parent:   # claude died under us (a SIGKILL forwards nothing): nobody would read a decision
+                raise SystemExit(1)
             row = json.loads(store.get_state(conn, KEY + rid) or "{}")
+            if not row:   # swept from under us; the request can no longer be answered from the phone
+                settled = True
+                finish("⏱ This request expired before anyone answered.")
+                return _decision("deny", "The phone request expired before anyone answered.")
             if row.get("status") in ("allow", "deny"):   # a press; the daemon already updated the message
                 settled = True
                 if dashboard_answered():   # the dashboard got there first; the tap changed nothing
@@ -243,8 +273,8 @@ def ask(event: dict, conn: sqlite3.Connection, *, deny: list[str] | None = None,
                     settled = True
                     finish(f"⏱ No answer within {round(wait_s / 60)} minutes, so it was denied.")
                     return _decision("deny", f"Nobody answered on Telegram or at the dashboard within {round(wait_s / 60)} minutes.")
-                continue   # a press landed in the same instant: read it on the next pass
-            sleep(poll_s)
+                continue
+            sleep(poll_s)   # a lost settle is a press landing in the same instant: read on the next pass
     finally:
         if not settled and _settle(conn, rid, waiting, {"status": "gone"}):
             finish("The assistant stopped before anyone answered.")
@@ -266,9 +296,11 @@ def press(conn: sqlite3.Connection, cq: dict) -> str:
         return "Only the household can answer this."
     waiting = store.get_state(conn, KEY + rid)
     row = json.loads(waiting or "{}")
-    if row.get("status") != "waiting" or row.get("deadline", 0) < time.time() or str(row.get("message_id")) != str(msg.get("message_id")):
+    # message_id is None only between the hook storing the row and Telegram returning the id; the id in the button
+    # (64 random bits, only ever in that message) is what ties a tap to its request.
+    if row.get("status") != "waiting" or row.get("deadline", 0) < time.time() or row.get("message_id") not in (None, msg.get("message_id")):
         try:
-            telegram.edit_message(chat, msg.get("message_id"), f"{msg.get('text') and esc(msg['text']) or 'Permission request'}\n(no longer waiting)")
+            telegram.edit_message(chat, msg.get("message_id"), f"{esc(str(msg.get('text') or 'Permission request')[:3000])}\n(no longer waiting)")
         except telegram.TelegramError:
             pass
         return "That request is no longer waiting."

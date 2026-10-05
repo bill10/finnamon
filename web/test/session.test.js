@@ -97,6 +97,8 @@ test('state: WORKING while output flows, then WAITING at the prompt or QUESTION 
   // a permission dialog: a QUESTION at once, even while the title spinner keeps output coming (nothing may type into it)
   procs[0].data('\x1b[1C1.\x1b[1CYes\r\n3.\x1b[1CNo\r\n\r\nEsc\x1b[1Cto\x1b[1Ccancel\x1b[1C·\x1b[1CTab\x1b[1Cto\x1b[1Camend\r\n');
   procs[0].data('\x1b]0;◑ Touch RAN_IT\x07');
+  procs[0].data('\x1b]0;◒ Touch RAN_IT\x1b\\');   // a title ended by ST, not BEL: still not a line of text
+  assert.match(s.session.lastLine, /Esc\s*to\s*cancel/);
   t.mock.timers.tick(1000);
   assert.equal(s.session.state, 'QUESTION', 'the dialog footer wins over fresh output');
   procs[0].data('⏺ Bash(touch RAN_IT)\r\n');

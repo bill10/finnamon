@@ -440,8 +440,8 @@ test('relay route: bearer key only, only in session mode, and the relay\'s answe
   } finally { session.close(); daemon.close(); }
 });
 
-test('an open tool call is a dialog nothing may type into, until its result, the turn\'s end, or OPEN_CALL_MS', async () => {
-  const { openToolCall, OPEN_CALL_MS, createRelay } = await import('../talk.js');
+test('an open tool call is a dialog nothing may type into, until its result, the turn\'s end, or a restart of the session', async () => {
+  const { openToolCall, createRelay } = await import('../talk.js');
   const d = mkdtempSync(join(tmpdir(), 'finnamon-open-'));
   const file = join(d, 'session.jsonl');
   const now = Date.parse('2026-10-04T12:00:00Z');
@@ -456,8 +456,10 @@ test('an open tool call is a dialog nothing may type into, until its result, the
     assert.equal(openToolCall(file, now), false, 'answered (run, or No at the dashboard)');
     put(user('hi'), call('a'), said('end_turn', text('done')));
     assert.equal(openToolCall(file, now), false, 'a turn that ended');
-    put(call('a', now - OPEN_CALL_MS - 1));
-    assert.equal(openToolCall(file, now), false, 'left behind by a crash, not waiting on anyone');
+    put(call('a', now - 1));
+    assert.equal(openToolCall(file, now), false, 'from before this session started: left behind by a crash or restart');
+    put(call('a', now - 6 * 3600_000));
+    assert.equal(openToolCall(file, now - 7 * 3600_000), true, 'a dashboard dialog may wait for hours, and still blocks');
 
     // the relay: a quiet session with an open call is a dialog whose footer a redraw hid; the phone line waits
     put(user('[telegram · bill] first'), call('a'));
@@ -482,10 +484,19 @@ test('an open tool call is a dialog nothing may type into, until its result, the
     appendFileSync(file, [user(typed[1]), said('end_turn', text('late'))].map(e => JSON.stringify(e)).join('\n') + '\n');
     assert.deepEqual(await q, { reply: 'late' });
 
+    // and so is a dialog whose footer a redraw hid: quiet, with the turn's tool call open
+    const r2 = createRelay({ write: () => {}, transcript: () => file, pollMs: 5, idle: () => true, asking: () => false,
+                             open: (p) => openToolCall(p, now), type: (_w, line) => {
+                               typed.push(line); appendFileSync(file, [user(line), call('h')].map(e => JSON.stringify(e)).join('\n') + '\n'); } });
+    const h = r2.ask({ from: 'jane', text: 'fourth' }, 1000);
+    await new Promise(r => setTimeout(r, 1300));
+    appendFileSync(file, [result('h'), said('end_turn', text('after the dialog'))].map(e => JSON.stringify(e)).join('\n') + '\n');
+    assert.deepEqual(await h, { reply: 'after the dialog' });
+
     // Talk: the same guard, but only for a quiet session (a running tool keeps output coming, and a line is queued)
     put(user('hi'), call('b', Date.now()));
     let idle = true;
-    const talk = createTalk({ write: () => {}, type: () => assert.fail('typed into a dialog'), transcript: () => file, broadcast: () => {}, idle: () => idle });
+    const talk = createTalk({ write: () => {}, type: () => assert.fail('typed into a dialog'), transcript: () => file, broadcast: () => {}, idle: () => idle, since: () => now });
     try {
       assert.match(talk.heard('yes', { utterance: 'utterance-20' }).error, /asking something/);
       idle = false;
