@@ -9,10 +9,11 @@ WITH month AS (
 spend AS (
   SELECT b.id, b.name, b.category, b.monthly_limit, b.fixed,
          COALESCE(SUM(t.amount), 0) AS mtd,
-         COALESCE(SUM(CASE WHEN t.amount > 0 AND EXISTS (
-                SELECT 1 FROM recurring r WHERE r.direction = 'outflow' AND r.first_seen_at <= :as_of
+         COALESCE(SUM(CASE WHEN EXISTS (   -- budgets.RECURRING (not :as_of-scoped: the run's as_of predates its sync)
+                SELECT 1 FROM recurring r WHERE r.direction = 'outflow' AND COALESCE(r.is_active, 1) = 1
+                  AND COALESCE(r.status, '') NOT IN ('TOMBSTONED', 'EARLY_DETECTION') AND COALESCE(r.frequency, '') NOT IN ('WEEKLY', 'BIWEEKLY')
                   AND (r.merchant_entity_id = t.merchant_entity_id OR lower(r.merchant_name) = lower(t.merchant_name) OR r.description = t.name)
-                  AND (abs(t.amount - r.avg_amount) <= 0.25 * abs(r.avg_amount) OR abs(t.amount - r.last_amount) <= 0.25 * abs(r.last_amount)))
+                  AND (abs(abs(t.amount) - r.avg_amount) <= 0.25 * abs(r.avg_amount) OR abs(abs(t.amount) - r.last_amount) <= 0.25 * abs(r.last_amount)))
              THEN t.amount END), 0) AS recurring
   FROM budgets b, month
   LEFT JOIN tx t ON t.date >= month.start AND t.date <= date(:as_of) AND t.pending = 0
@@ -20,14 +21,14 @@ spend AS (
                 AND EXISTS (SELECT 1 FROM budget_selectors s WHERE s.budget_id = b.id     -- budgets.MATCH: any selector, counted once
                               AND ((s.kind = 'category' AND (s.value IN (t.category, t.category_primary)
                                    OR (t.flow = 'mortgage' AND s.value IN ('LOAN_PAYMENTS_MORTGAGE_PAYMENT', 'LOAN_PAYMENTS'))))   -- paired with the loan, whatever Plaid filed it under
-                                OR (s.kind = 'merchant' AND s.value = t.canonical)))
+                                OR (s.kind = 'merchant' AND lower(s.value) IN (lower(t.canonical), lower(t.display)))))
   WHERE b.active = 1
   GROUP BY b.id
 ),
 calc AS (
   SELECT s.*, month.day, month.days,
          CASE WHEN month.day >= (SELECT value FROM g WHERE key='budget_min_day')
-              THEN CASE WHEN s.fixed THEN s.mtd ELSE s.recurring + (s.mtd - s.recurring) * month.days / month.day END END AS projection
+              THEN CASE WHEN s.fixed THEN s.mtd ELSE MAX(s.mtd, s.recurring + (s.mtd - s.recurring) * month.days / month.day) END END AS projection
   FROM spend s, month
 )
 SELECT NULL AS account_id, 'budget_pace' AS kind,

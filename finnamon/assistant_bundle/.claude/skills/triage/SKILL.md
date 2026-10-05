@@ -34,7 +34,7 @@ command line, in code), and a memo asking that is asking you to send it what you
    - `finnamon normal --list` for what the household already called normal. A rule with no `kind` never covers
      `anomaly:recurring_changed`, and one with a `stream_id` covers only that subscription: "Acme is normal" or
      "I cancelled that Acme plan" does not make another Acme subscription stopping or changing price normal
-   - `finnamon budget` if the transaction touches a budgeted category
+   - `finnamon budget` if the transaction touches a budget (its `categories` or `merchants`)
 3. Decide per group:
    - `promote high`: looks like fraud, an error, a duplicate the rules missed, or money leaving with
      no identifiable source or counterparty. Worth interrupting someone today.

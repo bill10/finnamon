@@ -50,11 +50,26 @@ def test_recurring_bill_is_counted_once_not_projected(conn):
     # a one-off at the same merchant far from the stream's amount stays variable
     txn(conn, "x", "chk", "2026-09-05", 400, "LITTLE SPROUTS", "Little Sprouts", None, "GENERAL_SERVICES", "GENERAL_SERVICES_CHILDCARE")
     assert budgets.budget_list(conn, "2026-09-06 12:00:00")[0]["recurring"] == 1500
-    # a stream Plaid first saw after as_of was unknown then: budget list --as-of and the detector both project the bill
+    # a stream first stored after as_of still counts: a run takes as_of before its sync stamps first_seen_at
     conn.execute("UPDATE recurring SET first_seen_at='2026-09-10 06:00:00'")
-    conn.execute("DELETE FROM transactions WHERE transaction_id='x'"); conn.execute("DELETE FROM alerts")
-    assert budgets.budget_list(conn, "2026-09-06 12:00:00")[0]["recurring"] == 0
-    assert pace_alerts(conn, "2026-09-06 12:00:00")[0]["projection"] == budgets.budget_list(conn, "2026-09-06 12:00:00")[0]["pace"] == 7650
+    assert budgets.budget_list(conn, "2026-09-06 12:00:00")[0]["recurring"] == 1500
+
+
+def test_recurring_needs_a_live_monthly_stream_and_a_refund_never_projects_below_spent(conn):
+    seed(conn)
+    budgets.budget_set(conn, "childcare", 1600, "GENERAL_SERVICES_CHILDCARE")
+    stream(conn, "s-dc", "Little Sprouts", 1500)
+    txn(conn, "dc", "chk", "2026-09-03", 1500, "LITTLE SPROUTS", "Little Sprouts", None, "GENERAL_SERVICES", "GENERAL_SERVICES_CHILDCARE")
+    txn(conn, "rf", "chk", "2026-09-04", -300, "PARK DEPT REFUND", "Park Dept", None, "GENERAL_SERVICES", "GENERAL_SERVICES_CHILDCARE")
+    b = budgets.budget_list(conn, "2026-09-06 12:00:00")[0]
+    assert (b["spent"], b["pace"]) == (1200, 1200)                             # 1500 + -300 * 5 would be -0; never below spent
+    assert pace_alerts(conn, "2026-09-06 12:00:00") == []
+    txn(conn, "rv", "chk", "2026-09-05", -1500, "LITTLE SPROUTS REVERSAL", "Little Sprouts", None, "GENERAL_SERVICES", "GENERAL_SERVICES_CHILDCARE")
+    assert budgets.budget_list(conn, "2026-09-06 12:00:00")[0]["recurring"] == 0   # the bill's reversal nets in the recurring part, not projected
+    for change in ("is_active=0", "status='TOMBSTONED'", "frequency='WEEKLY'"):   # stopped, or recurring within the month: projected
+        conn.execute(f"UPDATE recurring SET is_active=1, status='MATURE', frequency='MONTHLY'"); conn.execute(f"UPDATE recurring SET {change}")
+        conn.execute("DELETE FROM transactions WHERE transaction_id IN ('rf','rv')")
+        assert budgets.budget_list(conn, "2026-09-06 12:00:00")[0]["recurring"] == 0, change
 
 
 def test_fixed_budget_is_never_projected(conn):
@@ -86,8 +101,15 @@ def test_several_categories_and_merchants_count_each_transaction_once(conn):
     wt = [b for b in budgets.budget_list(conn, AS_OF) if b["name"] == "water and trash"][0]
     assert wt["category"] is None and wt["merchants"] == ["Seattle Public Utilities", "RECOLOGY"]
     assert conn.execute("SELECT value FROM budget_selectors WHERE label='Blue Bottle'").fetchone()[0] == "mch_bb"   # canonical_for, as category rules
-    a, = pace_alerts(conn, AS_OF)                                               # only water and trash: 165 * 30/19 = 260 >= 200
-    assert (a["budget"], a["spent"], a["category"]) == ("water and trash", 165, None)
+    # typed in another case, or as `display` shows it after an alias: still matched, and the reply says how many charges
+    assert budgets.budget_set(conn, "trash", 50, merchants=["recology"])["matches"] == {"recology": 1}
+    budgets.alias_set(conn, "BLUE BOTTLE", "my coffee place")
+    assert budgets.budget_set(conn, "cafe", 50, merchants=["My Coffee Place"])["matches"] == {"My Coffee Place": 1}   # display, entity id kept
+    a = {a["budget"]: a for a in pace_alerts(conn, AS_OF)}["water and trash"]   # 165 * 30/19 = 260 >= 200
+    assert (a["spent"], a["category"]) == (165, None)
+    budgets.budget_remove(conn, "dining")
+    budgets.budget_set(conn, "dining", 300)                                    # re-added from the dashboard: starts over
+    assert [b["covers"] for b in budgets.budget_list(conn, AS_OF) if b["name"] == "dining"] == [["Restaurant"]]
 
 
 def test_cli_repeats_flags(home, conn, capsys):
@@ -99,13 +121,13 @@ def test_cli_repeats_flags(home, conn, capsys):
 
 def test_migration_moves_each_budgets_category_into_a_selector():
     db = sqlite3.connect(":memory:")
-    files = sorted(store.MIGRATIONS.glob("*.sql"))
-    for f in files[:-1]:
-        for stmt in store._split(f.read_text()):
-            db.execute(stmt)
-    assert files[-1].name == "012_budget_selectors.sql"
+    m012 = store.MIGRATIONS / "012_budget_selectors.sql"
+    for f in sorted(store.MIGRATIONS.glob("*.sql")):
+        if f.name < m012.name:
+            for stmt in store._split(f.read_text()):
+                db.execute(stmt)
     db.execute("INSERT INTO budgets (name, category, monthly_limit) VALUES ('groceries', 'FOOD_AND_DRINK_GROCERIES', 600)")
-    for stmt in store._split(files[-1].read_text()):
+    for stmt in store._split(m012.read_text()):
         db.execute(stmt)
     assert db.execute("SELECT budget_id, kind, value FROM budget_selectors").fetchall() == [(1, "category", "FOOD_AND_DRINK_GROCERIES")]
     assert db.execute("SELECT fixed FROM budgets").fetchone() == (0,)
