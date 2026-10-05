@@ -201,12 +201,19 @@ def spec(conn: sqlite3.Connection, name: str, arg: str | None = None, months: in
     values = [{"month": r[0], "direction": d, "series": k, "amount": r[c] or 0}
               for r in rows for d, k, c in (("in", "income", 1), ("out", "spending", 2), ("out", "mortgage", 3))]
     return {**base, "title": f"In and out by month, last {months} months", "data": {"values": values},
-            "mark": "bar", "encoding": {"x": {"field": "month", "type": "ordinal", "title": None},
+            "mark": "bar", "encoding": {"x": {"field": "month", "type": "ordinal", "title": None, "axis": {"labelExpr": _month_label(rows)}},   # "May", not "2026-05"
                                         "y": {"field": "amount", "type": "quantitative", "title": "$"},   # stacked: out = spending + mortgage
                                         "xOffset": {"field": "direction", "scale": {"domain": ["in", "out"]}},
                                         "color": {"field": "series", "scale": {"domain": ["mortgage", "income", "spending"]},   # theme colours 1, 2, 3
                                                   "legend": {"values": ["income", "spending", "mortgage"]}, "title": None},
                                         "tooltip": [{"field": "month"}, {"field": "series"}, {"field": "amount", "format": "$,.0f"}]}}
+
+
+def _month_label(rows: list) -> str:
+    """Vega labelExpr turning "2026-05" into "May"; the year joins on January, and on the first month when the range spans years."""
+    names = "['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][toNumber(slice(datum.value,5,7))-1]"
+    cond = "slice(datum.value,5,7)=='01'" + (f"||datum.value=='{rows[0][0]}'" if len({r[0][:4] for r in rows}) > 1 else "")
+    return f"{names}+({cond} ? ' '+slice(datum.value,0,4) : '')"
 
 
 def custom(text: str, id: str | None = None, sql: str | None = None) -> dict:

@@ -265,7 +265,7 @@ def test_command_surface(home, tg, capsys, monkeypatch, tmp_path):
     assert "last_error" in st["items"][0] and st["items"][0]["accounts"]   # what "fix <bank>" lists when two logins share a bank
     assert st["items"][0]["item_id"] == "item1" and st["pending_alerts"] == 0 and st["untriaged"] == 0 and st["scheduler"] == "not loaded"
     assert st["version"] == cli.__version__   # the VERSION file, not the version the package was installed as
-    assert json.loads(run_cli(capsys, "heartbeat"))["sent"]  # never run → stale
+    assert "Last sync was never" in run_cli(capsys, "heartbeat")  # never run → stale
     assert json.loads(run_cli(capsys, "account", "list"))[0]["institution"] == "Chase"
     conn.execute("INSERT INTO balances (account_id, as_of, current) VALUES ('chk','2026-01-02 00:00:00',10.5),('chk','2026-01-01 00:00:00',25)")   # newest first and smallest: not max(), not last rowid
     assert {a["account_id"]: a["balance"] for a in json.loads(run_cli(capsys, "account", "list"))}["chk"] == 10.5

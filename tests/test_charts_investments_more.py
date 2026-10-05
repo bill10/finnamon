@@ -178,3 +178,9 @@ def test_net_worth_history_points_carry_what_an_account_added_this_month_contrib
     conn.execute("INSERT INTO balances (account_id, as_of, current) VALUES ('new', '2026-09-05 10:00:00', 5000)")
     hist = investments.net_worth_history(conn, months=240)
     assert [(h["date"], h["net_worth"], h["new_this_month"]) for h in hist] == [("2026-08-31", 1000, 1000), ("2026-09-05", 6000, 5000)]
+
+
+def test_in_out_axis_says_month_names(conn):
+    e = charts._month_label([("2025-11",), ("2025-12",), ("2026-01",)])
+    assert "datum.value=='2025-11'" in e and "=='01'" in e
+    assert "datum.value==" not in charts._month_label([("2026-02",), ("2026-03",)])

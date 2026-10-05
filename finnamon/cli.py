@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import functools
 import getpass
+import html
 import http.client
 import select
 import sqlite3
@@ -21,12 +22,20 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
-from . import __version__, assistant, backup, budgets, claude_runner, config, demo, detect, heartbeat, imports, investments, link, notify, owners, plaid_api, properties, query, remote, run as runmod, scheduler, secrets, store, sync, taxonomy, telegram, triage, voice
+from . import __version__, assistant, charts, render, backup, budgets, claude_runner, config, demo, detect, heartbeat, imports, investments, link, notify, owners, plaid_api, properties, query, remote, run as runmod, scheduler, secrets, store, sync, taxonomy, telegram, triage, voice
 from .plaid_api import PlaidError
 
 
 def out(obj) -> None:
     print(json.dumps(obj, indent=1, default=str) if not isinstance(obj, str) else obj)
+
+
+money_ = notify.money
+
+
+def _human(a) -> bool:
+    """Tables and sentences for a person at a terminal; JSON when piped (the assistant, the dashboard) or with --json."""
+    return sys.stdout.isatty() and not getattr(a, "json", False)
 
 
 def die(msg: str, code: int = 1) -> None:
@@ -244,6 +253,13 @@ def cmd_open(a) -> None:
     if _from_claude():
         die("the dashboard's key is for a person at a terminal: run `finnamon open` there")
     url = dashboard_url(a.host)
+    port = int(os.environ.get("PORT") or config.DASHBOARD_PORT)
+    if not a.host:   # the page is this box's: say so when nothing answers, before a browser shows "refused to connect"
+        try:
+            http.client.HTTPConnection("127.0.0.1", port, timeout=2).connect()
+        except OSError:
+            print(f"note: nothing answers on port {port}, so the dashboard isn't running here. Start it with `finnamon update --no-pull` "
+                  "(or `finnamon install`), then reload the page.", file=sys.stderr)
     # Printed, not opened: a phone's address (typed or sent there; never through the household chat, which every member and
     # the assistant read), or an SSH session, where a browser would open on the box's own screen with nobody in front of it.
     if a.print or a.host or os.environ.get("SSH_CONNECTION") or not _browser_open(url):
@@ -479,8 +495,8 @@ def cmd_link(a) -> None:
             link.mark_mirror(conn, m["new"], m["existing"])
             print("  ✓ marked joint")
     print("Baseline set: nothing before today counts as new.")
-    link.announce(conn, r["item_id"])
-    print(f"Summary sent to Telegram. Next: finnamon link (another bank), or ask the assistant to 'set up my budgets': in the dashboard's intercom, or {_ASK_CLAUDE}")
+    told = "Summary sent to Telegram." if link.announce(conn, r["item_id"]) else "No Telegram chat is set up, so no summary was sent (`finnamon status` shows the banks and accounts)."
+    print(f"{told} Next: finnamon link (another bank), or ask the assistant to 'set up my budgets': in the dashboard's intercom, or {_ASK_CLAUDE}")
 
 
 def _resolve_item(conn, ref: str) -> str:
@@ -706,9 +722,14 @@ def cmd_property(a) -> None:
             _triage_read_only()
             if not a.name:
                 die('usage: finnamon property remove "<name>"')
-            out({"removed": properties.remove(conn, a.name)})
+            gone = properties.remove(conn, a.name)
+            if _human(a):   # JSON consumers still get {"removed": false}; a person gets a sentence
+                print(f"Removed {a.name}." if gone else f"no property called {a.name}")
+            else:
+                out({"removed": gone})
         else:
-            out(properties.listing(conn))
+            rows = properties.listing(conn)
+            print(render.properties(rows)) if _human(a) else out(rows)
     except ValueError as e:
         die(str(e))
 
@@ -1201,7 +1222,13 @@ def cmd_daemon(a) -> None:
 def cmd_heartbeat(a) -> None:
     _human_only("heartbeat")
     scheduler.rotate_logs()
-    out({"sent": heartbeat.check(store.connect())})
+    conn = store.connect()
+    msg = heartbeat.check(conn)
+    if msg is None:
+        print("Nothing to report: the last sync is recent and the daemon is running.")
+    else:
+        plain = html.unescape(re.sub(r"<[^>]+>", "", msg))
+        print(("Sent to the household chat: " if store.get_state(conn, "chat_id") else "No Telegram chat is set up, so this went nowhere: ") + plain)
 
 
 def cmd_status(a) -> None:
@@ -1260,10 +1287,10 @@ def cmd_doctor(a) -> None:
     else:
         ok, msg = _plaid_probe(env)
         check(ok, f"Plaid keys ({env})", msg, "" if ok else "finnamon init --plaid (check the keys against dashboard.plaid.com → Team Settings → Keys)")
-    if not tg_token:
-        if sp.exists():
-            check(False, "Telegram bot", "no bot token", "finnamon init (in Telegram: @BotFather → /newbot)")
-    else:
+    no_telegram = sp.exists() and not tg_token   # a dashboard-only household: one optional line, not a row of ✗
+    if no_telegram:
+        check("optional", "Telegram", "not set up (optional); the dashboard works without it, alerts just don't reach a phone", "finnamon init adds the bot (in Telegram: @BotFather → /newbot)")
+    elif tg_token:
         try:
             me = telegram.get_me(tg_token)
             privacy = not me.get("can_read_all_group_messages")
@@ -1282,7 +1309,8 @@ def cmd_doctor(a) -> None:
             conn = sqlite3.connect(f"file:{config.db_path()}?mode=ro", uri=True)
             conn.row_factory = sqlite3.Row
             chat = store.get_state(conn, "chat_id")
-            check(bool(chat), "Household chat", f"chat {chat}" if chat else "none recorded", "finnamon init (it gives you a code to send the bot)")
+            if not no_telegram or chat:
+                check(bool(chat), "Household chat", f"chat {chat}" if chat else "none recorded", "finnamon init (it gives you a code to send the bot)")
             items = [dict(r) for r in conn.execute("SELECT item_id, institution, status, last_error FROM items")]
             check(bool(items), "Banks", f"{len(items)} linked" if items else "none linked, so nothing is watched",
                   "finnamon open → Add account → Link account, or finnamon link")
@@ -1348,7 +1376,7 @@ def cmd_doctor(a) -> None:
           else f"{assistant.dir()} installed and trusted", "finnamon install")
     ready, detail = voice.status()
     check(True if ready else "optional", "Voice", detail, "" if ready else "optional: finnamon voice setup")   # Talk still works through the browser
-    if conn is not None:
+    if conn is not None and not no_telegram:
         mode = store.get_state(conn, "inbound") or "daemon"
         web = bool(scheduler.web_args())
         check(web or mode != "session", "Telegram inbound",
@@ -1681,7 +1709,8 @@ def cmd_budget(a) -> None:
         if a.action == "suggest":
             out(budgets.suggest(conn, a.months, a.as_of))
         elif a.action == "overall":
-            out(budgets.overall(conn, a.as_of))
+            o = budgets.overall(conn, a.as_of)
+            print(f"{money_(o['spent'])} spent of {money_(o['limit'])} in budgets this month" + (f"; {o['uncategorized']} charges have no category yet" if o["uncategorized"] else "")) if _human(a) else out(o)
         elif a.action == "set":
             _triage_read_only()
             out(budgets.budget_set(conn, a.name, a.amount, a.category, a.merchants, a.fixed))
@@ -1689,7 +1718,8 @@ def cmd_budget(a) -> None:
             _triage_read_only()
             out({"removed": budgets.budget_remove(conn, a.name)})
         else:
-            out(budgets.budget_list(conn, a.as_of))
+            rows = budgets.budget_list(conn, a.as_of)
+            print(render.budgets(rows)) if _human(a) else out(rows)
     except budgets.ResolveError as e:
         die(f"{e}. " + ("Candidates: " + ", ".join(e.candidates) if e.candidates else "Pick a code from `finnamon category list`."))
     except ValueError as e:
@@ -1719,9 +1749,15 @@ def cmd_settings(a) -> None:
             die(str(e))
         print("ok")
     elif a.action == "get":
-        out({"key": a.key, "value": store.setting(conn, a.key, a.account)})
+        out({"key": a.key, "value": store.setting(conn, a.key, a.account), "description": store.SETTING_HELP.get(a.key)})
     else:
-        out([dict(r) for r in store.settings_list(conn)])
+        rows = [{**dict(r), "description": store.SETTING_HELP.get(r["key"])} for r in store.settings_list(conn)]
+        if _human(a):
+            for r in rows:
+                print(f"{r['key']} = {r['value']}" + ("" if r["account_id"] == "*" else f"  (for account {r['account_id']})") + (f"\n    {r['description']}" if r["description"] else ""))
+            print("\nChange one: finnamon settings set <key> <value>" + " (operational keys, at a terminal: add --ops)")
+        else:
+            out(rows)
 
 
 def cmd_category(a) -> None:
@@ -1790,7 +1826,14 @@ def cmd_alias(a) -> None:
 def cmd_normal(a) -> None:
     conn = store.connect()
     if a.list:
-        out([dict(r) for r in conn.execute("SELECT * FROM suppressions ORDER BY id DESC")]); return
+        rules = [{**dict(r), "merchant": (conn.execute("SELECT display FROM tx_now WHERE canonical=? LIMIT 1", (r["canonical"],)).fetchone() or [r["canonical"]])[0] if r["canonical"] else None}
+                 for r in conn.execute("SELECT * FROM suppressions ORDER BY id DESC")]   # a rule keeps the canonical (mch_shell); a person reads the name
+        if _human(a):
+            print(render.table(["Id", "Merchant", "Kind", "Up to", "Note"], [[r["id"], r["merchant"] or "(any)", r["kind"] or "all kinds", money_(r["max_amount"]) if r["max_amount"] else "", r["note"] or ""] for r in rules]) if rules
+                  else "No rules. `finnamon normal <merchant>` makes one.")
+        else:
+            out(rules)
+        return
     _triage_read_only()
     if a.remove is not None:
         try:
@@ -1835,12 +1878,13 @@ def cmd_alerts(a) -> None:
     for r in rows:
         families.setdefault(r["grp"], []).append(r)
     shown = [(notify.best(fam), fam) for fam in families.values()]
-    out([{"id": r["id"], "kind": r["kind"], "tier": r["tier"], "transaction_id": r["transaction_id"], "created_at": r["created_at"], "sent_at": r["sent_at"],
+    rows = ([{"id": r["id"], "kind": r["kind"], "tier": r["tier"], "transaction_id": r["transaction_id"], "created_at": r["created_at"], "sent_at": r["sent_at"],
           "telegram_message_id": r["telegram_message_id"], "verdict": r["verdict"], "confidence": r["confidence"], "reason": r["reason"],
           "resolved_at": r["resolved_at"], "resolution": r["resolution"], "suppression_id": r["suppression_id"],
           "folded": [f["id"] for f in fam if f["id"] != r["id"]],
           "text": notify.render(r), "payload": json.loads(r["payload_json"]),
           **({"reconnect": item, "page_text": notify.render(r, page=True)} if (item := notify.relogin_item(r)) else {})} for r, fam in shown])
+    print(render.alerts(rows)) if _human(a) else out(rows)
 
 
 STDIN_WAIT_S = 2   # a heredoc is ready at once; a forgotten one would block a Claude Code Bash tool forever
@@ -1906,7 +1950,12 @@ def cmd_networth(a) -> None:
     if a.sync:
         _human_only("networth --sync")   # Plaid calls, like `sync`
         out(investments.sync_all_holdings(conn))
-    out(investments.net_worth_history(conn, a.months) if a.history else investments.net_worth(conn))
+    if a.history:
+        rows = investments.net_worth_history(conn, a.months)
+        print(render.history(rows)) if _human(a) else out(rows)
+    else:
+        d = investments.net_worth(conn)
+        print(render.networth(d)) if _human(a) else out(d)
 
 
 def cmd_serve(a) -> None:
@@ -1979,6 +2028,33 @@ household's Claude conversation. Run it in a terminal on the Finnamon box.
 When the release changed web/package*.json it runs `npm ci` in web/ first; a household that skipped scheduling has nothing to restart.
 --dry-run only looks: nothing is pulled, migrated or restarted.
 Next: finnamon status; finnamon --version shows the version now running.""",
+    "networth": """Net worth: cash and investments the banks report, property you state (finnamon property), minus loans and cards.
+Needs: a linked bank or a manual account; --sync (a person at a terminal) refreshes investment holdings from Plaid first.
+Next: finnamon networth --history for the trend, finnamon property set "House" 450000 to count what no bank reports.""",
+    "run": """One cycle by hand: sync, detect, triage the unusual, send what is waiting. The daemon does this on its schedule.
+Needs: a linked bank (finnamon link). --no-sync, --no-triage and --no-notify skip a step.
+Next: finnamon alerts to read what it found.""",
+    "daemon": """The background process: syncs, answers Telegram, runs detectors. finnamon install starts it for you under launchd or systemd;
+run it by hand only to watch it in a terminal.
+Needs: finnamon init done and a bank linked. Next: finnamon status says whether it is checking in.""",
+    "heartbeat": """The hourly check that the daemon is alive: if the last sync is old it says so in the household chat, once a day.
+Needs: a Telegram chat (finnamon init); with none it only prints what it would have sent. Next: finnamon status, finnamon doctor.""",
+    "notify": """Send the alerts that are waiting to the household chat (--roundup: the weekly roundup now; --list: show what is waiting, send nothing).
+Needs: a Telegram chat (finnamon init). Next: finnamon alerts to see what was sent.""",
+    "triage": """The assistant's check of unusual charges before they reach you. `triage` runs it now; `suppressed` lists what it held back.
+Needs: Claude Code logged in on this box (finnamon doctor). Next: finnamon alerts --suppressed to audit its decisions.""",
+    "settings": """The numbers that tune the detectors (list: each with what it does). `settings set <key> <value>` changes one;
+--account <account> makes it that account's own. Daemon timing (sync_interval_hours and friends) needs --ops at a terminal.
+Needs: nothing. Next: finnamon detect shows what the new values would catch; `finnamon threshold` is the friendlier way to set low-balance limits.""",
+    "import": """A bank's CSV export into a manual account (a bank Plaid doesn't reach). --browser <bank> fetches it through a browser you log into.
+Needs: the account first (finnamon account add "<name>" --institution <bank>), and the bank's CSV file.
+Next: finnamon category --uncategorized lists rows with no category; weekly imports keep alerts and budgets current.""",
+    "open": """Open the dashboard in a browser; the address carries its key once, so it is for a person at a terminal (--print shows it, --host a phone's address).
+Needs: the dashboard running (finnamon install or update starts it; finnamon doctor checks it). Next: finnamon remote for your phone.""",
+    "remote": """Serve the dashboard to your phone over Tailscale (never public) and show a QR code that logs a phone in; --off undoes it.
+Needs: Tailscale installed and signed in on this box, and the dashboard running. Next: scan the QR code with the phone's camera.""",
+    "web": """`web token` prints the dashboard's key (for curl, or FINNAMON_WEB_TOKEN on another computer's `import --to`); --rotate mints a new one.
+Needs: nothing. Next: after --rotate, every open page is locked out until you run finnamon open.""",
     "detect": """detect --review (a person at a terminal on the Finnamon box only): go through detector drafts the assistant saved with
 --draft, see each one's SQL and how many rows it finds today, and answer y (move it to candidates/, whose alerts triage
 checks first; --tier rules alerts directly), N (keep it pending) or d (delete it).
@@ -2019,7 +2095,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sp.add_parser("channel", help="who answers Telegram: session (default: the dashboard's conversation), on (Claude Code's channel plugin) or off (legacy: the daemon's own session)",
                      description="session: the daemon polls Telegram and types each message into the dashboard's intercom session (the default for new installs, no plugin). on: Claude Code's Telegram channel plugin reads the chat. off: the legacy mode, the daemon answers with its own separate claude -p session."); s.add_argument("action", choices=["on", "session", "off", "status"]); s.set_defaults(fn=cmd_channel)
     s = sp.add_parser("hook", help="Claude Code hooks (stdin: the hook event JSON)"); s.add_argument("name", choices=["reply-guard", "browser-guard", "permission", "secret-guard"]); s.set_defaults(fn=cmd_hook)
-    s = sp.add_parser("property", help="stated assets a bank doesn't report (house, car), counted into net worth"); s.add_argument("action", choices=["list", "set", "remove"], nargs="?", default="list"); s.add_argument("name", nargs="?"); s.add_argument("value", nargs="?"); s.set_defaults(fn=cmd_property)
+    s = sp.add_parser("property", help="stated assets a bank doesn't report (house, car), counted into net worth"); s.add_argument("action", choices=["list", "set", "remove"], nargs="?", default="list"); s.add_argument("name", nargs="?"); s.add_argument("value", nargs="?"); s.add_argument("--json", action="store_true", help="JSON even on a terminal"); s.set_defaults(fn=cmd_property)
     s = sp.add_parser("account", help="list | add \"<name>\" --institution <bank> (a manual account, fed by import) | remove \"<name>\" (a manual account and its transactions) | type <account_id> <type>|--clear | balance \"<name>\" <amount> (a manual account's balance now) | merge | unmerge | failover | owner"); s.add_argument("action", choices=["list", "add", "remove", "type", "kind", "balance", "merge", "unmerge", "failover", "owner"]); s.add_argument("new", nargs="?"); s.add_argument("existing", nargs="?")
     s.add_argument("--institution", help="add: the bank's name (default: the first word of the account name)"); s.add_argument("--type", choices=list(imports.KINDS), default="checking"); s.add_argument("--owner"); s.add_argument("--mask", help="last 4 digits"); s.add_argument("--yes", action="store_true", help="remove: don't ask"); s.add_argument("--clear", action="store_true", help="type: back to the bank's own type"); s.add_argument("--force", action="store_true", help="merge: even when the types or balances differ")
     s.add_argument("--to", metavar="URL", help="list: the accounts on the Finnamon box at this dashboard URL (FINNAMON_WEB_TOKEN set to its `finnamon web token`)"); s.set_defaults(fn=cmd_account)
@@ -2044,12 +2120,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--check", action="store_true", help="fetch and print, as JSON, whether there is anything to pull (the dashboard's Update button); changes nothing")
     s.add_argument("--dry-run", action="store_true", help="look only: fetch, then name the commits to pull and the services that would restart; nothing is pulled, migrated, installed or restarted"); s.add_argument("--force", action="store_true", help="register the Telegram channel plugin even outside ~/.finnamon/assistant"); s.set_defaults(fn=cmd_update)
 
-    s = sp.add_parser("budget"); s.add_argument("action", choices=["list", "suggest", "set", "remove", "overall"], nargs="?", default="list")
+    s = sp.add_parser("budget", help="monthly limits: list (default) | overall | suggest (what you spend, from history) | set <name> <amount> [--category C ...] [--merchant M ...] [--fixed] | remove <name>; amounts take $ and commas"); s.add_argument("action", choices=["list", "suggest", "set", "remove", "overall"], nargs="?", default="list")
     s.add_argument("name", nargs="?"); s.add_argument("amount", nargs="?")
     s.add_argument("--category", action="append"); s.add_argument("--merchant", action="append", dest="merchants")   # each repeatable; given, they replace the budget's
-    s.add_argument("--fixed", action=argparse.BooleanOptionalAction); s.add_argument("--months", type=int, default=6); s.add_argument("--as-of"); s.set_defaults(fn=cmd_budget)
-    s = sp.add_parser("threshold"); s.add_argument("account"); s.add_argument("amount"); s.set_defaults(fn=cmd_threshold)
-    s = sp.add_parser("settings"); s.add_argument("action", choices=["list", "get", "set"], nargs="?", default="list"); s.add_argument("key", nargs="?"); s.add_argument("value", nargs="?"); s.add_argument("--account"); s.add_argument("--ops", action="store_true", help="operational keys (daemon interval, timeouts); not for Claude"); s.set_defaults(fn=cmd_settings)
+    s.add_argument("--fixed", action=argparse.BooleanOptionalAction); s.add_argument("--months", type=int, default=6); s.add_argument("--as-of"); s.add_argument("--json", action="store_true", help="JSON even on a terminal"); s.set_defaults(fn=cmd_budget)
+    s = sp.add_parser("threshold", help="<account> <amount>: alert when that checking or savings account falls below the amount (e.g. finnamon threshold Checking 500)"); s.add_argument("account", help="a name, or its last four digits"); s.add_argument("amount"); s.set_defaults(fn=cmd_threshold)
+    s = sp.add_parser("settings"); s.add_argument("action", choices=["list", "get", "set"], nargs="?", default="list"); s.add_argument("key", nargs="?"); s.add_argument("value", nargs="?"); s.add_argument("--account"); s.add_argument("--ops", action="store_true", help="operational keys (daemon interval, timeouts); not for Claude"); s.add_argument("--json", action="store_true", help="JSON even on a terminal"); s.set_defaults(fn=cmd_settings)
     s = sp.add_parser("category", help="<merchant> <category> (a rule: every past and future charge) | --tx <transaction_id> <category> (one charge, a one-time edit; --clear undoes it) | list | resolve <text>")
     s.add_argument("merchant", nargs="?"); s.add_argument("category", nargs="?"); s.add_argument("--tx", metavar="TRANSACTION_ID"); s.add_argument("--clear", action="store_true"); s.add_argument("--rules", action="store_true")
     s.add_argument("--every", action="store_true", help="with --tx: the rule for that charge's merchant (every charge), not the one charge")
@@ -2058,9 +2134,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("name", nargs="?"); s.add_argument("canonical", nargs="?"); s.add_argument("--list", action="store_true"); s.add_argument("--remove", metavar="NAME"); s.set_defaults(fn=cmd_alias)
     s = sp.add_parser("normal", help="suppress a pattern. No --kind = every alert kind except recurring_changed (a merchant charging is normal; its subscription "
                      "stopping is still news). --alert on a recurring_changed or recurring_price alert acknowledges that one stream (a price: up to the accepted one). --list shows ids; --remove ID deletes one"); s.add_argument("merchant", nargs="?"); s.add_argument("--kind"); s.add_argument("--account"); s.add_argument("--max-amount")
-    s.add_argument("--note"); s.add_argument("--alert", type=int); s.add_argument("--roundup-item", nargs=2, type=int, metavar=("MESSAGE_ID", "N")); s.add_argument("--list", action="store_true"); s.add_argument("--remove", type=int, metavar="ID", help="delete the rule with this id (from --list)"); s.set_defaults(fn=cmd_normal)
+    s.add_argument("--note"); s.add_argument("--alert", type=int); s.add_argument("--roundup-item", nargs=2, type=int, metavar=("MESSAGE_ID", "N")); s.add_argument("--list", action="store_true", help="every rule with its id, merchant name, kind and limit"); s.add_argument("--json", action="store_true", help="JSON even on a terminal"); s.add_argument("--remove", type=int, metavar="ID", help="delete the rule with this id (from --list)"); s.set_defaults(fn=cmd_normal)
 
-    s = sp.add_parser("alerts"); g = s.add_mutually_exclusive_group(); g.add_argument("--untriaged", action="store_true"); g.add_argument("--suppressed", action="store_true"); s.add_argument("--sent", action="store_true", help="only alerts sent to the household, or queued to be"); s.add_argument("--since", type=int, default=30); s.add_argument("--limit", type=int, default=50)
+    s = sp.add_parser("alerts", help="recent alerts, newest first; --open/--resolved filter them, --dismiss ID and --undo ID resolve and reopen one"); g = s.add_mutually_exclusive_group(); g.add_argument("--untriaged", action="store_true", help="unusual charges still waiting for the assistant's check (JSON)"); g.add_argument("--suppressed", action="store_true", help="alerts the assistant judged not worth sending, so you can audit it (JSON)"); s.add_argument("--json", action="store_true", help="JSON even on a terminal"); s.add_argument("--sent", action="store_true", help="only alerts sent to the household, or queued to be"); s.add_argument("--since", type=int, default=30, help="days back (default 30); also bounds --suppressed"); s.add_argument("--limit", type=int, default=50)
     g.add_argument("--open", action="store_true", help="only alerts not yet resolved"); g.add_argument("--resolved", action="store_true", help="only resolved ones, latest first")
     g.add_argument("--dismiss", type=int, metavar="ID", help="resolve this alert with no rule: fine this once, the next one still alerts")
     g.add_argument("--undo", type=int, metavar="ID", help="reopen an alert resolved by --dismiss or `normal --alert`; the rule that one wrote is removed")
@@ -2068,7 +2144,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sp.add_parser("triage"); s.add_argument("action", choices=["run", "set", "suppressed"], nargs="?", default="run"); s.add_argument("group", nargs="?"); s.add_argument("verdict", nargs="?", choices=["promote", "suppress"])
     s.add_argument("confidence", nargs="?", choices=["high", "low"]); s.add_argument("reason", nargs="?", help="- : the sentence on stdin"); s.add_argument("--since", type=int, default=30); s.set_defaults(fn=cmd_triage)
     s = sp.add_parser("query"); s.add_argument("sql"); s.add_argument("--limit", type=int, default=200); s.set_defaults(fn=cmd_query)
-    s = sp.add_parser("chart"); s.add_argument("name", nargs="?"); s.add_argument("arg", nargs="?"); s.add_argument("--months", type=int, default=12)
+    s = sp.add_parser("chart", help="a preset as a PNG (or --spec: onto the dashboard). Presets: " + ", ".join(charts.CHARTS) + "; tables (dashboard only): " + ", ".join(charts.TABLES) + ". Others: --spec-json, --table-json"); s.add_argument("name", nargs="?", help="a preset: " + ", ".join(charts.CHARTS + charts.TABLES)); s.add_argument("arg", nargs="?", help="the merchant, for merchant_history"); s.add_argument("--months", type=int, default=12)
     s.add_argument("--spec", action="store_true", help="add or update this preset on the web dashboard instead of writing a PNG")
     s.add_argument("--spec-json", metavar="SPEC", help="add or update a whole Vega-Lite spec, given inline or as - for stdin; data.sql runs read-only into data.values")
     s.add_argument("--table-json", metavar="SPEC", help='add or update a table panel: {"title", "columns": [{field, label, format: text|money|date|number, align}]}, rows from --sql')
@@ -2078,7 +2154,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--list", action="store_true", help="the dashboard's charts, in order: id and title")
     s.add_argument("--refresh", action="store_true", help="recompute every chart from its query and print the board (JSON)")
     s.set_defaults(fn=cmd_chart)
-    s = sp.add_parser("networth"); s.add_argument("--sync", action="store_true"); s.add_argument("--history", action="store_true"); s.add_argument("--months", type=int, default=12); s.set_defaults(fn=cmd_networth)
+    s = sp.add_parser("networth", help="what you own minus what you owe: cash, investments, property, loans and cards; --history for the trend; --sync refreshes investment holdings first"); s.add_argument("--sync", action="store_true", help="refresh holdings from Plaid first (a person at a terminal)"); s.add_argument("--history", action="store_true", help="one line per day instead of today's total"); s.add_argument("--months", type=int, default=12, help="with --history: how far back"); s.add_argument("--json", action="store_true", help="JSON even on a terminal"); s.set_defaults(fn=cmd_networth)
     sp.add_parser("serve", help="MCP server (stdio)").set_defaults(fn=cmd_serve)
     s = sp.add_parser("open", help="open the dashboard in a browser: the address carries its key once"); s.add_argument("--print", action="store_true", help="print the address instead of opening it")
     s.add_argument("--host", metavar="NAME", help="the address for a phone: the name `finnamon remote` serves the page on (printed, https), or a whole http(s) origin"); s.set_defaults(fn=cmd_open)

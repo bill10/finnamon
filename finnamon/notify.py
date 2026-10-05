@@ -391,7 +391,8 @@ def item_linked_summary(conn: sqlite3.Connection, item_id: str, as_of: str | Non
     for name, mask, typ, sub in accts:
         kind = (sub or typ or "").replace("_", " ")
         lines.append(f"• {esc(name)}" + (f" …{esc(mask)}" if mask else "") + (f" ({esc(kind)})" if kind else ""))
-    facts = [f"{n:,} transactions since {esc(oldest or '?')}"]
+    facts = [f"{n:,} transaction{'' if n == 1 else 's'} since {day(oldest, year=True)}" if n else
+             ("no transactions to show (an investment or loan account often has none)" if any(t in ("investment", "loan") for _, _, t, _ in accts) else "no transactions yet")]
     if holdings:
         facts.append(f"{holdings} holdings")
     lines.append("\n" + ", ".join(facts) + ".")

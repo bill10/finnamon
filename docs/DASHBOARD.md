@@ -19,7 +19,7 @@ puts a table of those transactions on the same board. Alerts still arrive on
 Telegram. A bank linked from the page belongs to the household's first member; use `finnamon link --start
 --owner <name>` in a terminal for someone else's login.
 
-`finnamon init` installs it (step 3) and schedules it with the daemon and the heartbeat (a third always-on job:
+`finnamon init` installs it (step 4 of 5) and schedules it with the daemon and the heartbeat (a third always-on job:
 `com.finnamon.web` on macOS, `finnamon-web.service` on Linux) on http://localhost:8888, and `finnamon open` opens it:
 the page needs its key, a random token in `~/.finnamon/web-token` (0600) that `finnamon open` puts in the address once
 and the page keeps as a cookie, so the address bar holds none of it (the cookie, like a Jupyter notebook's, is sent to every other service you browse on localhost, so keep the machine's other local pages ones you trust). Without the key the page, its API
