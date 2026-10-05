@@ -181,6 +181,23 @@ Yes, with a symlink, and that is all it needs.
 - **The default model** was `gpt-6-luna`.
 - **Usage:** `token_count` events carry `rate_limits`, showing the plan's percentage used. Doctor could report it later.
 
+## Card 2 notes (Codex 0.157)
+
+- **The skills leak has no config switch.** `skip_host_skill_discovery` is listed as under development and changes nothing;
+  `[[skills.config]] path = … enabled = false` disables only the skill files it names, not a root. Codex takes the user
+  root from `HOME`, so every Codex process Finnamon starts gets `HOME = FINNAMON_HOME/codex/home`, an empty directory
+  (`codex.env()`); `shell_environment_policy.set` hands tool commands the real `HOME` (and `FINNAMON_HOME`) back.
+  `skills/list` under that env returns only the six system skills; doctor runs it and flags any user or admin skill.
+- **`codex_apps` is `features.apps`.** `apps = false` turns the built-in ChatGPT-apps server off; `browser_use`,
+  `browser_use_external`, `in_app_browser` and `computer_use` go off with it.
+- **A profile makes the workspace writable** even when the directory itself is set to `read`; `":workspace_roots" = "read"`
+  is what makes the assistant directory read-only. `codex sandbox -P finnamon -C <dir> -- <cmd>` runs a command under the
+  profile with no model call; `tests/test_codex.py` uses it to check the denies.
+- **Hook keys and hashes.** `hooks/list` needs stdin kept open until it answers (the server exits on EOF). The hash covers
+  the hook's definition, not the `[hooks.state]` table, so pinning is: write the hooks, ask, write the hashes. A hook's
+  `timeout` is in seconds (`timeoutSec` 660; the default is 600).
+- **The refresh write-through stays a source-code argument** (finding 6): no throwaway ChatGPT login was available to force one.
+
 ## What changes in cards 2–6
 
 - **Card 2 (bundle, `CODEX_HOME`, install/doctor):**

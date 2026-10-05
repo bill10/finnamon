@@ -49,7 +49,9 @@ def test_a_codex_household_is_refused_not_run_as_claude(conn, fake_claude, monke
     conn.execute("INSERT INTO settings(account_id, key, value) VALUES ('*', 'assistant', 'codex')")   # what card 5 will let `settings set` write
     monkeypatch.setenv("FINNAMON_CODEX_BIN", str(CODEX / "bin" / "codex"))
     assert agent_runner.kind() == "codex"
-    assert agent_runner.harness_problems() == [agent_runner.CODEX_PENDING], "the daemon and triage refuse to start"
+    probs = agent_runner.harness_problems()
+    assert probs[-1] == agent_runner.CODEX_PENDING, "the daemon and triage refuse to start"
+    assert any("config.toml" in p for p in probs), "and say what Codex itself is missing: init has not set it up here"
     with pytest.raises(NotImplementedError):
         agent_runner.run("hi")
     conn.execute("UPDATE settings SET value='gemini' WHERE key='assistant'")

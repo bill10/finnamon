@@ -35,6 +35,9 @@ def _not_inside_claude(monkeypatch, tmp_path):
     # register the Telegram plugin for real, against whatever directory the test used).
     monkeypatch.setenv("FINNAMON_CLAUDE_BIN", str(tmp_path / "no-such-claude"))
     monkeypatch.delenv("CLAUDE_BIN", raising=False)
+    monkeypatch.setenv("FINNAMON_CODEX_BIN", str(tmp_path / "no-such-codex"))   # likewise codex: a test that wants one points this at the stub
+    from finnamon import codex   # the login Finnamon's CODEX_HOME links to: a scratch path, never the developer's ~/.codex/auth.json
+    monkeypatch.setattr(codex, "user_auth", lambda: tmp_path / "user-codex" / "auth.json")
     monkeypatch.setenv("FINNAMON_HOME", str(tmp_path / "home"))   # a test that forgets the `home` fixture must still never open the household's real db
     # CLAUDE_CONFIG_DIR: where the trust flag is written (Claude Code's ~/.claude.json), redirected so no test touches
     # the real one; the eval lane, which runs the real claude, puts it back. Then an installed, trusted assistant

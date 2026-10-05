@@ -54,10 +54,12 @@ def unit(name: str, kind: str = "service", os_name: str | None = None) -> str:
 
 def env_path() -> str:
     """PATH for the units: wherever finnamon, claude, node and bun live, plus the usual. Bun runs the Telegram channel
-    plugin inside the intercom session; without it the channel banner shows and nothing polls the bot."""
+    plugin inside the intercom session; without it the channel banner shows and nothing polls the bot. codex only once
+    init has set it up: a Claude household's units must not drift (and so refuse `finnamon update`) over a CLI it never runs."""
+    from . import codex
     parts = []
-    for exe in ("finnamon", "claude", "uv", "node", "bun"):
-        p = shutil.which(exe)
+    for exe in ("finnamon", "claude", "uv", "node", "bun", *(("codex",) if codex.configured() else ())):
+        p = codex.binary() if exe == "codex" else shutil.which(exe)
         if p and str(Path(p).parent) not in parts:
             parts.append(str(Path(p).parent))
     for d in ("/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin", f"{Path.home()}/.local/bin", f"{Path.home()}/.bun/bin"):

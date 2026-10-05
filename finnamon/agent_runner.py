@@ -21,7 +21,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import assistant, config, store
+from . import assistant, codex, config, store
 
 log = logging.getLogger("finnamon.claude")
 
@@ -50,7 +50,7 @@ def kind() -> str:
 
 def binary(which: str | None = None) -> str | None:
     if which == "codex":
-        return os.environ.get("FINNAMON_CODEX_BIN") or shutil.which("codex")
+        return codex.binary()
     return os.environ.get("FINNAMON_CLAUDE_BIN") or os.environ.get("CLAUDE_BIN") or shutil.which("claude")
 
 
@@ -62,8 +62,8 @@ def cwd() -> Path:
 def harness_problems() -> list[str]:
     """The permission boundary and the skills only exist if `claude -p` runs in a directory that has them.
     An assistant directory nothing has written yet has none: refuse to run headless rather than run unguarded."""
-    if kind() == "codex":
-        return [CODEX_PENDING]   # refuse, never run a Codex household under Claude's checks
+    if kind() == "codex":   # never run a Codex household under Claude's checks: the bundle, plus Codex's own home and pinned hooks
+        return assistant.problems(claude_trust=False) + codex.problems() + [CODEX_PENDING]
     return assistant.problems()
 
 

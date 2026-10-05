@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -36,12 +37,57 @@ def files() -> dict[str, bytes]:
     """The bundle's files by path relative to its root: an allowlist, so nothing a claude session, an install pointed at the
     source or an editor leaves there (settings.local.json, a manifest, .DS_Store, a swap file) is ever bundle content."""
     paths = [BUNDLE / "CLAUDE.md", BUNDLE / ".claude/settings.json", *sorted((BUNDLE / ".claude/skills").glob("*/SKILL.md"))]
-    return {p.relative_to(BUNDLE).as_posix(): p.read_bytes() for p in paths if p.is_file()}
+    claude = {p.relative_to(BUNDLE).as_posix(): p.read_bytes() for p in paths if p.is_file()}
+    return claude | codex_bundle(claude)   # AGENTS.md and .agents/skills, generated from these: the same files for a Codex household
+
+
+# Codex reads the same instructions as AGENTS.md and the skills from .agents/skills, with its own per-CLI snippets.
+AGENTS_MD_MAX = 32 * 1024   # Codex's project_doc_max_bytes: past it the instructions are cut off
+
+# Per-CLI snippets. Skill invocations are `$name` in Codex; the skill names come from the bundle itself.
+SWAPS = ((".claude/skills/", ".agents/skills/"), ("claude -p", "codex exec"))
+CHANNEL_ONLY = re.compile(r"Claude Code's (own )?Telegram channel")   # the channel plugin is Claude Code's; a Codex household never has it
+
+
+def _items(text: str) -> list[list[str]]:
+    """Lines grouped so that a list item or table row keeps its indented continuation lines."""
+    out: list[list[str]] = []
+    for line in text.split("\n"):
+        if out and line.startswith("  ") and out[-1][0].lstrip().startswith("- "):
+            out[-1].append(line)
+        else:
+            out.append([line])
+    return out
+
+
+def to_codex(text: str, skills: list[str]) -> str:
+    text = "\n".join(l for item in _items(text) if not CHANNEL_ONLY.search(" ".join(item)) for l in item)
+    for a, b in SWAPS:
+        text = text.replace(a, b)
+    if skills:
+        text = re.sub(rf"(?<![\w/.~$-])/({'|'.join(map(re.escape, skills))})\b", r"$\1", text)
+    return text
+
+
+def codex_bundle(claude: dict[str, bytes]) -> dict[str, bytes]:
+    """AGENTS.md and .agents/skills for Codex (finnamon/codex.py), from the Claude files: never maintained by hand."""
+    names = sorted(rel.split("/")[2] for rel in claude if rel.startswith(".claude/skills/"))
+    out = {}
+    if "CLAUDE.md" in claude:
+        agents = to_codex(claude["CLAUDE.md"].decode(), names).encode()
+        if len(agents) > AGENTS_MD_MAX:   # a release that outgrows it must say so, not ship cut-off instructions
+            raise ValueError(f"AGENTS.md is {len(agents)} bytes; Codex reads only {AGENTS_MD_MAX}")
+        out["AGENTS.md"] = agents
+    for rel, data in claude.items():
+        if rel.startswith(".claude/skills/"):
+            out[".agents/" + rel[len(".claude/"):]] = to_codex(data.decode(), names).encode()
+    return out
 
 
 # The harness check demands every file the bundle ships, and never less than this floor: a wheel that lost the bundle
 # would otherwise pass the check with an empty directory and start every household session with no allow list.
-FLOOR = ("CLAUDE.md", ".claude/settings.json", ".claude/skills/finnamon/SKILL.md", ".claude/skills/triage/SKILL.md", ".claude/skills/import-browser/SKILL.md")
+FLOOR = ("CLAUDE.md", ".claude/settings.json", ".claude/skills/finnamon/SKILL.md", ".claude/skills/triage/SKILL.md", ".claude/skills/import-browser/SKILL.md",
+         "AGENTS.md", ".agents/skills/finnamon/SKILL.md", ".agents/skills/triage/SKILL.md", ".agents/skills/import-browser/SKILL.md")
 REQUIRED = tuple(dict.fromkeys(FLOOR + tuple(files())))
 
 
@@ -80,7 +126,7 @@ def _write_atomic(p: Path, data: bytes, mode: int | None = None, follow_symlinks
         raise
 
 
-def install(dest: Path | None = None) -> dict:
+def install(dest: Path | None = None, bundle: dict[str, bytes] | None = None, pinned: tuple[str, ...] = PINNED) -> dict:
     """Write the bundle. Returns {"dir", "written", "backed_up", "kept", "orphaned", "removed", "changed": bool, "first": bool}.
 
     A file the household edited (not what the manifest says we wrote) is left alone while the release ships the same
@@ -88,7 +134,7 @@ def install(dest: Path | None = None) -> dict:
     With no manifest (a directory we never wrote) every differing file counts as theirs and gets its .bak. A file the
     release dropped goes (`removed`) unless they edited it (`orphaned`: theirs now, no release will touch it again)."""
     dest = dest or dir()
-    bundle = files()
+    bundle = files() if bundle is None else bundle   # another bundle: Codex's config.toml in FINNAMON_HOME/codex (codex.install)
     if not bundle:   # a package that lost its bundle: never "installed" an empty directory and retired the sessions for it
         raise FileNotFoundError(f"no assistant bundle at {BUNDLE}; reinstall finnamon")
     first = not (dest / MANIFEST).is_file()   # never written by us before: an existing but empty directory counts
@@ -111,7 +157,7 @@ def install(dest: Path | None = None) -> dict:
         if current == data:
             continue
         if current is not None and last.get(rel) != _sha(current):   # not what we wrote last time: the household's edit
-            if last.get(rel) == manifest[rel] and rel not in PINNED:   # and this release did not touch the file: theirs stands
+            if last.get(rel) == manifest[rel] and rel not in pinned:   # and this release did not touch the file: theirs stands
                 kept.append(str(p))
                 continue
             bak = p.with_name(p.name + ".bak")
@@ -291,12 +337,12 @@ def trusted(d: Path | None = None) -> bool:
 TRUST_FIX = "run `finnamon install` or `finnamon update`, or `claude` once in that directory and accept the trust dialog"
 
 
-def problems() -> list[str]:
+def problems(claude_trust: bool = True) -> list[str]:
     """What a sealed `claude -p` would be missing in the assistant directory: a file, or Claude Code's trust in the
     directory, without which it ignores the settings there (the allow list, the reply-guard hook) and every command is
     "requires approval" with nobody to approve it."""
     d = dir()
     out = [f"missing {d / rel} (run `finnamon install`, or `finnamon update`, to write the assistant bundle)" for rel in REQUIRED if not (d / rel).is_file()]
-    if not trusted(d):
+    if claude_trust and not trusted(d):   # Codex keeps its trust in its own config.toml (codex.problems)
         out.append(f"{d} is not trusted by Claude Code, so it would ignore the settings there ({TRUST_FIX})")
     return out
