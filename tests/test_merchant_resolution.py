@@ -102,9 +102,9 @@ def alert(conn, kind, key, payload):
 
 
 @pytest.mark.parametrize("kind, payload, says", [
-    ("low_balance", {"account": "Chase Checking", "mask": "4821", "available": 180.5, "threshold": 500}, "finnamon threshold \"Chase Checking\""),
+    ("low_balance", {"account": "Chase Checking", "mask": "4821", "available": 180.5, "threshold": 500}, "once Chase Checking has gone back above $500"),
     ("budget_pace", {"budget": "dining", "category": "FOOD_AND_DRINK", "limit": 300, "spent": 320, "state": "over"}, "for this month"),
-    ("sync_health", {"item_id": "item1", "institution": "Chase", "status": "error"}, "Chase still isn't syncing"),
+    ("sync_health", {"item_id": "item1", "institution": "Chase", "status": "error"}, "only if Chase syncs and then has a new problem"),
 ])
 def test_its_normal_on_an_alert_no_rule_can_quiet_resolves_it(house, capsys, kind, payload, says):
     a = alert(house, kind, f"{kind}:1", payload)
