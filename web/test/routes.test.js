@@ -887,3 +887,68 @@ test('a pairing code from `finnamon remote`: one device, once, before it expires
     assert.ok(!logged.some(l => /good-code|new-code|old-code/.test(l)) && logged.some(l => /pairing let a device in/.test(l)), 'the outcome is logged, never the code');
   } finally { console.log = log; srv.close(); rmSync(home, { recursive: true, force: true }); }
 });
+
+test('Reconnect runs link --web --update <item> for the page only (cookie and Origin) and a plain item id', async () => {
+  const calls = [];
+  const app = buildApp({ token: () => KEY, cli: async (...a) => { calls.push(a); return { url: 'https://hosted.plaid.com/x' }; },
+    allowHost: (h) => h.startsWith('127.0.0.1:'), allowOrigin: (o) => /^http:\/\/127\.0\.0\.1:\d+$/.test(o) });
+  const srv = app.listen(0, '127.0.0.1'); await new Promise(r => srv.once('listening', r));
+  const base = `http://127.0.0.1:${srv.address().port}`, page = { cookie: `${COOKIE_NAME}=${KEY}`, origin: base };
+  const post = (path, headers = page) => globalThis.fetch(base + path, { method: 'POST', headers });
+  try {
+    assert.equal((await post('/api/item/aBc_9-x/reconnect')).status, 200);
+    assert.deepEqual(calls.at(-1), ['link', '--web', '--update', 'aBc_9-x']);
+    for (const path of ['/api/item/-x/reconnect', '/api/item/--remove/reconnect', `/api/item/${'a'.repeat(101)}/reconnect`, '/api/item/a%20b/reconnect', '/api/item/a.b/reconnect'])
+      assert.equal((await post(path)).status, 400, path);
+    assert.equal((await post('/api/item/abc/reconnect', { authorization: `Bearer ${KEY}`, origin: base })).status, 403, 'a bearer key is not a person: this path has no rate limit');
+    assert.equal((await post('/api/item/abc/reconnect', { cookie: page.cookie })).status, 403, 'no Origin: not the page');
+    assert.equal((await post('/api/item/abc/reconnect', { ...page, origin: 'http://evil.example' })).status, 403);
+    assert.equal((await post('/api/item/abc/reconnect', { origin: base })).status, 401);
+    assert.equal(calls.length, 1);
+  } finally { srv.close(); }
+});
+
+test('the Reconnect click opens the tab first, sends it only to an https address, and closes it on failure', async () => {
+  const app = readFileSync(join(import.meta.dirname, '../public/app.js'), 'utf8');
+  const src = /\nasync function reconnect\(b\) \{[\s\S]*?\n\}\n/.exec(app)[0];
+  const run = async (answer, popup = true) => {
+    const seen = { toasts: [], assigned: null, tab: null };
+    const tab = { opener: 'page', location: { href: '' }, closed: false, close() { this.closed = true; } };
+    const window = { open: () => { seen.opened = true; return popup ? tab : null; } };
+    const api = async () => { seen.openedBeforeApi = !!seen.opened; return answer; };
+    const location = { assign: (u) => { seen.assigned = u; } };
+    const reconnect = new Function('window', 'api', 'toast', 'location', `${src}; return reconnect;`)(window, api, (t, o) => seen.toasts.push([t, o?.kind || 'ok']), location);
+    const b = { dataset: { reconnect: 'item9' }, disabled: false };
+    await reconnect(b);
+    return { ...seen, tab, b };
+  };
+  let r = await run({ ok: true, url: 'https://hosted.plaid.com/link/1' });
+  assert.ok(r.openedBeforeApi, 'opened on the click itself, or Safari blocks it');
+  assert.equal(r.tab.opener, null); assert.equal(r.tab.location.href, 'https://hosted.plaid.com/link/1'); assert.equal(r.b.disabled, false);
+  assert.equal(r.toasts[0][1], 'ok');
+  r = await run({ ok: true, url: 'javascript:alert(1)' });
+  assert.ok(r.tab.closed && r.tab.location.href === '' && r.toasts[0][1] === 'warn', 'nothing but https');
+  r = await run({ ok: false, error: 'no token for item item9' });
+  assert.ok(r.tab.closed); assert.deepEqual(r.toasts, [['no token for item item9', 'warn']]);
+  r = await run({ ok: false, error: '' });                                             // a 401: lock() already said why
+  assert.ok(r.tab.closed && r.toasts.length === 0);
+  r = await run({ ok: true, url: 'https://hosted.plaid.com/link/2' }, false);       // popup blocked: this tab goes
+  assert.equal(r.assigned, 'https://hosted.plaid.com/link/2');
+});
+
+test('a re-login alert shows Reconnect and Dismiss, never It\'s normal, and the page\'s own words; a reconnected one has no Undo', () => {
+  const app = readFileSync(join(import.meta.dirname, '../public/app.js'), 'utf8');
+  const src = /\nconst KIND_ICONS[\s\S]*?\nfunction renderAlerts\(s\) \{[\s\S]*?\n\}\n/.exec(app)[0];
+  const els = {};
+  const $ = (id) => (els[id] ||= { style: {}, innerHTML: '' });
+  const renderAlerts = new Function('$', 'esc', 'icon', 'when', `${src}; return renderAlerts;`)($, String, () => '', String);
+  renderAlerts({ status: { items: [{}] }, alerts: [
+    { id: 4, kind: 'sync_health', text: 'Venmo needs a re-login. Reply <i>fix Venmo</i>', page_text: 'Venmo needs a re-login. Until then', reconnect: 'item9', sent_at: 't' },
+    { id: 5, kind: 'duplicate_charge', text: 'dup', sent_at: 't' }],
+    resolved: [{ id: 3, kind: 'sync_health', text: 'x', resolved_at: 't', resolution: 'reconnected' }] });
+  const [relogin, dup] = els['alerts-body'].innerHTML.split('</li>');
+  assert.ok(relogin.includes('data-reconnect="item9"') && relogin.includes('>Reconnect<') && relogin.includes('data-act="dismiss"'));
+  assert.ok(!relogin.includes('data-act="normal"') && !relogin.includes('Reply'), 'the button replaces both the reply hint and It’s normal');
+  assert.ok(dup.includes('data-act="normal"') && !dup.includes('data-reconnect'));
+  assert.ok(els['alerts-resolved-body'].innerHTML.includes('Reconnected') && !els['alerts-resolved-body'].innerHTML.includes('data-act="undo"'));
+});

@@ -358,7 +358,7 @@ def cmd_link(a) -> None:
     _triage_read_only()
     conn = store.connect()
     if _from_claude():
-        if not (a.start or a.finish or (a.update and a.telegram)) or a.token is not None or a.public_token:   # a bare --token is the empty string
+        if not (a.start or a.finish or (a.update and a.telegram)) or a.token is not None or a.public_token or a.web:   # a bare --token is the empty string; --web is a person's click
             die("from a Claude session, `finnamon link --start` adds a bank and `link --update <item_id> --telegram` sends a re-login link to the chat; "
                 "--remove and the blocking form are for a person at a terminal")
         if a.owner and not conn.execute("SELECT 1 FROM owners WHERE owner=?", (a.owner,)).fetchone():
@@ -373,6 +373,14 @@ def cmd_link(a) -> None:
         try:
             out(link.finish_in_page(conn, a.owner or _default_owner(conn), a.public_token))
         except (PlaidError, runmod.Locked) as e:
+            die(str(e))
+        return
+    if a.web and not a.update:
+        die("--web goes with --update <item_id>")
+    if a.update and a.web:   # the dashboard's Reconnect: a person's click, so the URL comes back to the page, not to the chat
+        try:
+            out(link.start_update(conn, a.update, to_chat=False))
+        except (ValueError, PlaidError) as e:
             die(str(e))
         return
     if a.start:
@@ -1651,7 +1659,8 @@ def cmd_alerts(a) -> None:
           "telegram_message_id": r["telegram_message_id"], "verdict": r["verdict"], "confidence": r["confidence"], "reason": r["reason"],
           "resolved_at": r["resolved_at"], "resolution": r["resolution"], "suppression_id": r["suppression_id"],
           "folded": [f["id"] for f in fam if f["id"] != r["id"]],
-          "text": notify.render(r), "payload": json.loads(r["payload_json"])} for r, fam in shown])
+          "text": notify.render(r), "payload": json.loads(r["payload_json"]),
+          **({"reconnect": item, "page_text": notify.render(r, page=True)} if (item := notify.relogin_item(r)) else {})} for r, fam in shown])
 
 
 STDIN_WAIT_S = 2   # a heredoc is ready at once; a forgotten one would block a Claude Code Bash tool forever
@@ -1737,6 +1746,7 @@ Next: finnamon link --start --owner <name> for each bank, then ask the assistant
 the rest are for a person in a terminal on the Finnamon box:
   finnamon link --remove <item_id>    unlink a bank: Plaid stops billing, its accounts and transactions are dropped (asks first; --yes skips)
   finnamon link --update <item_id>    log back into a bank and wait here until done (up to hours)
+  (the dashboard's Reconnect runs --web --update <item_id>: it prints the URL and returns; the daemon syncs the bank once done)
   finnamon link [--owner <name>]      add a bank and wait here until done
 The item_id is in `finnamon status`. --owner names whose login it is (add a new person first with finnamon owner add).
 Next, after --remove: the bank's alerts stop; link it again with finnamon link --start --owner <name> if it was a re-link.""",
@@ -1815,6 +1825,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--telegram", action="store_true", help="also send the Plaid link to the household chat (e.g. to open it on a phone)")
     g.add_argument("--token", nargs="?", const="", metavar="REDIRECT_URI", help="web dashboard: print a plain Plaid Link token (OAuth banks return to the HTTPS REDIRECT_URI when given, else use a popup)")
     s.add_argument("--public-token", metavar="PUBLIC_TOKEN", help="web dashboard: finish a Plaid Link session with its public token")
+    s.add_argument("--web", action="store_true", help="web dashboard, with --update: print the re-login URL as JSON (a session still open is reused); the daemon syncs the bank once the login is done")
     s = sp.add_parser("owner"); s.add_argument("action", choices=["list", "add"]); s.add_argument("name", nargs="?"); s.add_argument("--user-id", type=int, help="Telegram user id (channel mode: no code dance)")
     s.add_argument("--no-telegram", action="store_true", help="a member who doesn't chat with the bot (add their Telegram id later with --user-id)")
     s.add_argument("--new-group", action="store_true", help="the code may come from a new group, which becomes the household chat"); s.set_defaults(fn=cmd_owner)

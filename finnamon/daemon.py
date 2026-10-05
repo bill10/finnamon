@@ -12,7 +12,8 @@
     │ run.cycle(): sync→detect→triage→    │  │   wrong-chat messages             │  │   2 timeouts in a row → fresh session   │
     │   notify, under the run lock        │  │ pending_owner + code → enroll     │  │   NO_REPLY → send nothing               │
     │ each tick: link.check_pending       │  │ owner messages → inbox            │  │   result → sendMessage; charts → photo  │
-    │   (finish a `link --start` add)     │  │                                   │  │                                         │
+    │   (finish a `link --start` add) and │  │                                   │  │                                         │
+    │   link.check_updates (a re-login)   │  │                                   │  │                                         │
     └─────────────────────────────────────┘  └───────────────────────────────────┘  └─────────────────────────────────────────┘
 
 inbound=session (`finnamon channel session`): the converse thread hands each message to the dashboard instead
@@ -116,11 +117,20 @@ class Daemon:
         except Exception:  # noqa: BLE001
             log.exception("pending link check failed")
 
+    def check_relogins(self, conn: sqlite3.Connection) -> None:
+        """A re-login link (the chat's `fix X` or the dashboard's Reconnect) the person finished: sync that bank now."""
+        try:
+            for r in link.check_updates(conn):
+                log.info("re-login %s: %s", r["item_id"], r["sync"]["error"] or "reconnected")
+        except Exception:  # noqa: BLE001
+            log.exception("re-login check failed")
+
     def sync_loop(self) -> None:
         conn = self._connect("sync")
         while conn and not self.stop.is_set():
             try:
                 self.check_pending_link(conn)
+                self.check_relogins(conn)
                 if self.sync_due(conn):
                     log.info("sync due (last_run=%s)", store.get_state(conn, "last_run"))
                     try:

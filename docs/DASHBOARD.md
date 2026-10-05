@@ -5,8 +5,11 @@ liabilities with each one's share (click the Property row to state what the hous
 3, 6 or 12-month trend, an **Add account** menu (Link account: Plaid Link runs in
 the page, the bank's login opens in the same tab, nothing to copy; or Import CSV for a bank Plaid can't reach, a window that adds the manual account and takes its file, with a Fetch by AI option that runs the browser import in its own session, shown as an Import tab in the intercom), budgets as an overall bar plus the categories
 that matter with a **Manage** mode to change, add or remove them, the alerts sent to the household lately, or about
-to be (open or unsent, each with **It's normal** and **Dismiss**; resolved ones in a collapsed **Resolved** list saying
-how, with **Undo**; what triage chose not to mention stays with `finnamon alerts --suppressed`), a chart panel, a light/dark
+to be (open or unsent, each with **It's normal** and **Dismiss**, except a bank that needs a re-login or whose connection
+is expiring, which gets **Reconnect** in place of It's normal, as it does beside "needs a new login" in the accounts list:
+it opens Plaid's login page for that bank in a new tab, and within a minute of the login Finnamon syncs the bank, resolves
+its alert as Reconnected and says so in the chat; resolved ones in a collapsed **Resolved** list saying
+how, with **Undo** on the ones you marked normal or dismissed; what triage chose not to mention stays with `finnamon alerts --suppressed`), a chart panel, a light/dark
 toggle, and an intercom button in the corner that opens the household's Claude Code session. Ask it "show me
 dining by month" and the chart panel re-renders; "make it weekly" re-renders it again. "Dining over $50 this month"
 puts a table of those transactions on the same board. Alerts still arrive on

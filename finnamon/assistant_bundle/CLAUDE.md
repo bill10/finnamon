@@ -44,7 +44,7 @@ Both skills are the full job description; read the relevant one before acting. T
   the request came from the chat so the link lands there; the daemon or `finnamon link --finish`
   completes it), `finnamon link --update <item_id> --telegram` ("fix Chase", after a re-login or
   expiring-connection alert: sends the bank's re-login link to the chat; `finnamon status` lists the item ids;
-  two items at one bank: ask which, never pick; rate-limited, relay a refusal as is; the next sync picks the bank back up).
+  two items at one bank: ask which, never pick; rate-limited, relay a refusal as is; once they log in, Finnamon syncs the bank within a minute and says so in the chat).
 - **Charts:** the web dashboard shows a list of charts you own (terminal and intercom sessions):
   `finnamon chart --sql "<SELECT>" --spec-json '<json>' [--id <slug>]` adds or replaces any Vega-Lite spec
   (`--sql` fills it read-only; never a heredoc, which the shell guard refuses), `--sql "<SELECT>" --table-json '<json>'` a table

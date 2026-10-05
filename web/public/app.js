@@ -582,7 +582,7 @@ function renderBanks(s) {
     const stale = oldest && Date.now() - new Date(String(oldest).replace(' ', 'T')).getTime() > STALE_MS;
     const text = bad ? (/LOGIN/.test(bad.status) ? 'needs a new login' : `not syncing (${bad.status})`) : stale ? `synced ${when(oldest)}` : '';
     if (text) warn.set(inst, text);
-    const note = bad ? `<span class="tag warn">${icon('warning-circle')} ${esc(text)}</span>`
+    const note = bad ? `<span class="tag warn">${icon('warning-circle')} ${esc(text)}</span>${RELOGIN.test(bad.status) && !String(bad.item_id).startsWith('manual:') ? reconnectBtn(bad.item_id) : ''}`
       : !linked.length ? `<span class="hint">added by hand${synced ? ` · imported ${esc(when(synced))}` : ''}</span>`
       : times(linked).length < linked.length ? `<span class="hint">not synced yet</span>`   // just linked: the first sync is on its way
       : stale ? `<span class="tag warn" title="Finnamon syncs every bank at least daily">${icon('warning-circle')} ${esc(text)}</span>`
@@ -628,6 +628,7 @@ async function api(method, url, body) {
 const KIND_ICONS = [[/sync|login/, 'plug', 'hot'], [/duplicate/, 'copy', ''], [/recurring/, 'arrows-clockwise', ''], [/balance/, 'drop', 'warn'],
   [/budget|pace/, 'target', 'warn'], [/merchant/, 'storefront', ''], [/large|unusual|spike|anomal/, 'warning-circle', 'hot']];
 const EMOJI_LEAD = /^\s*(?:[☀-➿]️?|[\uD83C-\uDBFF][\uDC00-\uDFFF]️?)+\s*/;
+const reconnectBtn = (item) => `<button class="link" type="button" data-reconnect="${esc(item)}">Reconnect</button>`;
 function renderAlerts(s) {
   // The server sends only what Finnamon told the household or is about to (`finnamon alerts --sent`); triage's own notes
   // on the rest stay with the assistant. Open ones come in s.alerts (`--open`), the latest resolved in s.resolved.
@@ -637,22 +638,45 @@ function renderAlerts(s) {
   $('alerts-nolink').style.display = rows.length || linked ? 'none' : '';
   const item = (a, tail) => {
     const [, ic, tone] = KIND_ICONS.find(([re]) => re.test(a.kind || '')) || [null, 'bell', ''];
-    const text = String(a.text || esc(a.kind)).replace(EMOJI_LEAD, '');   // the icon replaces the emoji
+    const text = String(a.page_text || a.text || esc(a.kind)).replace(EMOJI_LEAD, '');   // the icon replaces the emoji; page_text: the button, not "reply fix X"
     return `<li><span class="ic ${tone}">${icon(ic)}</span><span><div>${text}</div>${tail}`;   // tail closes the span
   };
   const act = (a, what, label) => `<button class="link" data-alert="${Number(a.id)}" data-act="${what}">${label}</button>`;
   $('alerts-body').innerHTML = rows.map(a => {
     const tag = a.sent_at ? ['new', 'open'] : ['warn', 'unsent'];
-    return item(a, `<div class="when">${esc(when(a.sent_at || a.created_at))}</div><div class="acts">${act(a, 'normal', 'It’s normal')}${act(a, 'dismiss', 'Dismiss')}</div></span>`) +
+    const first = a.reconnect ? reconnectBtn(a.reconnect) : act(a, 'normal', 'It’s normal');   // a re-login is fixed, not normal
+    return item(a, `<div class="when">${esc(when(a.sent_at || a.created_at))}</div><div class="acts">${first}${act(a, 'dismiss', 'Dismiss')}</div></span>`) +
       `<span class="tag ${tag[0]}">${tag[1]}</span></li>`;
   }).join('');
-  const how = (a) => a.resolution === 'normal' ? `It’s normal${a.suppression_id ? ` (rule ${Number(a.suppression_id)})` : ''}` : a.resolution === 'dismissed' ? 'Dismissed' : 'Resolved';
+  const how = (a) => a.resolution === 'normal' ? `It’s normal${a.suppression_id ? ` (rule ${Number(a.suppression_id)})` : ''}` : a.resolution === 'dismissed' ? 'Dismissed' : a.resolution === 'reconnected' ? 'Reconnected' : 'Resolved';
   $('alerts-resolved').hidden = !done.length;
   $('alerts-resolved-n').textContent = done.length;
   $('alerts-resolved-body').innerHTML = done.map(a => item(a, `<div class="when">${esc(how(a))} · ${esc(when(a.resolved_at))}</div></span>`) +
-    `<span>${a.resolution ? act(a, 'undo', 'Undo') : ''}</span></li>`).join('');   // NULL: Finnamon resolved it, or it was before the page could undo
+    `<span>${a.resolution === 'normal' || a.resolution === 'dismissed' ? act(a, 'undo', 'Undo') : ''}</span></li>`).join('');   // the rest Finnamon resolved (a bank reconnected), or came before the page could undo
 }
 const ALERT_DONE = { normal: 'Marked normal: alerts like it stay quiet.', dismiss: 'Dismissed: the next one still alerts.', undo: 'Undone: the alert is open again.' };
+// Reconnect: Plaid's re-login page for one bank, in a new tab. The tab opens on the click itself (one opened after an await
+// is a blocked popup to Safari) and goes to Plaid once the server has the link; the daemon syncs the bank within a minute of the login.
+const RELOGIN = /^(ITEM_LOGIN_REQUIRED|PENDING_EXPIRATION|PENDING_DISCONNECT)$/;   // notify.RELOGIN exactly (tests/test_relogin.py holds the two together)
+async function reconnect(b) {
+  const w = window.open('', '_blank');
+  if (w) w.opener = null;
+  b.disabled = true;
+  const r = await api('POST', `/api/item/${encodeURIComponent(b.dataset.reconnect)}/reconnect`);
+  b.disabled = false;
+  if (r.ok && /^https:\/\//.test(r.url || '')) {   // Plaid's address, nothing else
+    if (w) w.location.href = r.url; else location.assign(r.url);   // a blocked popup: this tab goes, and the page is one Back away
+    toast('Log in on Plaid’s page. Finnamon picks the bank back up within a minute of the login.');
+  } else {
+    w?.close();
+    if (r.error || r.ok) toast(r.error || 'Plaid sent no login page; try again in a minute.', { kind: 'warn' });
+  }
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-reconnect]'); if (!b) return;
+  e.preventDefault();   // in Accounts it sits in a <summary>: the click is the button's, not the section's toggle
+  reconnect(b);
+});
 $('alerts').addEventListener('click', async (e) => {
   const b = e.target.closest('button[data-alert]'); if (!b) return;
   for (const x of $('alerts').querySelectorAll('button[data-alert]')) x.disabled = true;   // one at a time: the list is redrawn after
