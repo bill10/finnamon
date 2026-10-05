@@ -263,3 +263,16 @@ def test_a_cli_call_that_hangs_comes_back_as_an_error(monkeypatch):
     monkeypatch.setattr(subprocess, "run", hang)
     out = mcp_server.run_argv(["finnamon", "status"])
     assert out["exit_code"] is None and out["stdout"] == "" and "did not finish" in out["stderr"]
+
+
+# Value: protects=the text a `-` argument reads reaches the CLI through the tool's stdin; fails_when=run_argv drops stdin or sends DEVNULL; why_new=triage set and detect --draft read only stdin and the tool has no shell; seam=none
+def test_triage_set_and_detect_draft_take_their_text_through_stdin(home, conn):
+    seed(conn)
+    out = mcp_server.run_argv(["finnamon", "detect", "--draft", "-", "--name", "big_coffee"], stdin="SELECT 1 AS n -- $45.67\n")
+    assert out["exit_code"] == 0, out
+    from finnamon import detect
+    assert "$45.67" in (detect.drafts_dir() / "big_coffee.sql").read_text(), "the $ signs survive: no shell"
+    out = mcp_server.run_argv(["finnamon", "triage", "set", "g1", "suppress", "low", "-"])
+    assert out["exit_code"] != 0, "without stdin there is no sentence"
+    cfg = tomllib.loads(codex.render_config())["mcp_servers"]["finnamon"]
+    assert cfg["tool_timeout_sec"] > mcp_server.TIMEOUT_S, "Codex waits for the CLI rather than retrying a write still running"

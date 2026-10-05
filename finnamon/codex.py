@@ -96,6 +96,7 @@ def _hooks(settings: dict) -> list[tuple[str, str, dict]]:
 def render_config(d: Path | None = None, state: dict[str, str] | None = None) -> str:
     """config.toml for CODEX_HOME. `state`: {hook key: "sha256:…"} from pin(); without it the hooks are untrusted and Codex
     skips them, which doctor and harness_problems() refuse."""
+    from . import mcp_server   # here: mcp_server imports agent_runner, which imports this module
     d = d or assistant.dir()
     settings = json.loads(assistant.files()[".claude/settings.json"])
     sealed_env = {"FINNAMON_FROM_AGENT": "1", "HOME": str(Path.home()), "FINNAMON_HOME": str(config.home())}
@@ -128,6 +129,7 @@ def render_config(d: Path | None = None, state: dict[str, str] | None = None) ->
              f"env = {_inline(sealed_env)}",
              'env_vars = ["FINNAMON_TRIAGE", "FINNAMON_IMPORT_SESSION"]   # the read-only runs stay read-only through the tool',
              'enabled_tools = ["finnamon"]',
+             f"tool_timeout_sec = {mcp_server.TIMEOUT_S + 60}   # past the tool's own limit: Codex never gives up on a call still running",
              "",
              "[mcp_servers.finnamon.tools.finnamon]",
              'approval_mode = "approve"   # the tool refuses what the allow list does not cover, and never asks',

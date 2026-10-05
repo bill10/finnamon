@@ -60,14 +60,15 @@ def refusal(argv) -> str | None:
     return None
 
 
-def run_argv(argv) -> dict:
-    """{"exit_code", "stdout", "stderr"} from the CLI (stdout as it printed it, JSON included), or {"refused": why}."""
+def run_argv(argv, stdin: str | None = None) -> dict:
+    """{"exit_code", "stdout", "stderr"} from the CLI (stdout as it printed it, JSON included), or {"refused": why}.
+    `stdin`: what a `-` argument reads (`triage set … -`, `detect --draft -`), the text a heredoc would pipe in."""
     if (why := refusal(argv)):
         return {"refused": why}
     env = {**os.environ, "FINNAMON_FROM_AGENT": "1"}   # the human-only gates (cli._from_agent), whatever launched the server
     try:
         r = subprocess.run([sys.executable, "-m", "finnamon.cli", *argv[1:]], capture_output=True, text=True, env=env,
-                           stdin=subprocess.DEVNULL, timeout=TIMEOUT_S)
+                           **({"input": stdin} if stdin is not None else {"stdin": subprocess.DEVNULL}), timeout=TIMEOUT_S)
     except subprocess.TimeoutExpired:
         return {"exit_code": None, "stdout": "", "stderr": f"`{shlex.join(argv)}` did not finish within {TIMEOUT_S}s"}
     return {"exit_code": r.returncode, "stdout": r.stdout, "stderr": r.stderr}
@@ -82,11 +83,13 @@ def build():
     mcp = FastMCP("finnamon", instructions="A household's finances. Amount sign: positive = money out.")
 
     @mcp.tool(name="finnamon")
-    def finnamon_tool(argv: list[str]) -> str:
+    def finnamon_tool(argv: list[str], stdin: str | None = None) -> str:
         """Run one `finnamon` command: argv is the command line as a list, one string per argument, never a shell line,
-        e.g. ["finnamon", "query", "SELECT count(*) FROM tx_now"]. Returns JSON {exit_code, stdout, stderr}, or
-        {refused} for a command off the assistant's allow list (a person runs those in a terminal)."""
-        return json.dumps(run_argv(argv))
+        e.g. ["finnamon", "query", "SELECT count(*) FROM tx_now"]. stdin: the text a `-` argument reads (what a heredoc
+        would pipe in: `triage set <group> <verdict> <confidence> -`, `detect --draft -`). Returns JSON
+        {exit_code, stdout, stderr}, or {refused} for a command off the assistant's allow list (a person runs those in
+        a terminal)."""
+        return json.dumps(run_argv(argv, stdin))
 
     @mcp.tool()
     def list_accounts() -> str:

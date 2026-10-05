@@ -207,6 +207,10 @@ Yes, with a symlink, and that is all it needs.
 - **Config keys** (from `codex mcp get`): `enabled_tools`, `env_vars` (variables passed through from Codex's own environment;
   an MCP server otherwise gets only a short default set), and `[mcp_servers.<name>.tools.<tool>] approval_mode`
   (`auto`, `prompt`, `writes`, `approve`).
+- **`env_vars` reaches the server:** a live `codex exec` with `FINNAMON_TRIAGE=1` in Codex's own environment had the tool
+  refuse `alias --list` and `detect --draft` from triage's list. The tool's optional `stdin` argument carries what a
+  `-` argument reads (`triage set … -`, `detect --draft -`), since there is no shell to pipe a heredoc. `tool_timeout_sec`
+  sits above the tool's own 600 s, so Codex never retries a write that is still running.
 - **`--ignore-user-config` was not used for the live runs:** it skips `$CODEX_HOME/config.toml`, which is the generated
   config under test. A scratch `CODEX_HOME` already keeps `~/.codex/config.toml` out.
 - **The household's AGENTS.md refuses a test prompt** that asks it to read `secrets.toml` (no tool call at all); the guard runs
