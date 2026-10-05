@@ -887,3 +887,34 @@ test('a pairing code from `finnamon remote`: one device, once, before it expires
     assert.ok(!logged.some(l => /good-code|new-code|old-code/.test(l)) && logged.some(l => /pairing let a device in/.test(l)), 'the outcome is logged, never the code');
   } finally { console.log = log; srv.close(); rmSync(home, { recursive: true, force: true }); }
 });
+
+test('Reconnect runs link --update <item> --web for a plain item id only, with the key', async () => {
+  await withApp(async ({ base, post, calls }) => {
+    assert.equal((await post('/api/item/aBc_9-x/reconnect', {})).status, 200);
+    assert.deepEqual(calls.at(-1), ['link', '--web', '--update', 'aBc_9-x']);
+    const n = calls.length;
+    for (const path of ['/api/item/-x/reconnect', '/api/item/--remove/reconnect', `/api/item/${'a'.repeat(101)}/reconnect`, '/api/item/a%20b/reconnect', '/api/item/a.b/reconnect'])
+      assert.equal((await post(path, {})).status, 400, path);
+    const port = new URL(base).port;
+    assert.equal((await globalThis.fetch(`${base}/api/item/abc/reconnect`, { method: 'POST' })).status, 401, 'no key, no Plaid session');
+    assert.equal(await raw(port, '/api/item/abc/reconnect', { origin: 'http://evil.example' }), 403);
+    assert.equal(calls.length, n);
+  });
+});
+
+test('a re-login alert shows Reconnect and Dismiss, never It\'s normal, and the page\'s own words; a reconnected one has no Undo', () => {
+  const app = readFileSync(join(import.meta.dirname, '../public/app.js'), 'utf8');
+  const src = /\nconst KIND_ICONS[\s\S]*?\nfunction renderAlerts\(s\) \{[\s\S]*?\n\}\n/.exec(app)[0];
+  const els = {};
+  const $ = (id) => (els[id] ||= { style: {}, innerHTML: '' });
+  const renderAlerts = new Function('$', 'esc', 'icon', 'when', `${src}; return renderAlerts;`)($, String, () => '', String);
+  renderAlerts({ status: { items: [{}] }, alerts: [
+    { id: 4, kind: 'sync_health', text: 'Venmo needs a re-login. Reply <i>fix Venmo</i>', page_text: 'Venmo needs a re-login. Until then', reconnect: 'item9', sent_at: 't' },
+    { id: 5, kind: 'duplicate_charge', text: 'dup', sent_at: 't' }],
+    resolved: [{ id: 3, kind: 'sync_health', text: 'x', resolved_at: 't', resolution: 'reconnected' }] });
+  const [relogin, dup] = els['alerts-body'].innerHTML.split('</li>');
+  assert.ok(relogin.includes('data-reconnect="item9"') && relogin.includes('>Reconnect<') && relogin.includes('data-act="dismiss"'));
+  assert.ok(!relogin.includes('data-act="normal"') && !relogin.includes('Reply'), 'the button replaces both the reply hint and It’s normal');
+  assert.ok(dup.includes('data-act="normal"') && !dup.includes('data-reconnect'));
+  assert.ok(els['alerts-resolved-body'].innerHTML.includes('Reconnected') && !els['alerts-resolved-body'].innerHTML.includes('data-act="undo"'));
+});

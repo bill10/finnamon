@@ -192,6 +192,7 @@ details.bank .cnt { font-weight: 400; font-size: 13px; color: var(--muted); }
 details.bank > summary .bal { font-weight: 600; min-width: 5ch; text-align: right; }
 details.bank > summary .bal.owed { color: var(--neg); }
 details.bank .note { flex-basis: 100%; padding-left: 24px; font-weight: 400; } details.bank .note .hint, details.bank .note .tag { margin-left: 0; }
+details.bank .note button.link { font-size: 13px; margin-left: 4px; }   /* Reconnect: the alert list's action size, beside the tag that says why */
 @media (prefers-reduced-motion: reduce) { details.bank > summary > svg.chev { transition: none; } }
 .pop h3.bank .tag { align-self: center; }
 .accts { list-style: none; margin: 0; padding: 0; }

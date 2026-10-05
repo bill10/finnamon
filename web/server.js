@@ -657,6 +657,11 @@ export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon',
     if (!act || !/^[1-9][0-9]{0,9}$/.test(req.params.id)) return res.status(400).json({ error: 'bad alert or action' });
     write(res, act(req.params.id));
   });
+  // Reconnect (a re-login alert, or a bank in Accounts that needs one): an update-mode Plaid Hosted Link for that bank, which
+  // the page opens in a new tab. The CLI reuses a session it opened minutes ago, so a double click is one session; the daemon
+  // syncs the bank once the login is done. A Plaid item_id is letters and digits (the guard keeps it from reading as an option).
+  app.post('/api/item/:id/reconnect', (req, res) => /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(req.params.id)
+    ? write(res, ['link', '--web', '--update', req.params.id]) : res.status(400).json({ error: 'bad bank id' }));
 
   // A bank's CSV export into a manual account (`finnamon account add`, for a bank Plaid can't reach): the body is the file,
   // kept under ~/.finnamon/imports as the record of what was loaded, and `finnamon import` does the parsing and the writes.
