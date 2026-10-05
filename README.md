@@ -133,8 +133,8 @@ finnamon daemon (always on)                      claude (on demand, in ~/.finnam
 heartbeat (hourly timer): is the daemon alive?    /triage: invoked by the daemon per run with candidates
 ```
 
-- **Rules** (`finnamon/detectors/rules/*.sql`): duplicate charge, new recurring charge, low balance, budget pace, sync health. SQL only, zero tokens, one message each.
-- **Anomaly candidates** (`detectors/candidates/*.sql`): first-ever merchant, amount outlier, new category, no identifiable source, unmatched transfer, recurring stream changed. SQL finds them; the `/triage` skill decides which a good assistant would mention (immediately, or in Sunday's roundup) and why. It can only promote or suppress what SQL found; the triage run is read-only apart from `finnamon triage set`.
+- **Rules** (`finnamon/detectors/rules/*.sql`): duplicate charge, new recurring charge, subscription price change, low balance, budget pace, sync health. SQL only, zero tokens, one message each.
+- **Anomaly candidates** (`detectors/candidates/*.sql`): first-ever merchant, amount outlier, new category, no identifiable source, unmatched transfer, recurring payment missed. SQL finds them; the `/triage` skill decides which a good assistant would mention (immediately, or in Sunday's roundup) and why. It can only promote or suppress what SQL found; the triage run is read-only apart from `finnamon triage set`.
 - **Every detector** selects from the shared prelude `detectors/_prelude.sql`, which resolves merchant aliases, category overrides, suppressions, and joint-account mirrors as of the run timestamp, so every alert can be replayed. The same resolution without the as-of scoping is a view, `tx_now` (`migrations/005_tx_now_view.sql`), and that is what `finnamon query`, budgets, charts and the MCP tools read.
 
 The household's assistant runs in `~/.finnamon/assistant/`: its instructions, permission set and skills, written there
