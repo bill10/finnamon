@@ -127,6 +127,40 @@ Recorded in `tests/fixtures/codex/hooks/`. Every payload carries:
   - `turn.completed {usage}`
   - The first `agent_message` is commentary; the last one is the reply. `agent_runner._codex_result` parses it.
 
+### 6. Can a Finnamon-owned `CODEX_HOME` share the person's existing login?
+
+Yes, with a symlink, and that is all it needs.
+
+**Where Codex keeps credentials:**
+- In 0.157, `cli_auth_credentials_store` defaults to `file`, which is `$CODEX_HOME/auth.json`.
+- `keyring` and `auto` are opt-in. The owner's config sets neither, and `security find-generic-password -s "Codex Auth"` finds no item.
+- So on this machine the login lives only in `~/.codex/auth.json`. Not verified: how a keyring entry is keyed. A household whose config chose `keyring` needs a separate check.
+
+**The test:** a scratch `CODEX_HOME` holding only a `config.toml`, a hook, a skill, and `auth.json` as a symlink to `~/.codex/auth.json`.
+- `codex login status` printed "Logged in using ChatGPT".
+- One `codex exec --json` turn ran.
+- The scratch PreToolUse hook fired (trust pinned by hash).
+- The scratch skill `finnamon-spike` was in the session.
+- The `context7` and `shadcn` MCP servers from the owner's `~/.codex/config.toml` were absent from the rollout.
+- So the symlink shares only the login.
+- `~/.codex/auth.json` came out unchanged: same sha256, modification time, change time and link count.
+
+**Not tried:** a hard link. Making one changes the original inode's change time and link count, which counts as modifying `~/.codex`. It would also share less than a symlink if Codex rewrites the file by renaming a new one into place.
+
+**The open risk is a token refresh.** None happened here; the login had last refreshed 3 days earlier. When one does, Codex writes `auth.json`, and what happens next depends on how it writes:
+- **In place:** the write goes through the symlink, both homes stay in step, and the risk is two Codex processes refreshing at once.
+- **Write-new-then-rename:** the symlink is replaced by a private copy holding the new refresh token. ChatGPT rotates refresh tokens, so the person's `~/.codex` login could then be left with a token that no longer works.
+
+Deciding which takes a forced refresh, which writes to the real login, so it was not tried. Card 2 should test it under a throwaway ChatGPT login: symlink, force a refresh, and check whether the link survives. Until then:
+- Doctor checks that `$CODEX_HOME/auth.json` is still a symlink to `~/.codex/auth.json`.
+- If it is not, doctor re-links it, or asks the person to run `codex login` once.
+
+**The interactive `codex` (TUI) has no `--ignore-user-config`**; only `exec` has it. The equivalent is the same as above: `CODEX_HOME=<finnamon's>` plus `-c` flags. With the symlinked `auth.json`, the TUI shares the login the same way.
+
+**Seen in passing:**
+- The `~/.agents/skills` leak (below) showed up again in this run.
+- Asked which MCP servers it had, the model named only `codex_apps`, Codex's built-in ChatGPT-apps server. Card 2 should check whether that can be turned off. Not verified in the rollout.
+
 ## Also found
 
 - **The seal has a hole:** with a scratch `CODEX_HOME`, Codex still loaded the 42 personal skills in `~/.agents/skills`.
@@ -140,6 +174,9 @@ Recorded in `tests/fixtures/codex/hooks/`. Every payload carries:
 ## What changes in cards 2–6
 
 - **Card 2 (bundle, `CODEX_HOME`, install/doctor):**
+  - Share the login: link `~/.finnamon/codex/auth.json` to `~/.codex/auth.json` (finding 6). There is no second login unless the person has no Codex login at all.
+  - Doctor checks the link and re-makes it.
+  - Test the refresh behaviour under a throwaway account first.
   - Generate a permission profile (`default_permissions`, `extends = ":workspace"`) and never `sandbox_mode`.
   - Pin hook trust with `hooks.state` hashes from `app-server` `hooks/list`.
   - Close the `~/.agents/skills` leak.
