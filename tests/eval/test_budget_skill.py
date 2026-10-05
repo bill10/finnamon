@@ -60,6 +60,7 @@ def run_claude(prompt: str, env: dict, extra: list[str] = ()) -> dict:
     events = body if isinstance(body, list) else [body]
     out = events[-1]
     out["tool_calls"] = {block["name"] for e in events if e.get("type") == "assistant" for block in e["message"]["content"] if block.get("type") == "tool_use"}
+    out["commands"] = [block["input"].get("command", "") for e in events if e.get("type") == "assistant" for block in e["message"]["content"] if block.get("type") == "tool_use" and block["name"] == "Bash"]
     return out
 
 
