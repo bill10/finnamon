@@ -82,7 +82,8 @@ def test_a_file_a_release_drops_leaves_unless_the_household_changed_it(own_dir, 
     new = {k: v for k, v in assistant.files().items() if "import-browser" not in k and "triage" not in k}
     monkeypatch.setattr(assistant, "files", lambda: new)
     res = assistant.install()
-    assert res["removed"] == [str(gone)] and not gone.exists() and res["changed"]
+    codex_gone = [str(own_dir / f".agents/skills/{n}/SKILL.md") for n in ("import-browser", "triage")]   # generated, so never theirs
+    assert sorted(res["removed"]) == sorted([str(gone), *codex_gone]) and not gone.exists() and res["changed"]
     assert res["orphaned"] == [str(theirs)] and res["kept"] == [] and theirs.read_text() == "tuned"
     assert set(json.loads((own_dir / assistant.MANIFEST).read_text())) == set(new)
 
@@ -139,7 +140,7 @@ def test_atomic_writes_use_a_private_temp_file_with_the_final_mode(own_dir, monk
         seen.append((Path(src).name, oct(os.stat(src).st_mode & 0o777))); real(src, dst)
     monkeypatch.setattr(os, "replace", spy)
     assistant.install()
-    assert seen and all(name != "CLAUDE.md.tmp" and name.startswith(("CLAUDE.md.", ".finnamon-bundle.json.", "settings.json.", "SKILL.md.")) for name, _ in seen), "mkstemp names: two writers never share one"
+    assert seen and all(name != "CLAUDE.md.tmp" and name.startswith(("CLAUDE.md.", "AGENTS.md.", ".finnamon-bundle.json.", "settings.json.", "SKILL.md.")) for name, _ in seen), "mkstemp names: two writers never share one"
     seen.clear()
     assistant.trust()
     assert seen == [(seen[0][0], "0o600")] and seen[0][0].startswith(".claude.json.")
@@ -162,7 +163,8 @@ def test_files_ships_everything_the_bundle_tracks():
     if r.returncode:
         pytest.skip("not a git checkout")
     tracked = {line.split("finnamon/assistant_bundle/", 1)[1] for line in r.stdout.split()}
-    assert tracked == set(assistant.files()), "add the new file to files() (and the wheel), or drop it from the bundle"
+    generated = {k for k in assistant.files() if k == "AGENTS.md" or k.startswith(".agents/")}   # the Codex files, from these (codex.bundle)
+    assert tracked == set(assistant.files()) - generated, "add the new file to files() (and the wheel), or drop it from the bundle"
 
 
 def test_a_symlink_in_the_assistant_directory_is_replaced_never_followed(own_dir, tmp_path):
@@ -216,7 +218,8 @@ def test_files_skips_what_a_session_or_an_install_leaves_in_the_source(tmp_path,
     (src / "CLAUDE.md.bak").write_text("old"); (src / "CLAUDE.md.tmp").write_text("half"); (src / ".DS_Store").write_text(""); (src / ".claude/skills/finnamon/.SKILL.md.swp").write_text("")
     monkeypatch.setattr(assistant, "BUNDLE", src)
     names = set(assistant.files())
-    assert names == {"CLAUDE.md", ".claude/settings.json", ".claude/skills/finnamon/SKILL.md", ".claude/skills/triage/SKILL.md", ".claude/skills/import-browser/SKILL.md"}
+    assert names == {"CLAUDE.md", ".claude/settings.json", ".claude/skills/finnamon/SKILL.md", ".claude/skills/triage/SKILL.md", ".claude/skills/import-browser/SKILL.md",
+                     "AGENTS.md", ".agents/skills/finnamon/SKILL.md", ".agents/skills/triage/SKILL.md", ".agents/skills/import-browser/SKILL.md"}
 
 
 def test_register_channel_plugin_warns_without_claude_or_on_a_failed_spawn(own_dir, conn, monkeypatch, capsys):
@@ -246,7 +249,7 @@ def test_install_warns_when_trust_cannot_be_written(own_dir, monkeypatch, capsys
 
 def test_problems_name_every_missing_file_and_the_fix(own_dir):
     problems = assistant.problems()
-    assert len(problems) == 6 and all("finnamon install" in p and str(own_dir) in p for p in problems)
+    assert len(problems) == 10 and all("finnamon install" in p and str(own_dir) in p for p in problems)
     assert any("import-browser" in p for p in problems), "every skill a session could be started on is required"
     assistant.install(); assistant.trust()
     assert assistant.problems() == [] and claude_runner.harness_problems() == []
@@ -568,7 +571,8 @@ def test_the_wheel_carries_the_bundle(tmp_path):
     assert r.returncode == 0, r.stderr[-800:]
     names = zipfile.ZipFile(next(tmp_path.glob("*.whl"))).namelist()
     for rel in assistant.REQUIRED:
-        assert f"finnamon/assistant_bundle/{rel}" in names, rel
+        if rel != "AGENTS.md" and not rel.startswith(".agents/"):   # generated at install from the Claude files
+            assert f"finnamon/assistant_bundle/{rel}" in names, rel
 
 
 def test_the_plugin_is_never_registered_outside_the_households_assistant_directory(tmp_path, monkeypatch, conn, fake_claude, capsys):

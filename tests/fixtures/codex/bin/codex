@@ -1,15 +1,71 @@
 #!/usr/bin/env python3
 """A stand-in for `codex` in tests, like scripts/demo/bin/claude: it never calls a model. `exec --json` prints the events a
-real Codex 0.157 run printed (../exec.jsonl, recorded in the card-1 spike); CODEX_FAKE_EXIT makes it fail instead."""
+real Codex 0.157 run printed (../exec.jsonl, recorded in the card-1 spike); CODEX_FAKE_EXIT makes it fail instead.
+`app-server` answers hooks/list and skills/list the way 0.157 does (keys `<config path>:<event>:<group>:<handler>`, a
+hook trusted when [hooks.state] pins its hash; skills under $HOME/.agents/skills are the user's). CODEX_FAKE_VERSION,
+CODEX_FAKE_LOGGED_OUT and CODEX_FAKE_NO_HOOKS steer version, login status and features list."""
+import hashlib
+import json
 import os
+import re
 import sys
+import tomllib
 from pathlib import Path
 
 args = sys.argv[1:]
+home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+
+
+def hooks():
+    cfg_path = home / "config.toml"
+    try:
+        cfg = tomllib.loads(cfg_path.read_text())
+    except (OSError, ValueError):
+        return []
+    state = (cfg.get("hooks") or {}).get("state") or {}
+    out = []
+    for event, groups in (cfg.get("hooks") or {}).items():
+        if event == "state":
+            continue
+        snake = re.sub(r"(?<!^)(?=[A-Z])", "_", event).lower()
+        for i, g in enumerate(groups):
+            for j, h in enumerate(g.get("hooks") or []):
+                key = f"{cfg_path}:{snake}:{i}:{j}"
+                digest = "sha256:" + hashlib.sha256(json.dumps([event, g.get("matcher"), h], sort_keys=True).encode()).hexdigest()
+                out.append({"key": key, "eventName": event[0].lower() + event[1:], "command": h.get("command"), "sourcePath": str(cfg_path),
+                            "source": "user", "currentHash": digest,
+                            "trustStatus": "trusted" if (state.get(key) or {}).get("trusted_hash") == digest else "untrusted"})
+    return out
+
+
+def skills():
+    root = Path.home() / ".agents" / "skills"
+    return [{"name": p.parent.name, "path": str(p), "scope": "user", "enabled": True, "description": ""} for p in sorted(root.glob("*/SKILL.md"))]
+
+
 if args[:1] in (["--version"], ["-V"]):
-    print("codex-cli 0.157.0")
+    print(f"codex-cli {os.environ.get('CODEX_FAKE_VERSION', '0.157.0')}")
 elif args[:2] == ["login", "status"]:
+    if os.environ.get("CODEX_FAKE_LOGGED_OUT"):
+        print("Not logged in", file=sys.stderr)
+        sys.exit(1)
     print("Logged in using ChatGPT")
+elif args[:1] == ["login"]:
+    (home / "auth.json").write_text('{"fake": true}')
+elif args[:2] == ["features", "list"]:
+    print(f"apps                                     stable             false\nhooks                                    stable             {'false' if os.environ.get('CODEX_FAKE_NO_HOOKS') else 'true'}")
+elif args[:1] == ["app-server"]:
+    for line in sys.stdin:
+        m = json.loads(line)
+        if m.get("method") == "hooks/list":
+            data = {"data": [{"cwd": c, "hooks": hooks(), "warnings": [], "errors": []} for c in m["params"]["cwds"]]}
+        elif m.get("method") == "skills/list":
+            data = {"data": [{"cwd": c, "skills": skills(), "errors": []} for c in m["params"]["cwds"]]}
+        elif "id" in m and m["id"] != 0:
+            data = None
+        else:
+            continue
+        print(json.dumps({"id": m["id"], "result": data} if data is not None else {"id": m["id"], "error": {"message": "unsupported"}}), flush=True)
 elif args[:1] == ["exec"] and "--json" in args:
     if os.environ.get("CODEX_FAKE_EXIT"):
         print(os.environ.get("CODEX_FAKE_STDERR", "error"), file=sys.stderr)

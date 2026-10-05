@@ -7,6 +7,7 @@ import functools
 import getpass
 import html
 import http.client
+import importlib.util
 import select
 import sqlite3
 import subprocess
@@ -22,7 +23,7 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
-from . import __version__, assistant, charts, render, backup, budgets, claude_runner, config, demo, detect, heartbeat, imports, investments, link, notify, owners, plaid_api, properties, query, remote, run as runmod, scheduler, secrets, store, sync, taxonomy, telegram, triage, voice
+from . import __version__, assistant, charts, codex, render, backup, budgets, claude_runner, config, demo, detect, heartbeat, imports, investments, link, notify, owners, plaid_api, properties, query, remote, run as runmod, scheduler, secrets, store, sync, taxonomy, telegram, triage, voice
 from .plaid_api import PlaidError
 
 
@@ -131,8 +132,12 @@ def cmd_init(a) -> None:
             r = owners.add_first(conn, owner, code)
             print(f" ✓ got it, chat id {r['chat_id']} recorded for {owner}")
 
-    print("Step 3 of 5: Claude Code")
-    _check_claude_code()
+    print("Step 3 of 5: Assistant")
+    which = _choose_assistant(a)
+    if which == "codex":
+        which = _setup_codex(conn)
+    else:
+        _check_claude_code()
     _install_bundle()
 
     print("Step 4 of 5: Dashboard")
@@ -141,6 +146,9 @@ def cmd_init(a) -> None:
         store.set_state(conn, "inbound", "session")
         store.set_state(conn, "session_tip_shown", 1)   # nothing to advertise to a household already on it
         print("  Telegram: session mode (the default), the chat shares the dashboard's conversation. `finnamon channel off` for the legacy separate session.")
+    if which == "codex" and me is not None and store.get_state(conn, "inbound") != "session":   # channel mode is Claude Code's plugin; the daemon's own session is claude -p
+        store.set_state(conn, "inbound", "session")
+        print("  Telegram: session mode, the chat shares the dashboard's Codex conversation (channel mode is Claude Code only).")
 
     print("Step 5 of 5: Schedule")
     if not shutil.which("finnamon"):
@@ -325,6 +333,52 @@ def cmd_remote(a) -> None:
     code = remote.off(dry_run=a.dry_run) if a.off else remote.setup(dry_run=a.dry_run)
     if code:
         sys.exit(code)
+
+
+def _choose_assistant(a) -> str:
+    """init's "which assistant": Claude Code stays the default; Codex is offered when it is installed."""
+    exe = codex.binary()
+    if not exe:
+        print(f"  Claude Code runs the assistant. (OpenAI's Codex CLI can instead: {codex.INSTALL_HINT}, then `finnamon init` again.)")
+        return "claude"
+    if a.yes:
+        return "claude"
+    ok, msg = _claude_code_status()
+    shared = "your Codex login is shared" if codex.user_auth().is_file() else "Codex asks you to log in"
+    print(f"  Claude Code: {msg}")
+    print(f"  Codex: installed at {exe} ({shared})")
+    ans = input("  Which runs the household's assistant? [claude/codex] (Enter: claude) ").strip().lower()
+    return "codex" if ans == "codex" else "claude"
+
+
+def _setup_codex(conn) -> str:
+    """init's Codex path: share the login (or log in under Finnamon's own CODEX_HOME), write the config with the hooks'
+    trust pinned, and select it. Returns the assistant the household ends up with."""
+    exe = codex.binary()
+    if (v := codex.version(exe)) is None or v < codex.MIN_VERSION:
+        print(f"  ! Codex {'.'.join(map(str, v)) if v else '(version unknown)'} is older than {'.'.join(map(str, codex.MIN_VERSION))}: {codex.INSTALL_HINT}. Claude Code stays the assistant.")
+        _check_claude_code()
+        return "claude"
+    try:   # first, so a Codex that cannot be selected yet leaves no FINNAMON_HOME/codex behind: a Claude household stays as it was
+        store.validate_setting("assistant", "codex")
+    except ValueError as e:   # until the dashboard card lands (store.validate_setting)
+        print(f"  Claude Code stays the assistant for now: {e}")
+        _check_claude_code()
+        return "claude"
+    res = codex.install(exe)
+    if res["auth"] in ("linked", "relinked"):
+        print(f"  ✓ sharing your Codex login: {codex.home() / 'auth.json'} → {codex.user_auth()}")
+    elif res["auth"] == "none":
+        print(f"  No Codex login to share ({codex.user_auth()} does not exist): logging in for Finnamon alone")
+        if not codex.login(exe):
+            print(f"  ! codex login did not finish; later: CODEX_HOME={codex.home()} codex login")
+    ok, msg = codex.logged_in(exe)
+    print(f"  {'✓' if ok else '!'} Codex: {msg}")
+    print(f"  ✓ wrote {codex.home() / codex.CONFIG} ({res['pinned']} hook(s) trusted)" if res["pinned"] else
+          f"  ! wrote {codex.home() / codex.CONFIG}, but Codex did not report its hooks; `finnamon doctor` says more")
+    store.set_setting(conn, "assistant", "codex")
+    print("  ✓ Codex runs the household's assistant")
+    return "codex"
 
 
 def _check_claude_code() -> None:
@@ -590,6 +644,8 @@ def cmd_channel(a) -> None:
     if a.action != "status" and _from_agent():
         die("switching the Telegram inbound is for a person at a terminal")
     conn = store.connect()
+    if a.action == "on" and store.assistant_kind(conn) == "codex":
+        die("channel mode is Claude Code's own Telegram plugin; with Codex as the assistant the chat goes through the dashboard's session: finnamon channel session")
     if a.action == "on":
         store.set_state(conn, "inbound", "channel")
         print("inbound = channel. The daemon stops polling the bot within a minute (no restart needed). Then, once")
@@ -1238,14 +1294,15 @@ def cmd_status(a) -> None:
          "items": [dict(r) for r in conn.execute("SELECT item_id, institution, owner, status, last_synced_at, last_error, "
                                                      "(SELECT group_concat(COALESCE(a.name, '') || COALESCE(' …' || a.mask, ''), ', ') FROM accounts a WHERE a.item_id=items.item_id) AS accounts FROM items")],
          "pending_alerts": conn.execute(f"SELECT count(*) FROM alerts WHERE {notify.SENDABLE}").fetchone()[0],
-         "untriaged": len(triage.untriaged(conn)), "agent": store.assistant_kind(conn), "assistant": str(assistant.dir()), "assistant_problems": assistant.problems(),
-         "scheduler": scheduler.status(), "claude": shutil.which("claude"), "finnamon": shutil.which("finnamon")}
+         "untriaged": len(triage.untriaged(conn)), "agent": store.assistant_kind(conn), "assistant": str(assistant.dir()), "assistant_problems": claude_runner.harness_problems(),
+         "scheduler": scheduler.status(), "claude": shutil.which("claude"), "codex": codex.binary(), "finnamon": shutil.which("finnamon")}
         | _stray_plugin_report())
 
 
 def cmd_doctor(a) -> None:
     """Every prerequisite and piece of setup, each with its fix: what `status` reports, explained. Reads only: no file,
-    database or key is created (a fresh box has none of them yet, and that is what it reports)."""
+    database or key is created (a fresh box has none of them yet, and that is what it reports). The one repair: a Codex
+    household's broken link to the person's Codex login is re-made (_doctor_codex)."""
     checks: list[tuple[bool | None, str, str, str]] = []   # (ok, what, detail, fix); None = worth knowing, not broken
 
     def check(ok, what, detail, fix=""):
@@ -1374,6 +1431,8 @@ def cmd_doctor(a) -> None:
     probs = assistant.problems()
     check(not probs, "Assistant directory", (probs[0] + (f" (and {len(probs) - 1} more)" if len(probs) > 1 else "")) if probs
           else f"{assistant.dir()} installed and trusted", "finnamon install")
+    if codex.configured() or (conn is not None and store.assistant_kind(conn) == "codex"):
+        _doctor_codex(check)
     ready, detail = voice.status()
     check(True if ready else "optional", "Voice", detail, "" if ready else "optional: finnamon voice setup")   # Talk still works through the browser
     if conn is not None and not no_telegram:
@@ -1396,6 +1455,44 @@ def cmd_doctor(a) -> None:
     print(f"\n{failed} problem(s)" if failed else "\nall good")
     if failed:
         sys.exit(1)
+
+
+def _doctor_codex(check) -> None:
+    """doctor's Codex lines, once init has set Codex up. Writes one thing: a broken link to the person's Codex login is re-made."""
+    exe = codex.binary()
+    if not exe:
+        check(False, "Codex", "`codex` is not on PATH", codex.INSTALL_HINT)
+        return
+    v = codex.version(exe)
+    vs, need, tested = (".".join(map(str, x)) if x else "unknown" for x in (v, codex.MIN_VERSION, codex.TESTED_VERSION))
+    if v is None or v < codex.MIN_VERSION:
+        check(False, "Codex", f"{vs} at {exe}; Finnamon needs {need} or newer", codex.INSTALL_HINT)
+    elif v > codex.TESTED_VERSION:
+        check(None, "Codex", f"{vs} at {exe}, newer than {tested}, the version Finnamon's transcript reader was tested on",
+              "if the dashboard stops showing the assistant's replies, that reader needs updating")
+    else:
+        check(True, "Codex", f"{vs} at {exe}")
+    how = codex.link_auth()
+    ok, msg = codex.logged_in(exe)
+    link = f"{codex.home() / 'auth.json'} → {codex.user_auth()}"
+    check(ok, "Codex login", msg + {"linked": f" (shared: {link})", "relinked": f" (the link was broken; re-made {link})",
+                                    "own": " (Finnamon's own login)", "none": ""}[how],
+          "" if ok else f"codex login (your own), or CODEX_HOME={codex.home()} codex login (Finnamon's alone)")
+    hooks_on = codex.features(exe).get("hooks") is True
+    check(hooks_on, "Codex hooks", "on" if hooks_on else "off in `codex features list`, so no guard runs", "finnamon update (the config turns them on)")
+    probs = codex.config_problems() + codex.problems(exe)
+    check(not probs, "Codex config", "; ".join(probs) if probs else f"{codex.home() / codex.CONFIG}: profile, trust and pinned hooks as generated",
+          "finnamon update (rewrites it; your copy goes to config.toml.bak)")
+    try:
+        leaked = codex.leaked_skills(exe)
+    except (OSError, RuntimeError) as e:
+        check(None, "Codex skills", f"could not list them: {e}")
+    else:
+        check(not leaked, "Codex skills", f"{len(leaked)} of your own skills reach the household's session: {', '.join(leaked[:3])}" if leaked
+              else f"sealed (Codex sees {codex.seal_home()} as HOME, so ~/.agents/skills stays yours)", "finnamon update")
+    mcp_ok = importlib.util.find_spec("mcp") is not None
+    check(mcp_ok, "MCP package", "installed" if mcp_ok else "missing: the finnamon MCP server Codex runs cannot start",
+          "uv tool install -e '.[mcp]'   (in the checkout)")
 
 
 def _stray_plugin_report() -> dict:
@@ -1659,7 +1756,7 @@ def _install_bundle(dry_run: bool = False) -> dict | None:
     in, so neither the daemon's `--resume` nor the dashboard's can pick the old ones up from the new cwd, and a fresh
     start now beats a failed resume and a restart later."""
     if dry_run:
-        print(f"would write the assistant bundle to {assistant.dir()}")
+        print(f"would write the assistant bundle to {assistant.dir()}" + (f" and Codex's config to {codex.home()}" if codex.configured() else ""))
         return None
     if os.environ.get("FINNAMON_ASSISTANT"):
         print(f"warning: FINNAMON_ASSISTANT is set in this shell ({assistant.dir()}); the installed jobs do not see it and use {assistant.default_dir()}", file=sys.stderr)
@@ -1684,6 +1781,16 @@ def _install_bundle(dry_run: bool = False) -> dict | None:
         print(f"  left your edited {o} alone (this release drops the file; it is yours now, and no release will touch it again)")
     for r in res["removed"]:
         print(f"  removed {r} (no longer part of the bundle)")
+    if codex.configured() or claude_runner.kind() == "codex":   # set up by init's Codex path; a Claude household has no FINNAMON_HOME/codex
+        c = codex.install()
+        for b in c["backed_up"]:
+            print(f"  this release rewrites Codex's config (the release always wins there); your copy is kept as {b}")
+        if c["auth"] == "relinked":
+            print(f"  re-made the link to your Codex login: {codex.home() / 'auth.json'} → {codex.user_auth()}")
+        if not c["pinned"]:
+            print(f"warning: could not pin the trust of the hooks in {codex.home() / codex.CONFIG}, so Codex would skip them "
+                  f"and Finnamon will not start a Codex session (`finnamon doctor` says why)", file=sys.stderr)
+        res = res | {"changed": res["changed"] or c["changed"]}
     if res["first"] and config.db_path().exists():
         conn = store.connect()
         if store.get_state(conn, "session"):
