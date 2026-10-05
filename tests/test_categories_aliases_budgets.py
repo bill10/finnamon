@@ -192,26 +192,37 @@ def test_a_big_import_reports_uncategorized_with_capped_lists(conn):
     assert all(len(m["transaction_ids"]) <= budgets.UNCATEGORIZED_SHOWN for m in r["uncategorized_merchants"])
 
 
-def test_removing_an_alias_says_what_was_keyed_on_its_name(conn):
-    # Value: protects against a rule, a budget or a suppression silently stopping when the alias under it goes
+def test_removing_an_alias_says_what_stops_covering_its_charges(conn):
+    # Value: protects against a rule or a budget silently stopping when the alias under it goes, and against a false alarm
     seed(conn)
     txn(conn, "f1", "chk", "2026-09-05", 400, "SQ *PMT 8827", None, None, "GENERAL_SERVICES", "GENERAL_SERVICES_OTHER_GENERAL_SERVICES")
     budgets.alias_set(conn, "SQ *PMT 8827", "fence contractor")
     budgets.category_set(conn, "fence contractor", "repairs")
     budgets.budget_set(conn, "yard", 500, merchants=["fence contractor"])
     r = budgets.alias_remove(conn, "SQ *PMT 8827")
-    assert r["still_keyed_on_it"] == {"category_rules": 1, "budgets": ["yard"]} and "stops covering them" in r["warning"]
-    budgets.alias_set(conn, "SQ *PMT 8827", "fence contractor")
-    budgets.alias_set(conn, "SQ *PMT%", "fence contractor")
-    assert "warning" not in budgets.alias_remove(conn, "SQ *PMT 8827")   # another alias still makes the name
+    assert r["still_keyed_on_it"] == {"budgets": ["yard"], "charges_recategorized": 1} and "stops covering them" in r["warning"]
+    # a sibling alias with the same canonical over other raw names does not keep these charges covered
+    txn(conn, "a1", "chk", "2026-09-01", 2400, "Loan Payment Confirmation# 1", None, None)
+    txn(conn, "a2", "chk", "2026-09-02", 2400, "BOFA MTG", None, None)
+    budgets.alias_set(conn, "Loan Payment Confirmation#%", "BofA mortgage")
+    budgets.alias_set(conn, "BOFA MTG", "BofA mortgage")
+    budgets.category_set(conn, "BofA mortgage", "mortgage")
+    assert budgets.alias_remove(conn, "Loan Payment Confirmation#%")["still_keyed_on_it"] == {"charges_recategorized": 1}
+    # charges Plaid names by entity id keep their name and their budget: no warning
+    txn(conn, "e1", "cc", "2026-09-07", 30, "RECOLOGY 123", "Recology", "mch_rec", "RENT_AND_UTILITIES", "RENT_AND_UTILITIES_SEWAGE_AND_WASTE_MANAGEMENT")
+    budgets.alias_set(conn, "RECOLOGY 123", "trash")
+    budgets.budget_set(conn, "trash", 50, merchants=["Recology"])
+    assert "warning" not in budgets.alias_remove(conn, "RECOLOGY 123")
 
 
-def test_uncategorized_is_spending_only(conn):
-    # Value: protects the count from money in and paired transfers, which no budget would count anyway
+def test_uncategorized_counts_money_in_but_not_a_paired_transfer(conn):
+    # Value: an imported transfer-in reads as income until categorized, so it is listed; a transfer already paired is not
     seed(conn)
-    txn(conn, "in1", "chk", "2026-09-01", -2000, "DEPOSIT", None, None, None, None)
+    txn(conn, "in1", "chk", "2026-09-01", -2000, "FROM SAVINGS 123", None, None, None, None)
+    txn(conn, "xo", "chk", "2026-09-04", 300, "XFER", None, None, "TRANSFER_OUT", "TRANSFER_OUT_ACCOUNT_TRANSFER")
+    txn(conn, "xi", "cc", "2026-09-04", -300, "XFER IN", None, None, None, None)   # paired with xo: a transfer, not uncategorized
     txn(conn, "out1", "chk", "2026-09-02", 40, "CORNER DELI", None, None, None, None)
     txn(conn, "out2", "cc", "2026-09-03", 12, "CORNER DELI", "Corner Deli", "mch_deli", None, None)
     u = budgets.uncategorized(conn)
-    assert u["uncategorized"] == 2 and budgets.overall(conn, AS_OF)["uncategorized"] == 2
-    assert [m["charges"] for m in u["merchants"]] == [2], "one merchant as people see it, whatever its ids"
+    assert u["uncategorized"] == 3 and budgets.overall(conn, AS_OF)["uncategorized"] == 3
+    assert sorted(m["charges"] for m in u["merchants"]) == [1, 2], "one merchant as people see it, whatever its ids"

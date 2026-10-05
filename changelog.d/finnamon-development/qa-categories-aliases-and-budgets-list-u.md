@@ -2,9 +2,9 @@
 bump: minor
 ---
 ### Added
-- **Aliases can be listed and undone.** `finnamon alias --list` shows each alias with the transactions it covers today; `finnamon alias --remove "<name>"` deletes one. An alias that matches no transaction (a typo) is refused with the raw names it might mean.
+- **Aliases can be listed and undone.** `finnamon alias --list` shows each alias with the transactions it covers today; `finnamon alias --remove "<name>"` deletes one and says if a budget, a category rule or a "normal" rule stops covering its charges. An alias that matches no transaction (a typo) is refused with the raw names it might mean.
 - **Change a category on the dashboard.** Any transaction row (Recent, Large, Uncategorized) opens a picker: this charge only, or every charge from that merchant. The Recent table shows the detailed category ("restaurant", not "food and drink").
-- **Budgets pick what they count on the dashboard.** Manage budgets shows what each one counts, and its pencil opens a picker of categories and the merchants you've seen.
+- **Budgets pick what they count on the dashboard.** Manage budgets shows what each one counts, and its pencil opens a picker of categories and the merchants you've seen; a new budget can pick them too, so "subscriptions" can be Netflix and Spotify.
 - **Uncategorized rows are visible.** After an import (CLI or dashboard) Finnamon says how many new rows have no category and offers to categorize them by merchant or by charge; the Budgets card has an "Uncategorized (N)" entry; `finnamon category --uncategorized` lists them. Nothing is guessed.
 
 ### Changed

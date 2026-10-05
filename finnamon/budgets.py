@@ -173,7 +173,7 @@ RECURRING = ("(t.flow = 'mortgage' OR EXISTS (SELECT 1 FROM recurring r WHERE r.
 # a reworded MATCH must keep this scope clause (the assert says so at import, not as a silently double-counting Overall).
 assert "s.budget_id = :bid" in MATCH
 ANY_BUDGET = MATCH.replace("s.budget_id = :bid", "s.budget_id IN (SELECT id FROM budgets WHERE active = 1)")
-UNCATEGORIZED = "category IS NULL AND pending = 0 AND flow IN ('expense', 'refund')"   # spending only: money in, and a transfer already paired, never need one   # the Budgets card's count and charts' uncategorized table: one rule
+UNCATEGORIZED = "category IS NULL AND pending = 0 AND flow IN ('expense', 'refund', 'income')"   # not a paired transfer; an imported transfer-in reads as income until categorized   # the Budgets card's count and charts' uncategorized table: one rule
 UNCATEGORIZED_SHOWN = 20   # merchants, and ids per merchant, in a reply; the count is always the whole
 
 
@@ -474,20 +474,32 @@ def alias_remove(conn: sqlite3.Connection, name: str) -> dict:
         names = [x[0] for x in conn.execute("SELECT name FROM merchant_alias WHERE canonical=? COLLATE NOCASE", (name.strip(),))]
         raise ValueError(f"no alias named '{name.strip()}'" + (f"; '{name.strip()}' is the merchant of {', '.join(repr(x) for x in names)}: remove those by name" if names
                                                               else " (finnamon alias --list shows them)"))
-    conn.execute("DELETE FROM merchant_alias WHERE name=?", (r["name"],))
-    out = {"removed": {"name": r["name"], "canonical": r["canonical"]}, "matches": _alias_matches(conn, r["name"])[0]}
-    # what was keyed on that merchant name stops applying to those charges, unless another alias still makes it
-    if not conn.execute("SELECT 1 FROM merchant_alias WHERE canonical=?", (r["canonical"],)).fetchone():
-        keyed = {k: n for k, n in (
-            ("category_rules", conn.execute("SELECT count(*) FROM category_override WHERE canonical=?", (r["canonical"],)).fetchone()[0]),
-            ("budgets", [x[0] for x in conn.execute("SELECT DISTINCT b.name FROM budget_selectors s JOIN budgets b ON b.id=s.budget_id AND b.active=1 "
-                                                    "WHERE s.kind='merchant' AND ? IN (s.value, s.label)", (r["canonical"],))]),
-            ("suppressions", conn.execute("SELECT count(*) FROM suppressions WHERE canonical=?", (r["canonical"],)).fetchone()[0])) if n}
-        if keyed:
-            out["still_keyed_on_it"] = keyed
-            out["warning"] = (f"'{r['canonical']}' no longer names those charges, so what was set up under that name stops covering them: "
-                              + ", ".join(f"{k.replace('_', ' ')} {', '.join(v) if isinstance(v, list) else v}" for k, v in keyed.items())
-                              + ". Set them again under the charges' own name, or add the alias back")
+    # What the alias decided for its charges, before and after: a budget that stops counting them, a category rule that
+    # stops applying, a "normal" rule keyed on the old name. Measured on the charges themselves, whatever other alias,
+    # pattern or Plaid entity id ends up naming them.
+    ids = [x[0] for x in conn.execute("SELECT transaction_id FROM transactions WHERE name = ? OR (instr(?, '%') > 0 AND name LIKE ?)", (r["name"],) * 3)]
+    def state() -> tuple[dict, dict]:
+        marks = "SELECT value FROM json_each(:ids)"
+        rows = {x[0]: (x[1], x[2]) for x in conn.execute(f"SELECT transaction_id, canonical, category FROM tx_now WHERE transaction_id IN ({marks})", {"ids": json.dumps(ids)})}
+        counted = {b[1]: {x[0] for x in conn.execute(f"SELECT transaction_id FROM tx_now t WHERE transaction_id IN ({marks}) AND pending=0 AND {SPEND} AND {MATCH}",
+                                                       {"ids": json.dumps(ids), "bid": b[0]})} for b in conn.execute("SELECT id, name FROM budgets WHERE active=1")}
+        return rows, counted
+    with store.tx(conn):
+        before, counted_before = state()
+        conn.execute("DELETE FROM merchant_alias WHERE name=?", (r["name"],))
+        after, counted_after = state()
+    out = {"removed": {"name": r["name"], "canonical": r["canonical"]}, "matches": len(ids)}
+    renamed = {before[t][0].lower() for t in before if t in after and after[t][0] != before[t][0]}
+    keyed = {k: v for k, v in (
+        ("budgets", sorted(n for n, got in counted_before.items() if got - counted_after.get(n, set()))),
+        ("charges_recategorized", sum(1 for t in before if t in after and after[t][1] != before[t][1])),
+        ("suppressions", conn.execute("SELECT count(*) FROM suppressions WHERE lower(canonical) IN (SELECT value FROM json_each(?))",
+                                      (json.dumps(sorted(renamed)),)).fetchone()[0])) if v}
+    if keyed:
+        out["still_keyed_on_it"] = keyed
+        out["warning"] = (f"'{r['canonical']}' no longer names those charges, so what was set up under that name stops covering them: "
+                          + "; ".join(f"{k.replace('_', ' ')}: {', '.join(v) if isinstance(v, list) else v}" for k, v in keyed.items())
+                          + ". Set them again under the charges' own name, or add the alias back")
     return out
 
 

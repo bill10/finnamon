@@ -1711,7 +1711,7 @@ def cmd_settings(a) -> None:
 def cmd_category(a) -> None:
     conn = store.connect()
     if a.tx is not None:
-        if a.category or (a.clear and a.merchant) or not (a.clear or a.merchant) or (a.every and a.clear):
+        if a.category or (a.clear and a.merchant) or not (a.clear or a.merchant) or (a.every and a.clear) or a.uncategorized or a.rules:
             die("usage: finnamon category --tx <transaction_id> <category> [--every] | --tx <transaction_id> --clear")
         _triage_read_only()
         try:
@@ -1726,7 +1726,7 @@ def cmd_category(a) -> None:
             die("usage: finnamon category --rules")
         out(budgets.category_rules(conn)); return
     if a.uncategorized:
-        if a.merchant or a.category or a.clear:
+        if a.merchant or a.category or a.clear or a.rules:
             die("usage: finnamon category --uncategorized")
         out(budgets.uncategorized(conn)); return
     if a.clear:

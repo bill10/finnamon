@@ -381,11 +381,12 @@ function renderManage(s) {
       return v !== b.monthly_limit || picked ? ['/api/budget', { name: b.name, amount: v, ...(picked ? { categories: p.categories, merchants: p.merchants } : {}) }] : null;
     }).filter(Boolean),
     added: () => {
-      if (!$('b-new-name').value.trim()) return null;
-      const p = picks[NEW], picked = p && (p.categories.length || p.merchants.length);
+      const n = $('b-new-name').value.trim(), p = picks[NEW], picked = p && (p.categories.length || p.merchants.length);
+      if (!n) { if (picked) throw new Error('Name the new budget first.'); return null; }
+      if (summary.budgets.some(b => b.name === n.toLowerCase())) throw new Error(`There is already a ${n.toLowerCase()} budget: change it in its own row.`);   // budget set would replace it
       return ['/api/budget', { name: $('b-new-name').value.trim(), amount: amount($('b-new-amt').value), ...(picked ? { categories: p.categories, merchants: p.merchants } : {}) }];
     },
-    err: 'b-err', cancel: 'b-cancel', save: 'b-save', rerender: () => renderManage(summary), close: () => toggleManage(false),
+    err: 'b-err', cancel: 'b-cancel', save: 'b-save', rerender: () => redrawManage(), close: () => toggleManage(false),
   });
   m.querySelectorAll('[data-pick]').forEach(btn => btn.addEventListener('click', async () => {
     const n = btn.dataset.pick, b = summary.budgets.find(x => x.name === n);
@@ -409,13 +410,11 @@ function renderManage(s) {
 }
 // A picker change redraws the panel: what was typed (a limit, the new budget's name) and not yet saved stays.
 function redrawManage(focusPicker) {
-  const m = $('budgets-manage'), typed = [...m.querySelectorAll('input:not([list])')].map(i => [i.id || i.closest('.erow')?.dataset.name, i.value]);
+  const m = $('budgets-manage'), key = (i) => i.id ? `#${CSS.escape(i.id)}` : `.erow[data-name="${CSS.escape(i.closest('.erow').dataset.name)}"] input`;
+  const typed = [...m.querySelectorAll('.erow input')].map(i => [key(i), i.value]);   // a budget named "health" is its row, never the page's #health
   renderManage(summary);
-  for (const [k, v] of typed) {
-    const i = $(k) || m.querySelector(`.erow[data-name="${CSS.escape(k ?? '')}"] input`);
-    if (i) i.value = v;
-  }
-  m.querySelector(`.picker[data-for="${CSS.escape(focusPicker)}"] select`)?.focus();
+  for (const [k, v] of typed) { const i = m.querySelector(k); if (i) i.value = v; }
+  if (focusPicker != null) m.querySelector(`.picker[data-for="${CSS.escape(focusPicker)}"] select`)?.focus();
 }
 // The picker under a budget's row: what it counts as chips, a category from the taxonomy, a merchant the household has seen.
 function pickerHtml(name, p) {
