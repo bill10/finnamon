@@ -47,6 +47,12 @@ AGENTS_MD_MAX = 32 * 1024   # Codex's project_doc_max_bytes: past it the instruc
 # Per-CLI snippets. Skill invocations are `$name` in Codex; the skill names come from the bundle itself.
 SWAPS = ((".claude/skills/", ".agents/skills/"), ("claude -p", "codex exec"))
 CHANNEL_ONLY = re.compile(r"Claude Code's (own )?Telegram channel")   # the channel plugin is Claude Code's; a Codex household never has it
+# Codex's sandbox keeps the shell away from the database, so on Codex every `finnamon …` is the finnamon(argv) MCP tool
+# (finnamon/mcp_server.py); the skills keep one wording for both CLIs and this line, after AGENTS.md's title, says so.
+CODEX_TOOL_NOTE = ("**On Codex, every `finnamon …` command in these instructions and the skills is a call to the `finnamon` tool**"
+                   " (MCP server `finnamon`), not a shell command: `argv` is the command line as a list, one string per"
+                   ' argument (`finnamon query "SELECT 1"` is `["finnamon", "query", "SELECT 1"]`). Your shell cannot reach'
+                   " the household's data; the tool can. A command the tool refuses is one a person runs in a terminal.\n")
 
 
 def _items(text: str) -> list[list[str]]:
@@ -74,7 +80,8 @@ def codex_bundle(claude: dict[str, bytes]) -> dict[str, bytes]:
     names = sorted(rel.split("/")[2] for rel in claude if rel.startswith(".claude/skills/"))
     out = {}
     if "CLAUDE.md" in claude:
-        agents = to_codex(claude["CLAUDE.md"].decode(), names).encode()
+        title, _, rest = to_codex(claude["CLAUDE.md"].decode(), names).partition("\n\n")
+        agents = f"{title}\n\n{CODEX_TOOL_NOTE}\n{rest}".encode()
         if len(agents) > AGENTS_MD_MAX:   # a release that outgrows it must say so, not ship cut-off instructions
             raise ValueError(f"AGENTS.md is {len(agents)} bytes; Codex reads only {AGENTS_MD_MAX}")
         out["AGENTS.md"] = agents

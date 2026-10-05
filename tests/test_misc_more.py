@@ -53,7 +53,7 @@ def test_mcp_server_tools(home, conn):
         return json.loads(blocks[0].text)
 
     names = {t.name for t in asyncio.run(mcp.list_tools())}
-    assert names == {"list_accounts", "search_transactions", "spend_by_category", "budget_progress", "list_alerts", "list_suppressed", "net_worth_history", "render_chart", "sql"}
+    assert names == {"list_accounts", "search_transactions", "spend_by_category", "budget_progress", "list_alerts", "list_suppressed", "net_worth_history", "render_chart", "sql", "finnamon"}
     assert [a["name"] for a in call("list_accounts")] == ["Chase Checking"]
     assert call("search_transactions", text="whole", days=30)[0]["merchant"] == "Whole Foods"
     assert call("search_transactions", text="' OR 1=1 --", days=30) == []  # bound parameter, not interpolated

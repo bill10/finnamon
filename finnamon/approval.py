@@ -118,8 +118,38 @@ def _user_text(e: dict) -> str:
     return "\n".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text") if isinstance(c, list) else ""
 
 
+# A Codex session's transcript is its rollout (`transcript_path` in every Codex hook payload): JSONL of {type, payload}.
+# Codex 0.157 runs tools in code mode, so its response_items do not say which tool ran; its event_msg item_completed
+# items do (docs/designs/codex-spike.md, finding 5). A tool call has no item until it completes, so the call a dialog is
+# about is found once its result lands, which is all dashboard_answered() needs.
+CODEX_CALLS = ("CommandExecution", "FileChange", "McpToolCall")
+
+
+def _codex(entries: list[dict]) -> bool:
+    return any(e.get("type") in ("event_msg", "response_item", "session_meta") for e in entries)
+
+
+def _codex_items(entries: list[dict]) -> list[dict]:
+    return [p["item"] for e in entries if e.get("type") == "event_msg" and isinstance(p := e.get("payload"), dict)
+            and p.get("type") == "item_completed" and isinstance(p.get("item"), dict)]
+
+
+def _codex_call(item: dict, tool: str, inp) -> bool:
+    """Whether a completed rollout item is this hook's call. apply_patch's FileChange keeps no patch text: never a match."""
+    inp = inp if isinstance(inp, dict) else {}
+    if item.get("type") == "CommandExecution":
+        return tool == "Bash" and (item.get("command") or [None])[-1] == inp.get("command")
+    if item.get("type") == "McpToolCall":
+        return tool == f"mcp__{item.get('server')}__{item.get('tool')}" and item.get("arguments") == inp
+    return False
+
+
 def telegram_turn(entries: list[dict]) -> bool:
     """Whether the newest prompt (not a tool result, not Claude Code's own tags) is a phone message."""
+    if _codex(entries):   # a Codex prompt is a UserMessage item; its environment context is a response_item, never one
+        texts = ["\n".join(c.get("text", "") for c in it.get("content") or [] if isinstance(c, dict) and c.get("type") == "text").strip()
+                 for it in _codex_items(entries) if it.get("type") == "UserMessage"]
+        return bool(texts) and texts[-1].startswith(TAG)
     last = ""
     for e in entries:
         if e.get("type") != "user" or e.get("isMeta") or e.get("isSidechain"):
@@ -137,6 +167,8 @@ def _blocks(e: dict, kind: str) -> list[dict]:
 
 def results(entries: list[dict]) -> set:
     """The ids of every tool call that has its result (run, refused, or answered No at the dashboard)."""
+    if _codex(entries):
+        return {it.get("id") for it in _codex_items(entries) if it.get("type") in CODEX_CALLS}
     return {b.get("tool_use_id") for e in entries if e.get("type") == "user" for b in _blocks(e, "tool_result")}
 
 
@@ -144,6 +176,9 @@ def tool_use_id(entries: list[dict], tool: str, inp, done: set) -> str | None:
     """The newest call of this tool with exactly this input that has no result yet: the one the dialog is about. No
     guessing on a near match: a parallel call of the same tool finishing would read as the dashboard's answer and take
     the buttons away from a dialog still up. Without a match the phone keeps its buttons until a tap or the timeout."""
+    if _codex(entries):
+        calls = [it for it in _codex_items(entries) if _codex_call(it, tool, inp) and it.get("id") not in done]
+        return calls[-1].get("id") if calls else None
     calls = [b for e in entries if e.get("type") == "assistant" for b in _blocks(e, "tool_use")
              if b.get("name") == tool and b.get("input") == inp and b.get("id") not in done]
     return calls[-1].get("id") if calls else None
@@ -155,6 +190,8 @@ def denied_by(tool: str, inp: dict, deny: list[str]) -> str | None:
     ponytail: an approximation of Claude Code's matcher (fnmatch's * crosses /, no splitting of compound commands); it can
     only ever deny more, and Claude Code's own check is the real one."""
     inp = inp if isinstance(inp, dict) else {}
+    if tool == FINNAMON_TOOL:   # Codex's finnamon(argv): the Bash(finnamon …) rules are its rules
+        tool, inp = "Bash", {"command": _argv_command(inp)}
     arg = str(inp.get("command") or inp.get("file_path") or inp.get("notebook_path") or inp.get("path") or "")
     home = str(Path.home())
     for rule in deny:
@@ -188,24 +225,42 @@ _PROTECTED_RE = re.compile(rf"{_HOMES}/(?:{'|'.join(PROTECTED)})", re.IGNORECASE
 _IN_FOLDER_RE = re.compile(r"\.finnamon\b.*\b(?:secrets\.toml|finnamon\.db|web-token|intercom\.json|imports|chrome)\b"
                            r"|\.claude/channels\b.*\.env\b", re.IGNORECASE | re.DOTALL)
 SAYS_ONLY = ("mcp__plugin_telegram_telegram__reply", "mcp__plugin_telegram_telegram__react")   # words to people, not file access
+FINNAMON_TOOL = "mcp__finnamon__finnamon"   # Codex's finnamon(argv) tool (finnamon/mcp_server.py)
+_PATCH_PATHS = re.compile(r"^\*\*\* (?:(?:Add|Update|Delete) File|Move to): *(.+?) *$", re.MULTILINE)
 
 
-def protected_path(tool: str, inp, home: str | None = None) -> str | None:
-    """The protected path this call's input names, or None."""
+def _argv_command(inp) -> str:
+    argv = inp.get("argv") if isinstance(inp, dict) else None
+    return " ".join(map(str, argv)) if isinstance(argv, list) else ""
+
+
+def _codex_paths(tool: str, inp, cwd: str | None) -> list[str]:
+    """The files a Codex apply_patch or view_image call names, made absolute against the call's cwd: a patch names them
+    relative to it (`*** Update File: ../secrets.toml` from the assistant directory is the household's secrets)."""
+    if not isinstance(inp, dict):
+        return []
+    found = _PATCH_PATHS.findall(str(inp.get("command") or "")) if tool == "apply_patch" else [str(inp.get("path") or "")] if tool == "view_image" else []
+    return [os.path.normpath(os.path.join(cwd or "", os.path.expanduser(p))) for p in found if p]
+
+
+def protected_path(tool: str, inp, home: str | None = None, cwd: str | None = None) -> str | None:
+    """The protected path this call's input names, or None. Claude Code's and Codex's tool names and input shapes alike
+    (tests/fixtures/codex/hooks): Bash with a command string, apply_patch, view_image, any MCP tool's arguments."""
     if tool in SAYS_ONLY:
         return None
     try:
         text = json.dumps(inp, ensure_ascii=False) if not isinstance(inp, str) else inp
     except (TypeError, ValueError):
         text = str(inp)
-    text = text.replace("\\/", "/")
+    text = "\n".join([text.replace("\\/", "/"), *_codex_paths(tool, inp, cwd)])
     fhome = os.environ.get("FINNAMON_HOME", "").rstrip("/")
     if fhome:   # a household kept somewhere else (FINNAMON_HOME) is the same folder
         text = re.sub(re.escape(fhome) + r"(?=/|\b)", "~/.finnamon", text, flags=re.IGNORECASE)
     home = (home or str(Path.home())).rstrip("/")
     if home:   # this box's own home, whatever its root (/var/root, /private/...)
         text = re.sub(re.escape(home) + r"(?=/)", "~", text, flags=re.IGNORECASE)
-    m = _PROTECTED_RE.search(text) or (tool == "Bash" and _IN_FOLDER_RE.search(str((inp or {}).get("command") or "") if isinstance(inp, dict) else ""))
+    cmd = _argv_command(inp) if tool == FINNAMON_TOOL else str(inp.get("command") or "") if tool == "Bash" and isinstance(inp, dict) else ""
+    m = _PROTECTED_RE.search(text) or (cmd and _IN_FOLDER_RE.search(cmd))
     return m.group(0) if m else None
 
 
@@ -230,7 +285,7 @@ def ask(event: dict, conn: sqlite3.Connection, *, deny: list[str] | None = None,
         sleep=time.sleep, clock=time.monotonic, env=os.environ) -> dict | None:
     """The hook: a decision to print, or None (no decision; the dashboard's dialog stays)."""
     tool, inp = str(event.get("tool_name") or ""), event.get("tool_input") or {}
-    if (hit := protected_path(tool, inp)):   # the PreToolUse guard should have stopped it already; never ask about it
+    if (hit := protected_path(tool, inp, cwd=str(event.get("cwd") or "") or None)):   # the PreToolUse guard should have stopped it already; never ask about it
         return _decision("deny", f"{hit} is off limits to every tool")
     rule = denied_by(tool, inp, _settings_deny(str(event.get("cwd") or ".")) if deny is None else deny)
     if rule:

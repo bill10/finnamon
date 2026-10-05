@@ -714,10 +714,10 @@ def cmd_hook(a) -> None:
     to the assistant. permission: the intercom's PermissionRequest hook (finnamon/approval.py); it prints a decision or
     nothing, and nothing (also on any error) leaves the dialog to the person at the dashboard."""
     if a.name == "secret-guard":   # every tool call, before any permission check: the protected paths are no one's to approve
-        from . import approval
-        try:
+        try:   # Claude Code and Codex payloads alike; Codex lets a call through on any exit but 2, so every error here is a 2
+            from . import approval
             event = json.load(sys.stdin)
-            hit = approval.protected_path(str(event.get("tool_name") or ""), event.get("tool_input") or {})
+            hit = approval.protected_path(str(event.get("tool_name") or ""), event.get("tool_input") or {}, cwd=str(event.get("cwd") or "") or None)
         except Exception as e:  # noqa: BLE001 - a guard that cannot read the call blocks it
             die(f"blocked: secret-guard could not run ({e})", 2)
         if hit:
