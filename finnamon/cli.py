@@ -381,8 +381,11 @@ def cmd_link(a) -> None:
         if not (a.start or a.finish or (a.update and a.telegram)) or a.token is not None or a.public_token or a.web:   # a bare --token is the empty string; --web is a person's click
             die("from a Claude session, `finnamon link --start` adds a bank and `link --update <item_id> --telegram` sends a re-login link to the chat; "
                 "--remove and the blocking form are for a person at a terminal")
-        if a.owner and not conn.execute("SELECT 1 FROM owners WHERE owner=?", (a.owner,)).fetchone():
-            die(f"{a.owner} is not a household member; `finnamon owner add` is for a person at a terminal")   # attribute to whoever asked, never invent owners
+    if a.owner:   # attribute to a member (or joint), never invent one from a typo
+        try:
+            a.owner = owners.resolve(conn, a.owner, joint=True)
+        except ValueError as e:
+            die(str(e))
     if a.token is not None:   # the web dashboard: a plain link token for Plaid Link JS
         try:
             out({"link_token": link.start(a.owner or _default_owner(conn), redirect_uri=a.token or None, hosted=False)["link_token"]})
@@ -462,7 +465,7 @@ def cmd_link(a) -> None:
     sy = r["sync"]
     print(f"✓ Linked {r['institution']} ({r['item_id']})")
     print(f"  {sy['accounts']} accounts, {sy['transactions']} transactions, {sy['recurring']} recurring streams, {sy.get('holdings', 0)} holdings" + (f", error {sy['error']}" if sy["error"] else ""))
-    for m in r["mirror_candidates"]:
+    for m in r["mirror_candidates"]:   # a terminal asks; the dashboard and Telegram mark the same pairs without asking (link.apply_mirrors)
         print(f"  {link.mirror_line(m)}.")
         old = conn.execute("SELECT i.item_id, i.status FROM accounts a JOIN items i ON i.item_id=a.item_id WHERE a.account_id=?", (m["existing"],)).fetchone()
         if old and old[1] not in (None, "good"):
@@ -500,8 +503,8 @@ def _print_linked(r: dict) -> None:
     sy = r["sync"]
     print(f"✓ Linked {r['institution']} ({r['item_id']}): {sy['accounts']} accounts, {sy['transactions']} transactions, {sy.get('holdings', 0)} holdings"
           + (f", error {sy['error']}" if sy["error"] else ""))
-    if r["mirror_candidates"]:
-        print(link.mirror_note(r["mirror_candidates"]))
+    if r["mirror_candidates"] or r.get("marked_joint"):
+        print(link.mirror_note(r["mirror_candidates"], r.get("marked_joint")))
 
 
 def _default_owner(conn) -> str:
@@ -511,13 +514,25 @@ def _default_owner(conn) -> str:
 
 def cmd_owner(a) -> None:
     if _from_claude() and a.action != "list":
-        die("adding household members is for a person at a terminal")
+        die("adding, renaming and removing household members is for a person at a terminal")
     conn = store.connect()
     if a.action == "list":
         out([dict(r) for r in conn.execute("SELECT owner, display_name, telegram_user_id FROM owners")]); return
+    if a.action in ("rename", "remove"):
+        if not a.name or bool(a.new_name) == (a.action == "remove"):
+            die("usage: finnamon owner rename <name> <new name>   |   finnamon owner remove <name>")
+        try:
+            out(owners.rename(conn, a.name, a.new_name) if a.action == "rename" else owners.remove(conn, a.name))
+        except ValueError as e:
+            die(str(e))
+        return
     if a.action == "add":
         if not a.name:
             die("owner add needs a name: finnamon owner add <name> [--user-id <id> | --no-telegram]")
+        if a.name.strip().lower() == owners.JOINT:
+            die("`joint` is reserved for shared accounts; pick a person's name")
+        same = conn.execute("SELECT owner FROM owners WHERE owner=? COLLATE NOCASE", (a.name.strip(),)).fetchone()   # Jane and jane are one person
+        a.name = same[0] if same else a.name.strip()
         if a.no_telegram:
             if a.user_id is not None or a.new_group:
                 die("--no-telegram can't be combined with --user-id or --new-group")
@@ -697,7 +712,7 @@ def cmd_property(a) -> None:
 def cmd_account(a) -> None:
     if a.action == "list" and a.to:   # the accounts on another box, through its dashboard
         out(_http(_box_url(a.to), "/api/summary").get("accounts", [])); return
-    if a.action in ("remove", "merge", "unmerge", "failover"):
+    if a.action in ("remove", "merge", "unmerge", "failover", "owner"):
         _human_only(f"account {a.action}")
     conn = store.connect()
     if a.action == "list":
@@ -709,10 +724,8 @@ def cmd_account(a) -> None:
         _triage_read_only()
         if not a.new:
             die('usage: finnamon account add "<name>" --institution <bank> [--type checking|savings|credit|loan|investment] [--owner <member>] [--mask 1234]')
-        owner = a.owner or _default_owner(conn)
-        if _from_claude() and not conn.execute("SELECT 1 FROM owners WHERE owner=?", (owner,)).fetchone():
-            die(f"{owner} is not a household member; `finnamon owner add` is for a person at a terminal")
         try:
+            owner = owners.resolve(conn, a.owner, joint=True) if a.owner else _default_owner(conn)
             out(imports.add_account(conn, a.new, a.institution or a.new.split()[0], a.type, owner, a.mask))
         except (ValueError, sqlite3.IntegrityError) as e:
             die(str(e))
@@ -752,13 +765,28 @@ def cmd_account(a) -> None:
         die({"merge": "usage: finnamon account merge <new account_id> <existing account_id>", "owner": "usage: finnamon account owner <account_id> <member>"}
             .get(a.action, f"usage: finnamon account {a.action} <account_id>"))
     elif a.action == "merge":
-        link.mark_mirror(conn, a.new, a.existing); print("ok")
+        try:
+            why = link.merge_problem(conn, a.new, a.existing)
+        except ValueError as e:
+            die(str(e))
+        if why and not a.force:
+            die(f"{why}. If they really are one account, run it again with --force.")
+        link.mark_mirror(conn, a.new, a.existing); out({"merged": a.new, "into": a.existing})
     elif a.action == "unmerge":
-        conn.execute("UPDATE accounts SET mirror_of=NULL WHERE account_id=?", (a.new,)); print("ok")
+        try:
+            out({"unmerged": link.unmerge(conn, a.new)})
+        except ValueError as e:
+            die(str(e))
     elif a.action == "failover":
         out({"promoted": link.failover(conn, a.new)})
     elif a.action == "owner":
-        conn.execute("UPDATE accounts SET owner=? WHERE account_id=?", (a.existing, a.new)); print("ok")
+        try:
+            owner = owners.resolve(conn, a.existing, joint=True)
+        except ValueError as e:
+            die(str(e))
+        if not conn.execute("UPDATE accounts SET owner=?, owner_before_merge=NULL WHERE account_id=?", (owner, a.new)).rowcount:
+            die(f"no account {a.new!r}; `finnamon account list` shows the ids")
+        out({"account": a.new, "owner": owner})
 
 
 BROWSER_SESSION = "finnamon-import"   # the agent-browser session the skill drives; every allowed command names it
@@ -1863,7 +1891,9 @@ the rest are for a person in a terminal on the Finnamon box:
   finnamon link [--owner <name>]      add a bank and wait here until done
 The item_id is in `finnamon status`. --owner names whose login it is (add a new person first with finnamon owner add).
 Next, after --remove: the bank's alerts stop; link it again with finnamon link --start --owner <name> if it was a re-link.""",
-    "owner": """list: the household members. add <name>: a new member (person at a terminal on the Finnamon box only).
+    "owner": """list: the household members. add <name>: a new member (person at a terminal on the Finnamon box only), as are
+rename <name> <new name> (every account follows) and remove <name> (refused while they own an account). Names match
+without regard to case; `joint` is reserved for shared accounts.
 Needs a name, and either:
   --user-id <id>   in channel mode (finnamon channel status says "channel"): their Telegram user id. Have them message the bot,
                    then run /telegram:access in the channel's Claude session; the id is listed there.
@@ -1882,16 +1912,18 @@ session or channel, restart the dashboard (finnamon update --no-pull). `on` prin
 finnamon install, the bot token in ~/.claude/channels/telegram/.env, pairing with /telegram:access).
 Next, after on: add each member with finnamon owner add <name> --user-id <id>.""",
     "account": """merge, unmerge, failover and remove are for a person at a terminal on the Finnamon box (ids from finnamon account list):
-  merge <new_id> <existing_id>   the same account seen through two logins (e.g. a joint account): count it once, as joint
-  unmerge <id>                   stop treating <id> as a copy (both stay owned by joint)
+  merge <new_id> <existing_id>   the same account seen through two logins (e.g. a joint account): count it once, as joint.
+                                 Refused for different types or very different balances unless --force
+  unmerge <id>                   stop treating <id> as a copy; both get their own owners back
   failover <id>                  <id> (the one the copy was merged into) has a broken login: count the copy from the healthy one instead
   remove "<name>" [--yes]        a manual account and its transactions (a Plaid bank: finnamon link --remove <item_id>)
-type is for anyone, the assistant included; owner for a person at a terminal (the assistant has no allow-list entry for it):
+type and add are for anyone, the assistant included; owner is a household change, for a person at a terminal:
   type <account_id> <type>       what the account really is, whatever the bank says (checking, savings, credit, loan,
                                  investment): a managed CMA Plaid sends as cash is an investment. Kept through every sync;
                                  `account list` shows the bank's (bank_type) and the household's (type_override)
   type <account_id> --clear      back to the bank's own type
-  owner <account_id> <member>    whose account it is (a household member, or joint): the dashboard groups and labels by it
+  owner <account_id> <member>    whose account it is (a household member, or joint; a name that is not one is refused):
+                                 the dashboard groups and labels by it
 Net worth (cash / investments / debt), the dashboard and spending follow the type: an investment account's own rows are
 not spending or income, as with any brokerage.
 Next: finnamon networth or the dashboard shows the totals counted once.""",
@@ -1941,7 +1973,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--token", nargs="?", const="", metavar="REDIRECT_URI", help="web dashboard: print a plain Plaid Link token (OAuth banks return to the HTTPS REDIRECT_URI when given, else use a popup)")
     s.add_argument("--public-token", metavar="PUBLIC_TOKEN", help="web dashboard: finish a Plaid Link session with its public token")
     s.add_argument("--web", action="store_true", help="web dashboard, with --update: print the re-login URL as JSON (a session still open is reused); the daemon syncs the bank once the login is done")
-    s = sp.add_parser("owner"); s.add_argument("action", choices=["list", "add"]); s.add_argument("name", nargs="?"); s.add_argument("--user-id", type=int, help="Telegram user id (channel mode: no code dance)")
+    s = sp.add_parser("owner"); s.add_argument("action", choices=["list", "add", "rename", "remove"]); s.add_argument("name", nargs="?"); s.add_argument("new_name", nargs="?"); s.add_argument("--user-id", type=int, help="Telegram user id (channel mode: no code dance)")
     s.add_argument("--no-telegram", action="store_true", help="a member who doesn't chat with the bot (add their Telegram id later with --user-id)")
     s.add_argument("--new-group", action="store_true", help="the code may come from a new group, which becomes the household chat"); s.set_defaults(fn=cmd_owner)
     s = sp.add_parser("channel", help="who answers Telegram: session (default: the dashboard's conversation), on (Claude Code's channel plugin) or off (legacy: the daemon's own session)",
@@ -1949,7 +1981,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sp.add_parser("hook", help="Claude Code hooks (stdin: the hook event JSON)"); s.add_argument("name", choices=["reply-guard", "browser-guard", "permission", "secret-guard"]); s.set_defaults(fn=cmd_hook)
     s = sp.add_parser("property", help="stated assets a bank doesn't report (house, car), counted into net worth"); s.add_argument("action", choices=["list", "set", "remove"], nargs="?", default="list"); s.add_argument("name", nargs="?"); s.add_argument("value", nargs="?"); s.set_defaults(fn=cmd_property)
     s = sp.add_parser("account", help="list | add \"<name>\" --institution <bank> (a manual account, fed by import) | remove \"<name>\" (a manual account and its transactions) | type <account_id> <type>|--clear | balance \"<name>\" <amount> (a manual account's balance now) | merge | unmerge | failover | owner"); s.add_argument("action", choices=["list", "add", "remove", "type", "kind", "balance", "merge", "unmerge", "failover", "owner"]); s.add_argument("new", nargs="?"); s.add_argument("existing", nargs="?")
-    s.add_argument("--institution", help="add: the bank's name (default: the first word of the account name)"); s.add_argument("--type", choices=list(imports.KINDS), default="checking"); s.add_argument("--owner"); s.add_argument("--mask", help="last 4 digits"); s.add_argument("--yes", action="store_true", help="remove: don't ask"); s.add_argument("--clear", action="store_true", help="type: back to the bank's own type")
+    s.add_argument("--institution", help="add: the bank's name (default: the first word of the account name)"); s.add_argument("--type", choices=list(imports.KINDS), default="checking"); s.add_argument("--owner"); s.add_argument("--mask", help="last 4 digits"); s.add_argument("--yes", action="store_true", help="remove: don't ask"); s.add_argument("--clear", action="store_true", help="type: back to the bank's own type"); s.add_argument("--force", action="store_true", help="merge: even when the types or balances differ")
     s.add_argument("--to", metavar="URL", help="list: the accounts on the Finnamon box at this dashboard URL (FINNAMON_WEB_TOKEN set to its `finnamon web token`)"); s.set_defaults(fn=cmd_account)
     s = sp.add_parser("import", help="a bank's CSV export into a manual account; --browser <bank> fetches it through a browser you log into"); s.add_argument("account", nargs="?", help="the manual account (name or id); with --browser, the bank")
     s.add_argument("file", nargs="?", help="the CSV (- for stdin)"); s.add_argument("--balance", type=float, help="the account's balance now, when the file has no balance column")

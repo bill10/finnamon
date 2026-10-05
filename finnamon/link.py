@@ -18,7 +18,7 @@ import logging
 import sqlite3
 import time
 
-from . import config, imports, notify, plaid_api, run, secrets, store, sync, telegram
+from . import config, imports, notify, owners, plaid_api, run, secrets, store, sync, telegram
 
 log = logging.getLogger("finnamon.link")
 
@@ -56,8 +56,9 @@ def finish_in_page(conn: sqlite3.Connection, owner: str, public_token: str, wait
 def _linked(conn: sqlite3.Connection, r: dict) -> dict:
     """The bank is linked either way; a chat hiccup must not read as "try again"."""
     r["state"] = "linked"
+    r["marked_joint"], r["mirror_candidates"] = apply_mirrors(conn, r["mirror_candidates"])   # the dashboard and Telegram have no prompt: the same marking as a terminal's yes
     try:
-        announce(conn, r["item_id"], r["mirror_candidates"])
+        announce(conn, r["item_id"], r["mirror_candidates"], r["marked_joint"])
         r["announced"] = True
     except telegram.TelegramError as e:
         log.warning("linked %s but the chat announcement failed: %s", r["item_id"], e)
@@ -374,6 +375,7 @@ def register_item(conn: sqlite3.Connection, owner: str, access_token: str, item_
             inst_name = plaid_api.institution_get(inst_id)["institution"]["name"]
     except plaid_api.PlaidError as e:
         log.warning("item/get failed: %s", e)
+    owner = owners.filing(conn, owner)
     conn.execute("INSERT OR IGNORE INTO owners (owner) VALUES (?)", (owner,))
     conn.execute("INSERT INTO items (item_id, institution_id, institution, owner) VALUES (?,?,?,?) "
                  "ON CONFLICT(item_id) DO UPDATE SET institution_id=excluded.institution_id, institution=excluded.institution, owner=excluded.owner, status='good', last_error=NULL",
@@ -394,12 +396,15 @@ def complete(conn: sqlite3.Connection, owner: str, public_token: str, update_ite
         item_id, access_token = ex["item_id"], ex["access_token"]
         if on_exchanged:
             on_exchanged(item_id)   # the pending row learns the item_id, so a crash from here on is resumed without a second exchange
+    joint = owner == owners.JOINT
     name = register_item(conn, owner, access_token, item_id)
     try:
         result = sync.sync_item(conn, item_id, access_token)
     except Exception as e:  # noqa: BLE001 - the Item is registered; the daemon will sync it. Don't lose the mirror prompt and the summary.
         log.exception("first sync of %s failed", item_id)
         result = {"item_id": item_id, "accounts": 0, "transactions": 0, "recurring": 0, "holdings": 0, "error": f"{type(e).__name__}: {e}"[:200]}
+    if joint:   # both logins' copies of one account are the household's, whoever the Item is filed under
+        conn.execute("UPDATE accounts SET owner='joint' WHERE item_id=?", (item_id,))
     mirrors = detect_mirrors(conn, item_id)
     return {"item_id": item_id, "institution": name, "sync": result, "mirror_candidates": mirrors}
 
@@ -504,9 +509,64 @@ def detect_mirrors(conn: sqlite3.Connection, new_item_id: str) -> list[dict]:
 
 
 def mark_mirror(conn: sqlite3.Connection, new_account_id: str, existing_account_id: str) -> None:
+    keep = "owner_before_merge=CASE WHEN owner<>'joint' THEN owner ELSE owner_before_merge END, "   # a second copy of a joint account must not forget whose it was
     with store.tx(conn):
-        conn.execute("UPDATE accounts SET mirror_of=?, owner='joint' WHERE account_id=?", (existing_account_id, new_account_id))
-        conn.execute("UPDATE accounts SET owner='joint' WHERE account_id=?", (existing_account_id,))
+        conn.execute(f"UPDATE accounts SET {keep}mirror_of=?, owner='joint' WHERE account_id=?", (existing_account_id, new_account_id))
+        conn.execute(f"UPDATE accounts SET {keep}owner='joint' WHERE account_id=?", (existing_account_id,))
+
+
+def apply_mirrors(conn: sqlite3.Connection, mirrors: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Mark what detect_mirrors found (a persistent id or 90% identical transactions is no guess): (marked, left). One whose
+    existing copy sits on a broken login is left: that is a re-link, and the person decides which copy goes."""
+    marked, left = [], []
+    for m in mirrors:
+        st = conn.execute("SELECT i.status FROM accounts a JOIN items i ON i.item_id=a.item_id WHERE a.account_id=?", (m["existing"],)).fetchone()
+        if st and st[0] in (None, "good"):
+            mark_mirror(conn, m["new"], m["existing"]); marked.append(m)
+        else:
+            left.append(m)
+    return marked, left
+
+
+def _balance(conn: sqlite3.Connection, account_id: str) -> float | None:
+    r = conn.execute("SELECT current FROM balances WHERE account_id=? AND current IS NOT NULL ORDER BY as_of DESC LIMIT 1", (account_id,)).fetchone()
+    return r[0] if r else None
+
+
+def merge_problem(conn: sqlite3.Connection, new_id: str, existing_id: str) -> str | None:
+    """Why these two are not the same account, or None. `account merge --force` skips the type and balance checks."""
+    a, b = (conn.execute("SELECT account_id, name, type, mirror_of FROM accounts WHERE account_id=?", (i,)).fetchone() for i in (new_id, existing_id))
+    for row, i in ((a, new_id), (b, existing_id)):
+        if not row:
+            raise ValueError(f"no account {i!r}; `finnamon account list` shows the ids")
+    if new_id == existing_id:
+        raise ValueError("an account cannot be a copy of itself")
+    if b["mirror_of"] or conn.execute("SELECT 1 FROM accounts WHERE mirror_of=?", (new_id,)).fetchone():
+        raise ValueError("one of these is already part of a merge; `finnamon account unmerge` first")
+    if a["type"] != b["type"]:
+        return f"{a['name']} is a {a['type']} account and {b['name']} is {b['type']}: not the same account"
+    x, y = _balance(conn, new_id), _balance(conn, existing_id)
+    if x is not None and y is not None and abs(x - y) > max(100, 0.1 * max(abs(x), abs(y))):
+        return f"their balances ({x:,.2f} and {y:,.2f}) are too far apart for the same account"
+    return None
+
+
+def unmerge(conn: sqlite3.Connection, account_id: str) -> list[str]:
+    """Stop treating the copy as one (given either side of the pair), and give both their own owners back. An owner who is
+    no longer a member leaves the account joint."""
+    copies = [r[0] for r in conn.execute("SELECT account_id FROM accounts WHERE account_id=? AND mirror_of IS NOT NULL UNION "
+                                         "SELECT account_id FROM accounts WHERE mirror_of=?", (account_id, account_id))]
+    if not copies:
+        raise ValueError(f"{account_id} is not part of a merge")
+    with store.tx(conn):
+        for c in copies:
+            main = conn.execute("SELECT mirror_of FROM accounts WHERE account_id=?", (c,)).fetchone()[0] or account_id
+            conn.execute("UPDATE accounts SET mirror_of=NULL WHERE account_id=?", (c,))
+            for acc in (c, main):
+                if not conn.execute("SELECT 1 FROM accounts WHERE mirror_of=?", (acc,)).fetchone():   # the main copy stays joint while another copy still points at it
+                    conn.execute("UPDATE accounts SET owner=COALESCE((SELECT owner FROM owners WHERE owner=owner_before_merge), owner), owner_before_merge=NULL "
+                                 "WHERE account_id=? AND owner='joint'", (acc,))
+    return copies
 
 
 def failover(conn: sqlite3.Connection, account_id: str) -> str | None:
@@ -524,12 +584,13 @@ def mirror_line(m: dict) -> str:
     return f"{m['name']} …{m['mask']} looks like an account already linked ({m['match']})"
 
 
-def mirror_note(mirrors: list[dict]) -> str:
-    return "\n".join(f"{mirror_line(m)}; if it is the same account from a second login, "
-                     f"run finnamon account merge {m['new']} {m['existing']} in a terminal on the Finnamon box." for m in mirrors)
+def mirror_note(mirrors: list[dict], marked: list[dict] | None = None) -> str:
+    return "\n".join([f"{mirror_line(m)}: marked joint, counted once (finnamon account unmerge {m['new']} undoes it)." for m in marked or []]
+                      + [f"{mirror_line(m)}; if it is the same account from a second login, "
+                         f"run finnamon account merge {m['new']} {m['existing']} in a terminal on the Finnamon box." for m in mirrors])
 
 
-def announce(conn: sqlite3.Connection, item_id: str, mirrors: list[dict] | None = None) -> None:
+def announce(conn: sqlite3.Connection, item_id: str, mirrors: list[dict] | None = None, marked: list[dict] | None = None) -> None:
     chat = store.get_state(conn, "chat_id")
     if chat:
         text = notify.item_linked_summary(conn, item_id)
@@ -537,8 +598,8 @@ def announce(conn: sqlite3.Connection, item_id: str, mirrors: list[dict] | None 
             "SELECT 1 FROM items WHERE item_id<>? AND source='plaid'", (item_id,)).fetchone()   # households linked before this shipped are not first
         if first:
             text += "\n" + notify.first_link_welcome(conn, item_id)
-        if mirrors:
-            text += "\n\n" + telegram.esc(mirror_note(mirrors))
+        if mirrors or marked:
+            text += "\n\n" + telegram.esc(mirror_note(mirrors or [], marked))
         telegram.send_message(chat, text)
         if first:
             store.set_state(conn, "first_link_welcomed", store.now_local())

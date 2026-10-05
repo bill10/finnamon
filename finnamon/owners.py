@@ -12,6 +12,64 @@ import time
 from . import store, telegram
 
 DAEMON_ALIVE_S = 90  # daemon.poll_loop stamps state.daemon_alive_at every poll
+JOINT = "joint"      # an account owner value, never a member row
+
+
+def resolve(conn: sqlite3.Connection, name: str | None, joint: bool = False) -> str:
+    """The member a typed name means, spelt as stored (case-insensitive), or `joint` where that is allowed. A typo is
+    refused rather than quietly becoming a new member: only `owner add` makes one."""
+    n = (name or "").strip()
+    if joint and n.lower() == JOINT:
+        return JOINT
+    r = conn.execute("SELECT owner FROM owners WHERE owner=? COLLATE NOCASE", (n,)).fetchone()
+    if r:
+        return r[0]
+    names = [x[0] for x in conn.execute("SELECT owner FROM owners ORDER BY rowid")] + ([JOINT] if joint else [])
+    raise ValueError(f"{n or 'an empty name'} is not a household member (members: {', '.join(names) or 'none'}); "
+                     "`finnamon owner add <name>` makes one, for a person at a terminal")
+
+
+def filing(conn: sqlite3.Connection, owner: str) -> str:
+    """The member an Item is filed under. A joint account hangs off the first member: items.owner must be a real row."""
+    if owner != JOINT:
+        return owner
+    r = conn.execute("SELECT owner FROM owners ORDER BY rowid LIMIT 1").fetchone()
+    return r[0] if r else "me"
+
+
+def rename(conn: sqlite3.Connection, old: str, new: str) -> dict:
+    """Every account, bank and feedback row follows the new name; the Telegram id and display name stay with the person."""
+    old = resolve(conn, old)
+    new = " ".join((new or "").split())
+    if not new or new.lower() == JOINT:
+        raise ValueError("a member's name is a word of its own, and `joint` is reserved for shared accounts")
+    if conn.execute("SELECT 1 FROM owners WHERE owner=? COLLATE NOCASE AND owner<>?", (new, old)).fetchone():
+        raise ValueError(f"{new} is already a household member")
+    if new == old:
+        raise ValueError(f"{old} is already called that")
+    with store.tx(conn):
+        conn.execute("INSERT INTO owners (owner, telegram_user_id, display_name) SELECT ?, telegram_user_id, "
+                     "CASE WHEN display_name IS NULL OR display_name=? THEN ? ELSE display_name END FROM owners WHERE owner=?", (new, old.title(), new.title(), old))
+        for table, col in (("items", "owner"), ("accounts", "owner"), ("accounts", "owner_before_merge"), ("feedback", "owner")):
+            conn.execute(f"UPDATE {table} SET {col}=? WHERE {col}=?", (new, old))
+        conn.execute("DELETE FROM owners WHERE owner=?", (old,))
+    return {"renamed": old, "to": new}
+
+
+def remove(conn: sqlite3.Connection, name: str) -> dict:
+    """Refused while the member still owns an account (reassign it first: `finnamon account owner`) and for the last member."""
+    name = resolve(conn, name)
+    n = conn.execute("SELECT count(*) FROM accounts WHERE owner=?", (name,)).fetchone()[0]
+    if n:
+        raise ValueError(f"{name} still owns {n} account{'s' if n != 1 else ''}; give them to someone else (or joint) with `finnamon account owner <account_id> <member>` first")
+    other = conn.execute("SELECT owner FROM owners WHERE owner<>? ORDER BY rowid LIMIT 1", (name,)).fetchone()
+    if not other:
+        raise ValueError(f"{name} is the only household member")
+    with store.tx(conn):
+        conn.execute("UPDATE items SET owner=? WHERE owner=?", (other[0], name))   # a bank whose accounts are all joint or moved on
+        conn.execute("UPDATE accounts SET owner_before_merge=NULL WHERE owner_before_merge=?", (name,))
+        conn.execute("DELETE FROM owners WHERE owner=?", (name,))
+    return {"removed": name}
 
 
 def new_code() -> str:

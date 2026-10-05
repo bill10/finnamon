@@ -220,7 +220,13 @@ details.bank .note button.link { font-size: 13px; margin-left: 4px; }   /* Recon
 .erow .del svg.ic { width: 16px; height: 16px; }
 .erow.add { border-bottom: none; } .erow.add input, .erow.add select { background: transparent; }
 .erow.imp { grid-template-columns: 1fr 1fr 160px 32px; }
-.erow.acct { grid-template-columns: 1fr 1fr 130px; }
+.erow.acct { grid-template-columns: 1fr 1fr 130px; } .erow.acct:has(#a-owner) { grid-template-columns: 1fr 1fr 130px 110px; }
+.erow.merge { grid-template-columns: 1fr 1fr; }
+.erow.merged { grid-template-columns: 1fr auto; font-size: 14px; color: var(--ink-2); }
+details.mergebox { margin-top: 6px; }
+details.mergebox > summary { cursor: pointer; font-size: 14px; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
+details.mergebox > summary { flex-wrap: wrap; column-gap: 8px; } details.mergebox > summary .hint { font-weight: 400; font-size: 13px; color: var(--muted); }
+details.mergebox p.muted { margin: 0 0 8px; font-size: 13px; }
 .erow.imp input[type=file] { padding: 5px; }
 .prev { margin-top: 10px; font-size: 14px; }
 .prev-t { width: 100%; border-collapse: collapse; margin: 6px 0; }
@@ -406,7 +412,7 @@ details.bank .note button.link { font-size: 13px; margin-left: 4px; }   /* Recon
   .hero svg.area { min-height: 140px; height: 140px; }
   .cats { grid-template-columns: 1fr; }
   .erow { grid-template-columns: 1fr 110px 32px; }
-  .erow.imp, .erow.acct { grid-template-columns: 1fr; }   /* the account, the file and the balance stack on a phone */
+  .erow.imp, .erow.acct, .erow.acct:has(#a-owner), .erow.merge { grid-template-columns: 1fr; }   /* the account, the file and the balance stack on a phone */
   #chart .row { flex-direction: column; align-items: flex-start; }
   #intercom { right: 0; bottom: 0; width: 100vw; height: 100vh; height: 100dvh; border-radius: 0; }   /* dvh: a phone's toolbar would hide the call bar */
   #intercom-btn { right: 16px; bottom: 16px; }
@@ -424,5 +430,6 @@ details.bank .note button.link { font-size: 13px; margin-left: 4px; }   /* Recon
   #talk-bar #talk-end { flex: none; min-width: 52px; }
   #talk-end span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 }
+.owner-opt .hint { font-size: 13px; color: var(--muted); }
 .owner-opt { display: flex; align-items: center; gap: 8px; padding: 8px 0; font-size: 14px; cursor: pointer; }
 #owner-pop .row { margin-top: 12px; justify-content: flex-end; }
