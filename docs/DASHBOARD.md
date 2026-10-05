@@ -33,8 +33,10 @@ finnamon install             # adds the dashboard job next to the daemon and the
 ```
 
 or run it by hand: `node web/server.js` (not both at once: the second cannot take the port and quits). The session
-inside the intercom runs as `claude --permission-mode dontAsk` (allow-listed commands only; with the Telegram channel
-attached, also `--disallowedTools WebSearch WebFetch`, since it then reads the chat with nobody at the page) and resumes the
+inside the intercom runs in ask mode (`claude --permission-mode default`: allow-listed commands run unasked, the deny list is
+refused, anything else, a web search or fetch included, shows Claude Code's Allow / Deny dialog; when a Telegram message
+started the turn, the same request goes to the chat with Allow / Deny buttons, and the first answer wins ("don't ask again" lasts until the dashboard restarts); with the Telegram
+channel attached it stays `dontAsk` with `--disallowedTools WebSearch WebFetch`, since it then reads the chat with nobody at the page) and resumes the
 household's session id from `~/.finnamon/intercom.json`, so a restart costs you the scrollback and not the
 conversation (a restart that cut a Telegram reply short tells the chat to resend its last minute), with the Telegram
 channel attached when `finnamon channel status` said `channel` at start-up, so the page, the phone and a terminal
