@@ -5,7 +5,7 @@ import json
 import pytest
 
 from finnamon import cli
-from tests.conftest import AS_OF, seed
+from tests.conftest import AS_OF, seed, txn
 
 
 def run(capsys, *argv):
@@ -28,6 +28,7 @@ def rules(conn):
 
 def test_normal_records_its_rule_and_undo_removes_exactly_that_one(conn, capsys):
     seed(conn)
+    txn(conn, "t1", "chk", "2026-09-10", 30, "ACME CO", "Acme")
     other = run(capsys, "normal", "Acme")["id"]                 # a rule the household wrote on its own
     a = alert(conn, "k1")
     rule = run(capsys, "normal", "--alert", str(a))["id"]
@@ -85,6 +86,7 @@ def test_a_rule_removed_by_hand_is_never_undone_into_a_stranger(conn, capsys):
     a = alert(conn, "k1")
     rule = run(capsys, "normal", "--alert", str(a))["id"]
     run(capsys, "normal", "--remove", str(rule))
+    txn(conn, "t1", "chk", "2026-09-10", 30, "ACME CO", "Acme")
     stranger = run(capsys, "normal", "Acme")["id"]
     assert stranger == rule, "sqlite reuses the freed id"
     assert run(capsys, "alerts", "--undo", str(a))["removed_rule"] is None

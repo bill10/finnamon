@@ -43,6 +43,7 @@ def test_budget_remove_category_guard_alias_and_resolve_errors(conn):
     txn(conn, "m0", "chk", "2026-08-11", 2400, "Loan Payment Confirmation# 112233", None, None, "LOAN_PAYMENTS", "LOAN_PAYMENTS_OTHER_PAYMENT")
     sug = {c["category"]: c for c in budgets.suggest(conn, 3, AS_OF)["categories"]}
     assert sug["HOME_IMPROVEMENT_REPAIR_AND_MAINTENANCE"]["months"]["2026-08"] == 2400
+    txn(conn, "f", "chk", "2026-09-12", 900, "SQ *PMT 8827")
     r = budgets.category_set(conn, "SQ *PMT 8827", "repairs")
     assert r["canonical"] == "fence contractor" and r["category"] == "HOME_IMPROVEMENT_REPAIR_AND_MAINTENANCE"  # override keyed on the alias canonical, as the prelude will compute it
     # resolution errors carry the candidate list (or none)
@@ -78,9 +79,10 @@ def test_normal_every_shape(conn):
     assert conn.execute("SELECT resolved_at IS NOT NULL FROM alerts WHERE id=1").fetchone()[0] == 1
     # from an alert whose transaction has since been removed: falls back to the payload
     conn.execute("INSERT INTO alerts (tier, kind, key, transaction_id, payload_json, as_of) VALUES ('anomaly','anomaly:first_merchant','k2','ghost','{\"name\": \"GHOST LLC\"}',?)", (AS_OF,))
-    assert budgets.normal(conn, alert_id=2, kind="explicit")["canonical"] == "GHOST LLC"
-    assert conn.execute("SELECT kind FROM suppressions ORDER BY id DESC LIMIT 1").fetchone()[0] == "explicit"
+    assert budgets.normal(conn, alert_id=2, kind="duplicate_charge")["canonical"] == "GHOST LLC"
+    assert conn.execute("SELECT kind FROM suppressions ORDER BY id DESC LIMIT 1").fetchone()[0] == "duplicate_charge"
     # explicit merchant with an alert id: the alert is resolved but its payload is not consulted
+    txn(conn, "c1", "chk", "2026-09-12", 40, "COSTCO WHSE #12", "Costco", None)
     r = budgets.normal(conn, "Costco", alert_id=2)
     assert r["canonical"] == "Costco" and r["kind"] is None
     with pytest.raises(ValueError, match="no alert 99"):

@@ -251,8 +251,8 @@ def test_duplicate_charge_true_duplicate_still_fires_and_normal_mutes_only_that_
     r = budgets.normal(conn, alert_id=alert_id)
     assert (r["canonical"], r["kind"], r["account_id"], r["max_amount"]) == ("mch_bby", "duplicate_charge", "chk", 89.99)
     conn.execute("UPDATE alerts SET resolved_at=NULL WHERE id=?", (alert_id,))   # reopened, keeping the rule: normal refuses a resolved alert
-    r = budgets.normal(conn, alert_id=alert_id, max_amount=500, kind="new_recurring")   # explicit flags win; another kind is not narrowed
-    assert (r["kind"], r["account_id"], r["max_amount"]) == ("new_recurring", None, 500)
+    r = budgets.normal(conn, alert_id=alert_id, max_amount=500, kind="amount_outlier")   # explicit flags win; another kind is not narrowed
+    assert (r["kind"], r["account_id"], r["max_amount"]) == ("anomaly:amount_outlier", None, 500)
     conn.execute("UPDATE suppressions SET created_at='2026-09-01'")   # made at the real clock; detectors see it as of AS_OF
     for tid in "de":
         txn(conn, tid, "chk", "2026-09-18", 1200, "BESTBUY 00123", "Best Buy", "mch_bby", "GENERAL_MERCHANDISE", "GENERAL_MERCHANDISE_ELECTRONICS")
@@ -467,6 +467,7 @@ def test_recurring_changed_cancelled_acknowledges_one_stream_and_kindless_normal
             "last_date, predicted_next_date, status, first_seen_at) VALUES (?,?,'outflow','Acme','mch_acme','MONTHLY',?,?,'2026-01-01',?,?,'MATURE','2026-06-01 00:00:00')")
     conn.execute(base, ("acme-a", "cc", 10, 10, "2026-07-01", "2026-08-01"))   # stopped
     conn.execute(base, ("acme-b", "cc", 20, 20, "2026-09-10", "2026-10-10"))   # fine for now
+    txn(conn, "t1", "cc", "2026-09-10", 20, "ACME", "Acme", "mch_acme")
     budgets.normal(conn, "Acme")   # kind NULL: does not cover recurring_changed
     conn.execute("UPDATE suppressions SET created_at='2026-09-01'")
     assert run(conn, "recurring_changed") and [a["key"] for a in alerts(conn)] == ["anom:rec:acme-a:2026-09"]

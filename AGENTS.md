@@ -23,7 +23,7 @@ spawn, no web in unattended runs, read-only triage, detectors reviewed by a pers
 - A change to the bundle reaches a household on its next `finnamon update` (it rewrites `~/.finnamon/assistant/`,
   keeps a household's own edits as `.bak`, and restarts the daemon and the dashboard, which read it at startup).
 - `finnamon normal` rules (`suppressions`): a rule with no kind covers every detector except `recurring_changed`,
-  which only honours its own kind and, from `--alert`, one `stream_id`; `--remove <id>` deletes a rule.
+  which only honours its own kind and, from `--alert`, one `stream_id`; `--remove <id>` deletes a rule. `--kind` takes only a kind a rule can quiet (`budgets.rule_kinds()`); `--alert` on any other kind (low_balance, budget_pace, sync_health) resolves it with no rule. A merchant typed into `normal` or `category` goes through `budgets.resolve_merchant`, which refuses a name that covers no charge.
 - Detectors are SQL under `finnamon/detectors/`; every one needs hit / miss / baseline / dedup tests in `tests/test_detectors.py`.
 - Versioning: `VERSION` is the one source (`MAJOR.MINOR.PATCH.MICRO`). **Do not bump `VERSION` and do not edit
   `CHANGELOG.md` in a PR.** This overrides /ship's version-bump and CHANGELOG steps: skip them, and add

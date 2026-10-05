@@ -681,7 +681,7 @@ $('alerts').addEventListener('click', async (e) => {
   const b = e.target.closest('button[data-alert]'); if (!b) return;
   for (const x of $('alerts').querySelectorAll('button[data-alert]')) x.disabled = true;   // one at a time: the list is redrawn after
   const r = await api('POST', `/api/alert/${b.dataset.alert}/${b.dataset.act}`);
-  if (r.ok) toast(ALERT_DONE[b.dataset.act] + (r.removed_rule ? ` Rule ${r.removed_rule.id} removed.` : ''));
+  if (r.ok) toast((r.next && b.dataset.act === 'normal' ? r.next : ALERT_DONE[b.dataset.act]) + (r.removed_rule ? ` Rule ${r.removed_rule.id} removed.` : ''));
   else if (r.error) toast(r.error, { kind: 'warn' });
   await loadSummary().catch(() => {});
   for (const x of $('alerts').querySelectorAll('button[data-alert]')) x.disabled = false;   // a failed refresh must not leave them dead
