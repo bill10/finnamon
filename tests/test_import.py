@@ -124,7 +124,7 @@ def test_sync_health_nags_after_import_max_age_days_only(conn):
     assert len(rows) == 1 and len(ids) == 2   # the Plaid Item is stale by then too; one alert each
     a = rows[0]
     p = json.loads(a["payload_json"])
-    assert p["item_id"] == "manual:hsbc" and p["source"] == "manual" and "hasn't been imported since 2026-08-20" in notify.render(a) and "Import CSV" in notify.render(a)
+    assert p["item_id"] == "manual:hsbc" and p["source"] == "manual" and "hasn't been imported since Aug 20" in notify.render(a) and "Import CSV" in notify.render(a)
     store.set_setting(conn, "import_max_age_days", 60)
     assert not [i for i in detect.run(conn, "2026-09-27 12:00:00", only=["sync_health"]) if "manual" in conn.execute("SELECT key FROM alerts WHERE id=?", (i,)).fetchone()[0]]
 

@@ -75,7 +75,7 @@ def test_render_every_kind(conn):
     relogin = notify.render(conn.execute("SELECT * FROM alerts WHERE kind='sync_health'").fetchone())
     assert "re-login" in relogin and "fix Chase" in relogin and "finnamon" not in relogin   # the phone fix, not a terminal command
     expiring = notify.render(conn.execute("SELECT * FROM alerts WHERE kind='consent_expiring'").fetchone())
-    assert "expires 2026-10-01" in expiring and "fix Chase" in expiring
+    assert "expires Oct 1" in expiring and "fix Chase" in expiring
     dup = notify.render(conn.execute("SELECT * FROM alerts WHERE id=?", (alert(conn, "sync_health", "r-dup", payload={
         "item_id": "item2", "institution": "Chase", "owner": "jane", "status": "ITEM_LOGIN_REQUIRED", "duplicate": True}),)).fetchone())
     assert "Chase (jane's login, item2)" in dup and "fix item2" in dup and "fix Chase" not in dup   # two logins at Chase: say which
@@ -118,7 +118,7 @@ def test_summary_of_a_bank_whose_accounts_are_all_mirrors_is_not_empty(conn):
     txn(conn, "t1", "chk_j", "2026-09-11", 80, "SQ *PMT 8827", None, None, "GENERAL_SERVICES", "GENERAL_SERVICES_OTHER_GENERAL_SERVICES")
     budgets.alias_set(conn, "SQ *PMT 8827", "fence contractor")
     s = notify.item_linked_summary(conn, "item2", AS_OF)
-    assert "• fence contractor" in s and "1 transactions" in s
+    assert "• fence contractor" in s and "1 transaction since Sep 11, 2026" in s
     assert conn.execute("SELECT count(*) FROM tx_now WHERE item_id='item2'").fetchone()[0] == 0   # tx_now still hides it from every money total
 
 def test_send_one_without_a_chat_id_sends_nothing(conn):
@@ -262,7 +262,7 @@ def test_item_linked_summary_masks_kinds_and_holdings(conn):
     assert "<b>Linked Chase</b> (3 accounts):" in s
     assert "• Chase Checking …4821 (checking)" in s and "• Sapphire …7710 (credit card)" in s
     assert "• Brokerage (investment)" in s and "Brokerage …" not in s  # no mask, type falls back
-    assert "0 transactions since ?, 2 holdings." in s
+    assert "no transactions to show (an investment or loan account often has none), 2 holdings." in s
     assert "Recurring" not in s and "Top merchants" not in s and "$" not in s and "1,000" not in s
     assert s.endswith("Balances and amounts: just ask me here.")
 
@@ -332,7 +332,7 @@ def test_alerts_render_tidy_every_merchant_site(conn):
     alert(conn, "anomaly:no_source", "a2", "anomaly", {"amount": 60}, "promote", "high", "No name at all.")
     texts = {k: notify.render(conn.execute("SELECT * FROM alerts WHERE key=?", (k,)).fetchone()) for k in ("n1", "a1", "a2")}
     assert "1st Security Ban (monthly pa)" in texts["n1"] and "Jane" not in texts["n1"]
-    assert "$60.00 to 1st Security Ban (monthly pa)</b>, 2026-09-16" in texts["a1"] and "Jane" not in texts["a1"]   # name falls back when merchant is absent
+    assert "$60.00 to 1st Security Ban (monthly pa)</b>, Sep 16" in texts["a1"] and "Jane" not in texts["a1"]   # name falls back when merchant is absent
     assert texts["a2"].endswith("<b>$60.00 to a transaction</b>. No name at all.")                            # no merchant, no name, no account, no date
 
 
@@ -441,7 +441,7 @@ def test_income_headline_is_unsigned_and_the_payload_keeps_its_sign(conn):
     p = {"merchant": "Acme Corp (PAYROLL)", "amount": -1234.56, "account": "Checking", "mask": "0000", "date": "2026-01-15"}
     alert(conn, "anomaly:no_source", "inc1", "anomaly", p, "promote", "low", "No source.")
     row = conn.execute("SELECT * FROM alerts WHERE key='inc1'").fetchone()
-    assert notify.render(row).startswith("🔍 <b>$1,234.56 from Acme Corp (PAYROLL)</b> on Checking …0000, 2026-01-15.")
+    assert notify.render(row).startswith("🔍 <b>$1,234.56 from Acme Corp (PAYROLL)</b> on Checking …0000, Jan 15.")
     assert json.loads(row["payload_json"])["amount"] == -1234.56
 
 
@@ -463,8 +463,8 @@ def test_empty_week_sends_the_all_quiet_line(conn, tg):
     mid = notify.send_roundup(conn, "2026-09-20 18:00:00")
     assert mid and len(tg.sent) == 1
     text = tg.sent[0]["text"]
-    assert "All quiet" in text and "2 accounts watched" in text and "all synced since 2026-09-19" in text
-    assert "1 transaction in the last 7 days" in text and "nothing flagged" in text and len(text) < 300
+    assert "All quiet" in text and "2 accounts watched" in text and "all synced by Sep 19, 12:00 PM" in text
+    assert "1 transaction in the last 7 days" in text and "Nothing flagged" in text and len(text) < 300
     assert notify.send_roundup(conn, "2026-09-20 23:00:00") is None and len(tg.sent) == 1   # once a week
     tg.fail_with = TelegramError(500, "boom")                                               # a failed send leaves the week open
     assert notify.send_roundup(conn, "2026-09-27 09:00:00") is None and store.get_state(conn, "last_roundup_week") == "2026-37"
@@ -509,7 +509,7 @@ def test_quiet_line_does_not_hide_a_stale_bank_or_waiting_alerts(conn, tg):
     conn.execute("INSERT INTO accounts (account_id, item_id, name, type, subtype, mask, owner) VALUES ('amx','item2','Gold','credit','credit card','1001','bill')")
     alert(conn, "anomaly:first_merchant", "u1", "anomaly", {"merchant": "x", "amount": 5})   # untriaged: triage is down
     text = notify.quiet_line(conn, "2026-09-20 18:00:00")
-    assert "all synced since 2026-08-01" in text and "1 alert still waiting" in text and "All quiet" not in text
+    assert "all synced by Aug 1, 9:00 AM" in text and "1 alert is still waiting" in text and "All quiet" not in text
 
 
 def test_forced_midweek_roundup_does_not_cancel_sunday(conn, tg):

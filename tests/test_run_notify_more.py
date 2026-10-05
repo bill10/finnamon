@@ -51,9 +51,9 @@ def test_cycle_triage_noop_notify_failure_and_crash_fallback(conn, tg, monkeypat
 def test_render_and_send_edge_branches(conn, tg):
     seed(conn)
     cases = {
-        "sync_health-err": ("sync_health", {"item_id": "item1", "institution": "Chase", "status": "API_ERROR", "last_error": "upstream"}, "sync error"),
-        "sync_health-stale": ("sync_health", {"item_id": "item1", "status": "good", "last_synced_at": "2026-09-18 01:00:00"}, "hasn't synced since 2026-09-18"),
-        "sync_health-noinst": ("sync_health", {"item_id": "item1", "status": "good"}, "item1 hasn't synced since link"),
+        "sync_health-err": ("sync_health", {"item_id": "item1", "institution": "Chase", "status": "API_ERROR", "last_error": "upstream"}, "couldn't sync"),
+        "sync_health-stale": ("sync_health", {"item_id": "item1", "status": "good", "last_synced_at": "2026-09-18 01:00:00"}, "hasn't synced since Sep 18"),
+        "sync_health-noinst": ("sync_health", {"item_id": "item1", "status": "good"}, "item1 hasn't synced since it was linked"),
         "budget-over": ("budget_pace", {"budget": "dining", "spent": 400, "limit": 350, "day": 24, "days": 30, "state": "over"}, "over budget"),
         "anomaly-in": ("anomaly:unmatched_transfer", {"name": "ZELLE FROM X", "amount": -900}, "$900.00 from ZELLE FROM X"),
         "anomaly-noamount": ("anomaly:no_source", {"name": "??"}, "<b> to ??</b>"),
@@ -87,7 +87,7 @@ def test_render_and_send_edge_branches(conn, tg):
     # a bare Item summary: no transactions, no recurring, no typical month
     conn.execute("INSERT INTO items (item_id, owner) VALUES ('bare','bill')")
     s = notify.item_linked_summary(conn, "bare")
-    assert s.startswith("<b>Linked bare</b> (0 accounts):") and "0 transactions since ?" in s and "Recurring" not in s and "holdings" not in s
+    assert s.startswith("<b>Linked bare</b> (0 accounts):") and "no transactions yet" in s and "Recurring" not in s and "holdings" not in s
 
 
 def test_record_crash_with_dead_db_still_messages(conn, tg, monkeypatch):

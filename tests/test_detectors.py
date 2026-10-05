@@ -77,7 +77,7 @@ def test_tx_now_view_matches_prelude_and_every_read_path(conn):
     assert rent["spent"] == 1800.0                                       # the mortgage payment is no longer rent
     sug = budgets.suggest(conn, 6, as_of)["categories"]
     assert [c for c in sug if c["category"] != "LOAN_PAYMENTS_MORTGAGE_PAYMENT"] == [{"category": "RENT_AND_UTILITIES_RENT", "primary": "RENT_AND_UTILITIES", "months": {last[:7]: 1800.0},
-                                                              "months_seen": 1, "min": 1800.0, "max": 1800.0, "median": 1800.0, "variance_ratio": 0.0,
+                                                              "months_seen": 1, "min": 0, "max": 1800.0, "median": 0.0, "variance_ratio": None,   # one month in six: zeros count in the median
                                                               "top_merchants": [{"merchant": "Sunset Apartments", "total": 1800.0}]}]   # same relation and same months as the totals, so they add up
     assert "LOAN_PAYMENTS_MORTGAGE_PAYMENT" in {c["category"] for c in sug}   # a mortgage is budgetable, so suggest shows it
     by_cat = {v["category"]: v["amount"] for v in charts.spec(conn, "spend_by_category")["data"]["values"]}
@@ -272,7 +272,7 @@ def test_duplicate_charge_three_identical_charges_are_one_alert(conn, tg):
     assert len(run(conn, "duplicate_charge")) == 1
     a = alerts(conn, "duplicate_charge")[0]
     assert (a["key"], a["transaction_id"], a["payload"]["count"], a["payload"]["date_a"]) == ("dup:a:c:3", "c", 3, "2026-09-17")
-    assert notify.send_pending(conn) == 1 and "Charged 3 times:</b> Shell $52.18 on Chase Checking …4821, 2026-09-17 to 2026-09-18" in tg.sent[0]["text"]
+    assert notify.send_pending(conn) == 1 and "Charged 3 times:</b> Shell $52.18 on Chase Checking …4821, Sep 17 to Sep 18" in tg.sent[0]["text"]
     assert run(conn, "duplicate_charge") == []
     txn(conn, "d", "chk", "2026-09-19", 52.18, "SHELL OIL", "Shell", "mch_shell")   # a fourth lands on a later sync: news of its own
     assert len(run(conn, "duplicate_charge")) == 1 and alerts(conn, "duplicate_charge")[-1]["payload"]["count"] == 4
