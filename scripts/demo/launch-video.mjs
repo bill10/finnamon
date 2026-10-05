@@ -61,7 +61,7 @@ const home = join(out, 'home');
 const env = { ...process.env, FINNAMON_DEMO_HOME: home, CLAUDE_BIN: join(REPO, 'scripts', 'demo', 'bin', 'claude'),
               CLAUDE_CONFIG_DIR: join(out, 'claude-config'), DEMO_TURNS: JSON.stringify(TURNS.map(({ match, step, command, reply, exec, today }) => ({ match, step, command, reply, exec, today }))) };
 mkdirSync(env.CLAUDE_CONFIG_DIR, { recursive: true });   // where `finnamon demo` marks the assistant directory trusted
-for (const k of ['FINNAMON_HOME', 'FINNAMON_ASSISTANT', 'CLAUDECODE', 'FINNAMON_FROM_CLAUDE']) delete env[k];
+for (const k of ['FINNAMON_HOME', 'FINNAMON_ASSISTANT', 'CLAUDECODE', 'FINNAMON_FROM_AGENT', 'FINNAMON_FROM_CLAUDE']) delete env[k];
 const finnamon = (...a) => spawnSync('faketime', ['-f', `@${TODAY}`, 'python3', '-m', 'finnamon.cli', 'demo', ...a], { cwd: REPO, env, encoding: 'utf8' });
 const started = finnamon('--reset', '--print');
 const url = started.stdout.match(/the demo dashboard: (\S+)/)?.[1];

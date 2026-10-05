@@ -12,7 +12,7 @@ python3 -m pytest tests -q -m "not eval"
 
 Web tests live under `web/` (`npm test` there). Evals (`python3 -m pytest tests/eval -q -m eval`) run a real Claude and
 spend tokens; run them if you touch a prompt file (`finnamon/assistant_bundle/**`, `finnamon/triage.py`,
-`finnamon/claude_runner.py`, `finnamon/daemon.py`).
+`finnamon/agent_runner.py`, `finnamon/daemon.py`).
 
 Never point tests at your real `~/.finnamon/`: they use a scratch `FINNAMON_HOME`. Never put real bank data, tokens or
 chat ids in a test, fixture or screenshot.

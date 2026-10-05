@@ -1,0 +1,14 @@
+{
+  "session_id": "01a10e2e-9fab-7360-9d9c-575bc1894d0b",
+  "turn_id": "01a10e2e-a075-7f21-bbf5-47d976d32368",
+  "transcript_path": "/tmp/spike/home/sessions/2026/10/05/rollout-2026-10-05T15-28-18-01a10e2e-9fab-7360-9d9c-575bc1894d0b.jsonl",
+  "cwd": "/tmp/spike/work",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-6-luna",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "view_image",
+  "tool_input": {
+    "path": "/tmp/spike/work/secret/pic.png"
+  },
+  "tool_use_id": "exec-be991a91-041e-4064-87cc-9670aa229036"
+}

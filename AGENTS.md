@@ -19,7 +19,7 @@ spawn, no web in unattended runs, read-only triage, detectors reviewed by a pers
 - Tests: `python3 -m pytest tests -q -m "not eval"`. Evals (a real Claude over a fixture household, spends tokens,
   required after touching any prompt file): `python3 -m pytest tests/eval -q -m eval`. The eval lane runs `claude`
   with cwd = `finnamon/assistant_bundle/`, so the bundle's source is what gets evaluated.
-- Prompt files: `finnamon/assistant_bundle/**`, `finnamon/triage.py`, `finnamon/claude_runner.py`, `finnamon/daemon.py`.
+- Prompt files: `finnamon/assistant_bundle/**`, `finnamon/triage.py`, `finnamon/agent_runner.py`, `finnamon/daemon.py`.
 - A change to the bundle reaches a household on its next `finnamon update` (it rewrites `~/.finnamon/assistant/`,
   keeps a household's own edits as `.bak`, and restarts the daemon and the dashboard, which read it at startup).
 - `finnamon normal` rules (`suppressions`): a rule with no kind covers every detector except `recurring_changed`,

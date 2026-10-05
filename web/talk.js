@@ -211,9 +211,9 @@ export function openToolCall(path, since = 0, tailBytes = 512 * 1024) {
 // The server side of every call: the routes in server.js are thin wrappers over this.
 // write: into the household session's pty; transcript(): its transcript's path, or null while there is no session;
 // idle(): the session has gone quiet (its WAITING state); asking(): it shows a dialog (QUESTION), which a typed line would answer;
-// broadcast: to every page (the same channel the terminal's output already takes).
+// broadcast: to every page (the same channel the terminal's output already takes); read: the CLI's turn reader (createRelay's).
 export function createTalk({ write, transcript, broadcast, idle = () => false, asking = () => false, since = () => 0, env = process.env, platform = process.platform, pollMs = 500, now = Date.now,
-                             stt = transcribe, tts = synthesize, type = typeInto } = {}) {
+                             stt = transcribe, tts = synthesize, type = typeInto, read = readTurn } = {}) {
   const turns = new Map();   // utterance id → { prompt, offset, buf, entries, status, said, pieces, text, at, done }
   const results = new Map();   // utterance id → its answer, so a retry is the line already typed, never a second one
   const inflight = new Map();
@@ -279,7 +279,7 @@ export function createTalk({ write, transcript, broadcast, idle = () => false, a
     for (const [id, t] of turns) {
       if (t.done) { if (now() - t.at > TURN_TIMEOUT_MS) turns.delete(id); continue; }
       readNew(t);
-      const r = readTurn(t.entries, t.prompt, idle());
+      const r = read(t.entries, t.prompt, idle());
       if (r.status && r.status !== t.status && !r.done) { t.status = r.status; t.said.push(r.status); broadcast({ type: 'talk', id, status: r.status }); }
       if (r.done || now() - t.at > TURN_TIMEOUT_MS) {
         t.done = true; t.at = now(); t.entries = [];
@@ -318,8 +318,8 @@ export function createTalk({ write, transcript, broadcast, idle = () => false, a
 // channel and the sender, and the reply is read back off the transcript the same way. One turn at a time: the daemon
 // already sends them in order, and a second caller with the key waits its turn rather than typing over the first.
 // The runner seam: write/type are the pty, transcript() names the file a turn's entries land in, read() turns those entries
-// into { started, reply, done } (readTurn: Claude Code's jsonl). A Codex session would bring its own transcript() (its rollout
-// file) and read() (its event shapes); everything else here stays.
+// into { started, reply, done } (readTurn: Claude Code's jsonl). server.js AGENTS picks both per CLI, for Talk too: a Codex
+// session brings its rollout file and a reader of its event shapes (tests/fixtures/codex); everything else here stays.
 export const TELEGRAM_TAG = 'telegram';   // the bundle's CLAUDE.md: `[telegram · <owner>] ...` is a phone message, answered for a phone
 export const RELAY_TIMEOUT_MS = 5 * 60_000;   // the most a caller may ask to wait; the daemon asks for claude_timeout_seconds
 export const PERMISSION_WAIT_MS = 11 * 60_000;   // added at most, for time a turn spends on a permission dialog (finnamon/daemon.py waits as long)

@@ -940,7 +940,7 @@ class Reached(Exception):
     pass
 
 
-@pytest.mark.parametrize("env", ["FINNAMON_FROM_CLAUDE", "CLAUDECODE"])
+@pytest.mark.parametrize("env", ["FINNAMON_FROM_AGENT", "FINNAMON_FROM_CLAUDE", "CLAUDECODE"])
 def test_human_only_commands_refuse_a_claude_session(conn, monkeypatch, capsys, env):
     from finnamon import daemon, heartbeat, notify, triage
     def reached(*a, **k):

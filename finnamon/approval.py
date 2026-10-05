@@ -29,7 +29,7 @@ import unicodedata
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import store, telegram
+from . import config, store, telegram
 from .telegram import esc
 
 WAIT_S = 600   # the hook's own "timeout" in settings.json sits above this, so the deny is ours and the chat hears it
@@ -237,7 +237,7 @@ def ask(event: dict, conn: sqlite3.Connection, *, deny: list[str] | None = None,
         return _decision("deny", f"{rule} is on the deny list")
     if tool in ("AskUserQuestion", "ExitPlanMode"):
         return None   # a question or a plan for the person at the screen: an Allow from the phone would answer it with nothing
-    if env.get("FINNAMON_FROM_CLAUDE") or env.get("FINNAMON_IMPORT_SESSION") or env.get("FINNAMON_TRIAGE"):
+    if any(env.get(k) for k in config.AGENT_MARKERS) or env.get("FINNAMON_IMPORT_SESSION") or env.get("FINNAMON_TRIAGE"):
         return None   # an unattended run or the import session: nobody on the phone answers for those
     path = str(event.get("transcript_path") or "")
     entries, offset = _entries(path) if path else ([], 0)

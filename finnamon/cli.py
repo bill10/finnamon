@@ -250,7 +250,7 @@ def _browser_open(url: str) -> bool:
 
 def cmd_open(a) -> None:
     """Open the dashboard in a browser (or print its address): human-only, since the address is the key to the intercom's shell."""
-    if _from_claude():
+    if _from_agent():
         die("the dashboard's key is for a person at a terminal: run `finnamon open` there")
     url = dashboard_url(a.host)
     port = int(os.environ.get("PORT") or config.DASHBOARD_PORT)
@@ -269,7 +269,7 @@ def cmd_open(a) -> None:
 def cmd_web(a) -> None:
     """`finnamon web token [--rotate]`: the key itself (for curl's Authorization: Bearer, or FINNAMON_WEB_TOKEN on another
     computer's `--to` uploads); --rotate mints a new one and every open page has to be opened again with `finnamon open`."""
-    if _from_claude():
+    if _from_agent():
         die("the dashboard's key is for a person at a terminal")
     try:
         print(config.web_token(rotate=a.rotate))
@@ -397,7 +397,7 @@ def cmd_link(a) -> None:
     conn = store.connect()
     if a.update:
         a.update = _resolve_item(conn, a.update)
-    if _from_claude():
+    if _from_agent():
         if not (a.start or a.finish or (a.update and a.telegram)) or a.token is not None or a.public_token or a.web:   # a bare --token is the empty string; --web is a person's click
             die("from a Claude session, `finnamon link --start` adds a bank and `link --update <item_id> --telegram` sends a re-login link to the chat; "
                 "--remove and the blocking form are for a person at a terminal")
@@ -428,7 +428,7 @@ def cmd_link(a) -> None:
         return
     if a.start:
         try:
-            s = link.start_pending(conn, a.owner or _default_owner(conn), to_telegram=a.telegram, limited=_from_claude())
+            s = link.start_pending(conn, a.owner or _default_owner(conn), to_telegram=a.telegram, limited=_from_agent())
         except (ValueError, PlaidError, telegram.TelegramError) as e:
             die(str(e))
         if s.get("state") == "linked":   # the earlier session completed in the meantime
@@ -462,7 +462,7 @@ def cmd_link(a) -> None:
             die(str(e))
         return
     owner = a.owner or _default_owner(conn)
-    if a.update and _from_claude():   # the assistant can't sit in a 4h wait: send the link and return; the next sync clears the error
+    if a.update and _from_agent():   # the assistant can't sit in a 4h wait: send the link and return; the next sync clears the error
         try:
             out(link.start_update(conn, a.update))
         except (ValueError, PlaidError, telegram.TelegramError) as e:
@@ -533,7 +533,7 @@ def _default_owner(conn) -> str:
 
 
 def cmd_owner(a) -> None:
-    if _from_claude() and a.action != "list":
+    if _from_agent() and a.action != "list":
         die("adding, renaming and removing household members is for a person at a terminal")
     conn = store.connect()
     if a.action == "list":
@@ -587,7 +587,7 @@ def cmd_owner(a) -> None:
 def cmd_channel(a) -> None:
     """Who answers Telegram: the daemon's own `claude -p` (off), the dashboard's intercom session through the daemon (session),
     or Claude Code's own Telegram channel plugin (on, an experiment). The daemon keeps sending alerts in every mode."""
-    if a.action != "status" and _from_claude():
+    if a.action != "status" and _from_agent():
         die("switching the Telegram inbound is for a person at a terminal")
     conn = store.connect()
     if a.action == "on":
@@ -951,7 +951,7 @@ def cmd_import(a) -> None:
     _triage_read_only()
     to = _box_url(a.to)
     if a.browser:
-        if _from_claude():
+        if _from_agent():
             die("the browser import is its own Claude session; run `finnamon import --browser <bank>` in a terminal")
         if not a.account:
             die("usage: finnamon import --browser <bank> [--to <url>]")
@@ -994,7 +994,7 @@ def cmd_import(a) -> None:
     if not a.account or not a.file:
         die('usage: finnamon import "<account>" <file.csv> [--balance N] [--flip] [--dry-run] [--to <url>]   |   finnamon import --browser <bank> [--to <url>]')
     path = Path(a.file).expanduser()
-    if _from_claude() and path.suffix.lower() != ".csv":
+    if _from_agent() and path.suffix.lower() != ".csv":
         die("from a Claude session, import reads .csv files only")   # never a way to print secrets.toml or a .env through an error message
     try:
         text = sys.stdin.read() if a.file == "-" else path.read_text(encoding="utf-8-sig", errors="replace")
@@ -1020,7 +1020,7 @@ def _box_url(to: str | None) -> str:
     if to.startswith("http://") and urllib.parse.urlsplit(to).hostname not in ("localhost", "127.0.0.1", "::1"):
         die("--to over plain http would send the box's key and the statement in the clear; use the https address `tailscale serve` gives the page")
     pinned = os.environ.get("FINNAMON_IMPORT_SESSION")
-    if to and _from_claude() and not pinned:
+    if to and _from_agent() and not pinned:
         die("--to is for the browser-import session or a person at a terminal")
     if pinned and to != ("" if pinned == "local" else pinned):
         die(f"this import session {'imports locally' if pinned == 'local' else 'uploads to ' + pinned} and nowhere else")
@@ -1112,7 +1112,7 @@ def cmd_detect(a) -> None:
     if a.review:
         if a.draft or a.sql or a.only or a.as_of:
             die("--review takes no other options")
-        if _from_claude():
+        if _from_agent():
             die("detectors are reviewed by a person at a terminal, not from a Claude session")
         _review_pending(a); return
     if a.draft:
@@ -1125,13 +1125,13 @@ def cmd_detect(a) -> None:
 DRAFT_NAME = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 
-def _from_claude() -> bool:
+def _from_agent() -> bool:
     # presence, not truthiness: `CLAUDECODE="" finnamon ...` is still a Claude session
-    return "FINNAMON_FROM_CLAUDE" in os.environ or "CLAUDECODE" in os.environ
+    return any(k in os.environ for k in (*config.AGENT_MARKERS, "CLAUDECODE"))
 
 
 def _human_only(cmd: str) -> None:
-    if _from_claude():
+    if _from_agent():
         die(f"`finnamon {cmd}` is for a person at a terminal")
 
 
@@ -1238,7 +1238,7 @@ def cmd_status(a) -> None:
          "items": [dict(r) for r in conn.execute("SELECT item_id, institution, owner, status, last_synced_at, last_error, "
                                                      "(SELECT group_concat(COALESCE(a.name, '') || COALESCE(' …' || a.mask, ''), ', ') FROM accounts a WHERE a.item_id=items.item_id) AS accounts FROM items")],
          "pending_alerts": conn.execute(f"SELECT count(*) FROM alerts WHERE {notify.SENDABLE}").fetchone()[0],
-         "untriaged": len(triage.untriaged(conn)), "assistant": str(assistant.dir()), "assistant_problems": assistant.problems(),
+         "untriaged": len(triage.untriaged(conn)), "agent": store.assistant_kind(conn), "assistant": str(assistant.dir()), "assistant_problems": assistant.problems(),
          "scheduler": scheduler.status(), "claude": shutil.which("claude"), "finnamon": shutil.which("finnamon")}
         | _stray_plugin_report())
 
@@ -1434,7 +1434,7 @@ def cmd_update(a) -> None:
     `install` rewrites the unit files and reloads every service, which costs the household its assistant: the dashboard's
     Claude session is the household's (in channel mode it is also the one Telegram talks to). `update` leaves the units
     alone and restarts in place, so the session comes back by id instead of starting a stranger."""
-    if _from_claude():
+    if _from_agent():
         die("`finnamon update` restarts the dashboard, and in channel mode that is the session you are talking to; run it in a terminal on the Finnamon box")
     repo = Path(scheduler.repo_dir())
     if not (repo / ".git").exists():   # a file, not a directory, in a git worktree
@@ -1568,7 +1568,7 @@ def _npm_ci() -> None:
 
 
 def cmd_install(a) -> None:
-    if _from_claude():
+    if _from_agent():
         die("`finnamon install` reprovisions the services and retires the household's conversation, which in channel mode is the session you are talking to; run it in a terminal on the Finnamon box")
     if a.uninstall:
         scheduler.uninstall(); print("removed"); return
@@ -1739,8 +1739,8 @@ def cmd_settings(a) -> None:
     conn = store.connect()
     if a.action == "set":
         _triage_read_only()
-        if a.ops and _from_claude():
-            die("operational settings are changed by a person at a terminal, not from a Claude session")
+        if (a.ops or a.key in store.CHOICE_SETTINGS) and _from_agent():
+            die(f"{'the assistant is chosen' if a.key in store.CHOICE_SETTINGS else 'operational settings are changed'} by a person at a terminal, not from an assistant session")
         if a.value is None and not a.account:
             die("a value is required (per-account overrides can be unset with --account <acct> and no value)")
         try:
@@ -1902,7 +1902,7 @@ def cmd_triage(a) -> None:
         reason = (sys.stdin.buffer.read(4000).decode("utf-8", "replace") if hasattr(sys.stdin, "buffer") else sys.stdin.read(4000)).strip() if ready else ""
         if not reason:
             die("triage set -: the sentence comes on stdin, e.g. a quoted heredoc (<<'EOF')")
-        n = triage.set_verdict(conn, a.group, a.verdict, a.confidence, reason, repair=not (_from_claude() or os.environ.get("FINNAMON_TRIAGE")))   # Claude reads untrusted memos: only a person rewrites a stamped sentence
+        n = triage.set_verdict(conn, a.group, a.verdict, a.confidence, reason, repair=not (_from_agent() or os.environ.get("FINNAMON_TRIAGE")))   # Claude reads untrusted memos: only a person rewrites a stamped sentence
         out({"stamped": n})
     elif a.action == "suppressed":
         out([{**dict(r), "payload": json.loads(r["payload_json"])} for r in triage.suppressed(conn, a.since)])

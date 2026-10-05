@@ -25,6 +25,7 @@ def _not_inside_claude(monkeypatch, tmp_path):
     """The suite often runs from a Claude Code session; the CLI's human-only gates must see a plain terminal."""
     monkeypatch.delenv("CLAUDECODE", raising=False)
     monkeypatch.delenv("FINNAMON_FROM_CLAUDE", raising=False)
+    monkeypatch.delenv("FINNAMON_FROM_AGENT", raising=False)
     monkeypatch.delenv("FINNAMON_WEB_TOKEN", raising=False)   # a laptop that uploads to a box exports it; the suite must not inherit it
     monkeypatch.delenv("SSH_CONNECTION", raising=False)
     monkeypatch.delenv("PORT", raising=False)   # doctor's port probe reads PORT (`finnamon remote` must ignore it): a shell with PORT exported must not move it under the tests

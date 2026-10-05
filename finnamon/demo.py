@@ -273,7 +273,7 @@ def start(h: Path, port: int | None = None) -> str:
     port = port or _free_port()
     env = {**os.environ, "FINNAMON_HOME": str(h), "PORT": str(port), "FINNAMON_DEMO": "1",
            "FINNAMON_BIN": f"{sys.executable} -m finnamon.cli", "FINNAMON_REPO": scheduler.repo_dir()}
-    for k in ("FINNAMON_ASSISTANT", "FINNAMON_WEB_HOSTS", "CLAUDECODE", "FINNAMON_FROM_CLAUDE"):
+    for k in ("FINNAMON_ASSISTANT", "FINNAMON_WEB_HOSTS", "CLAUDECODE", *config.AGENT_MARKERS):
         env.pop(k, None)
     with open(h / "web.log", "ab") as log:
         p = subprocess.Popen(web, cwd=scheduler.repo_dir(), env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
