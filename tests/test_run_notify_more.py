@@ -87,7 +87,7 @@ def test_render_and_send_edge_branches(conn, tg):
     # a bare Item summary: no transactions, no recurring, no typical month
     conn.execute("INSERT INTO items (item_id, owner) VALUES ('bare','bill')")
     s = notify.item_linked_summary(conn, "bare")
-    assert s.startswith("<b>Linked bare</b> (0 accounts):") and "0 transactions since ?" in s and "Recurring" not in s and "holdings" not in s
+    assert s.startswith("<b>Linked bare</b> (0 accounts):") and "no transactions yet" in s and "Recurring" not in s and "holdings" not in s
 
 
 def test_record_crash_with_dead_db_still_messages(conn, tg, monkeypatch):

@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 from contextlib import contextmanager
@@ -24,12 +25,20 @@ MIGRATIONS = Path(__file__).parent / "migrations"
 def connect(path: Path | None = None) -> sqlite3.Connection:
     path = path or config.db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        os.close(os.open(path, os.O_WRONLY | os.O_CREAT, 0o600))   # an empty file is a new database; never 0644, even from `status` before `init`
     conn = sqlite3.connect(path, isolation_level=None)  # autocommit; we use explicit BEGIN
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
     migrate(conn)
+    for f in (path, path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")):   # a database made 0644 by an older version
+        try:
+            if f.stat().st_mode & 0o077:
+                os.chmod(f, 0o600)
+        except OSError:
+            pass
     return conn
 
 
@@ -140,6 +149,23 @@ OPS_SETTINGS: dict[str, tuple[float, float]] = {
 }
 
 
+SETTING_HELP = {   # what each key does, in the words `finnamon settings` prints
+    "dup_min_amount": "smallest charge ($) the duplicate-charge check looks at",
+    "dup_window_days": "days apart two identical charges can be and still count as a possible duplicate",
+    "budget_min_day": "day of the month before budget pace alerts start (early in the month a projection is noise)",
+    "outlier_multiplier": "how many times a merchant's usual amount a charge must be to be flagged as unusual",
+    "outlier_min_amount": "smallest charge ($) the unusual-amount check looks at",
+    "large_amount": "smallest one-way transfer ($) the unmatched-transfer check looks at; it does not watch big purchases",
+    "xfer_window_days": "days within which a transfer's other half must show up on one of your accounts",
+    "low_balance_threshold": "balance ($) a checking or savings account may fall to before a low-balance alert (set per account with `finnamon threshold`)",
+    "import_max_age_days": "days a manual account may go without a CSV import before it is reported as stale",
+    "sync_interval_hours": "hours between bank syncs (1 to 12; the daemon's timing)",
+    "claude_timeout_seconds": "seconds the assistant gets to answer one message or triage run",
+    "health_max_age_hours": "hours without a sync before a bank is reported as not syncing",
+    "lookback_days": "days back the detectors look for new charges, subscriptions and price changes",
+}
+
+
 def validate_setting(key: str, value, ops: bool = False) -> str:
     """Numeric, in range, and known. Raises ValueError otherwise. Returns the canonical string."""
     spec = SETTINGS.get(key) or (OPS_SETTINGS.get(key) if ops else None)
@@ -155,7 +181,8 @@ def validate_setting(key: str, value, ops: bool = False) -> str:
     if not lo <= v <= hi:
         raise ValueError(f"{key} must be between {lo:g} and {hi:g}")
     if key == "sync_interval_hours" and v > 12:
-        raise ValueError("sync_interval_hours is capped at 12 so the 24h health check can see two missed syncs")
+        raise ValueError("sync_interval_hours is capped at 12 so a bank that stops syncing is noticed: the health check "
+                         "(health_max_age_hours, 12 by default) reports a bank with no sync in that long")
     return f"{v:.2f}".rstrip("0").rstrip(".")  # money-safe: cents kept, no exponent form
 
 

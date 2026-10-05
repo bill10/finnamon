@@ -593,7 +593,8 @@ def mirror_note(mirrors: list[dict], marked: list[dict] | None = None) -> str:
                          f"run finnamon account merge {m['new']} {m['existing']} in a terminal on the Finnamon box." for m in mirrors])
 
 
-def announce(conn: sqlite3.Connection, item_id: str, mirrors: list[dict] | None = None, marked: list[dict] | None = None) -> None:
+def announce(conn: sqlite3.Connection, item_id: str, mirrors: list[dict] | None = None, marked: list[dict] | None = None) -> bool:
+    """Send the linked summary to the household chat; False when there is no chat to send it to."""
     chat = store.get_state(conn, "chat_id")
     if chat:
         text = notify.item_linked_summary(conn, item_id)
@@ -606,3 +607,4 @@ def announce(conn: sqlite3.Connection, item_id: str, mirrors: list[dict] | None 
         telegram.send_message(chat, text)
         if first:
             store.set_state(conn, "first_link_welcomed", store.now_local())
+    return bool(chat)

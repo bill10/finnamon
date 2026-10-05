@@ -24,6 +24,17 @@ def resolve_category(text: str) -> str:
     raise ResolveError(text, cands or taxonomy.suggestions(text))
 
 
+def detailed_category(text: str, what: str) -> str:
+    """The one resolution for a merchant rule and a one-charge edit: a detailed category. A group ("Travel") is refused with its
+    members named, because picking one for the household would file charges where nobody chose."""
+    code = resolve_category(text)
+    if code in taxonomy.DETAILED:
+        opts = ", ".join(f'"{taxonomy.label(f"{code}_{d}")}"' for d in taxonomy.DETAILED[code])
+        raise ValueError(f"{what} needs a detailed category, and '{text}' is a group: say which, {opts}. "
+                         "(A budget can take the whole group: finnamon budget set <name> <amount> --category " + f'"{taxonomy.label(code)}")')
+    return code
+
+
 def _budget_codes(text: str, from_name: bool) -> list[str]:
     """A budget's category text to its codes: one category, or a name that is several ("utilities"). A budget's own name
     that is no category is refused here, with what it might mean, rather than make a budget that counts nothing."""
@@ -227,11 +238,16 @@ def suggest(conn: sqlite3.Connection, months: int = 6, as_of: str | None = None)
     for r in rows:
         c = by_cat.setdefault(r["cat"] or "UNCATEGORIZED", {"category": r["cat"], "primary": r["prim"], "months": {}})
         c["months"][r["ym"]] = r["spent"]
+    y, mo = int(as_of[:4]), int(as_of[5:7])
+    window = []
+    for i in range(1, months + 1):   # the complete months the query covers, newest first
+        yy, mm = divmod(y * 12 + mo - 1 - i, 12)
+        window.append(f"{yy:04d}-{mm + 1:02d}")
     out = []
     for c in by_cat.values():
-        vals = sorted(c["months"].values())
-        n = len(vals)
-        med = vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2
+        vals = sorted(c["months"].get(m, 0) for m in window)   # a month with no spending is a zero: one $642 flight in six months is a $0 median, not $642
+        n, k = len(c["months"]), len(vals)
+        med = vals[k // 2] if k % 2 else (vals[k // 2 - 1] + vals[k // 2]) / 2
         top = conn.execute(   # the same relation and the same category as the totals above, or a category's total would list merchants that do not add up to it
             "SELECT display m, round(sum(amount)) s FROM tx_now "
             f"WHERE pending=0 AND amount>0 AND {SPEND} AND {SUGGEST_CAT} = ? AND date >= date(?,'start of month', ?) AND date < date(?,'start of month') GROUP BY m ORDER BY s DESC LIMIT 3",
@@ -279,9 +295,7 @@ def threshold_set(conn: sqlite3.Connection, account_text: str, amount: float) ->
 
 def category_set(conn: sqlite3.Connection, merchant: str, category_text: str, m: dict | None = None) -> dict:
     """A merchant rule; m is the merchant already resolved (from a transaction: its own canonical, never a name lookup)."""
-    code = resolve_category(category_text)
-    if code in taxonomy.DETAILED:
-        raise ValueError("a merchant override needs a detailed category, e.g. FOOD_AND_DRINK_GROCERIES")
+    code = detailed_category(category_text, "a merchant override")
     m = m or resolve_merchant(conn, merchant)
     for c in m["canonicals"]:
         conn.execute("INSERT INTO category_override (canonical, pfc_primary, pfc_detailed) VALUES (?,?,?) "
@@ -336,9 +350,7 @@ def tx_category_set(conn: sqlite3.Connection, transaction_id: str, category_text
         n = conn.execute("DELETE FROM tx_category_override WHERE transaction_id=?", (t["transaction_id"],)).rowcount
         code = None
     else:
-        code = resolve_category(category_text)
-        if code in taxonomy.DETAILED:
-            raise ValueError("a transaction override needs a detailed category, e.g. FOOD_AND_DRINK_GROCERIES")
+        code = detailed_category(category_text, "a transaction override")
         conn.execute("INSERT INTO tx_category_override (transaction_id, pfc_primary, pfc_detailed) VALUES (?,?,?) "
                      "ON CONFLICT(transaction_id) DO UPDATE SET pfc_primary=excluded.pfc_primary, pfc_detailed=excluded.pfc_detailed, created_at=datetime('now','localtime')",
                      (t["transaction_id"], taxonomy.primary_of(code), code))

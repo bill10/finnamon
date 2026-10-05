@@ -118,7 +118,7 @@ def test_summary_of_a_bank_whose_accounts_are_all_mirrors_is_not_empty(conn):
     txn(conn, "t1", "chk_j", "2026-09-11", 80, "SQ *PMT 8827", None, None, "GENERAL_SERVICES", "GENERAL_SERVICES_OTHER_GENERAL_SERVICES")
     budgets.alias_set(conn, "SQ *PMT 8827", "fence contractor")
     s = notify.item_linked_summary(conn, "item2", AS_OF)
-    assert "• fence contractor" in s and "1 transactions" in s
+    assert "• fence contractor" in s and "1 transaction since Sep 11, 2026" in s
     assert conn.execute("SELECT count(*) FROM tx_now WHERE item_id='item2'").fetchone()[0] == 0   # tx_now still hides it from every money total
 
 def test_send_one_without_a_chat_id_sends_nothing(conn):
@@ -262,7 +262,7 @@ def test_item_linked_summary_masks_kinds_and_holdings(conn):
     assert "<b>Linked Chase</b> (3 accounts):" in s
     assert "• Chase Checking …4821 (checking)" in s and "• Sapphire …7710 (credit card)" in s
     assert "• Brokerage (investment)" in s and "Brokerage …" not in s  # no mask, type falls back
-    assert "0 transactions since ?, 2 holdings." in s
+    assert "no transactions to show (an investment or loan account often has none), 2 holdings." in s
     assert "Recurring" not in s and "Top merchants" not in s and "$" not in s and "1,000" not in s
     assert s.endswith("Balances and amounts: just ask me here.")
 

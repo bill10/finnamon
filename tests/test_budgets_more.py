@@ -115,3 +115,14 @@ def test_normal_alert_id_still_resolves_when_the_account_became_a_mirror(conn):
     cur = conn.execute("INSERT INTO alerts (tier, kind, key, transaction_id, payload_json, as_of) "
                        "VALUES ('anomaly','anomaly:first_merchant','k-m','m1',?,?)", (json.dumps({"merchant": "SQ *PMT 8827"}), AS_OF))
     assert budgets.normal(conn, alert_id=cur.lastrowid)["canonical"] == "fence contractor"
+
+
+def test_suggest_median_counts_months_with_no_spending(conn):
+    """One $642 flight in six months is not a $642 median: the months without it are zeros."""
+    seed(conn)
+    txn(conn, "f1", "chk", "2026-08-10", 642, "DELTA", "Delta", "mch_delta", "TRAVEL", "TRAVEL_FLIGHTS")
+    for i, (d, amt) in enumerate((("2026-04-05", 100), ("2026-05-05", 110), ("2026-06-05", 90), ("2026-07-05", 100), ("2026-08-05", 105), ("2026-09-05", 95))):
+        txn(conn, f"g{i}", "chk", d, amt, "WF", "Whole Foods", "mch_wf", "FOOD_AND_DRINK", "FOOD_AND_DRINK_GROCERIES")
+    cats = {c["category"]: c for c in budgets.suggest(conn, 6, "2026-10-05")["categories"]}
+    assert cats["TRAVEL_FLIGHTS"]["median"] == 0 and cats["TRAVEL_FLIGHTS"]["max"] == 642 and cats["TRAVEL_FLIGHTS"]["months_seen"] == 1
+    assert cats["FOOD_AND_DRINK_GROCERIES"]["median"] == 100 and cats["FOOD_AND_DRINK_GROCERIES"]["months_seen"] == 6
