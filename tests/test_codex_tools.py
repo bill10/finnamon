@@ -219,3 +219,47 @@ def test_agents_md_says_finnamon_is_the_tool_on_codex():
     agents = assistant.files()["AGENTS.md"].decode()
     assert agents.split("\n\n")[1] == assistant.CODEX_TOOL_NOTE.strip() and "`finnamon` tool" in agents
     assert "finnamon` tool" not in assistant.files()["CLAUDE.md"].decode(), "Claude households are unchanged"
+
+
+# --- audit additions --------------------------------------------------------------------------------------------------
+
+# Value: protects=a Codex phone turn is judged by the NEWEST UserMessage; fails_when=telegram_turn reads the first prompt or any prompt; why_new=existing tests have one prompt per rollout; seam=none
+def test_only_the_newest_codex_prompt_decides_a_phone_turn(tmp_path):
+    def user(text):
+        return completed({"type": "UserMessage", "id": text, "content": [{"type": "text", "text": text}]})
+    phone_then_dashboard = approval._entries(str(rollout(tmp_path, "[telegram · bill] hi", [user("and at the desk now")])))[0]
+    assert not approval.telegram_turn(phone_then_dashboard)
+    dashboard_then_phone = approval._entries(str(rollout(tmp_path, "at the desk", [user("[telegram · bill] hi")])))[0]
+    assert approval.telegram_turn(dashboard_then_phone)
+
+
+# Value: protects=no near-match guessing on Codex items (finished ids, other arguments, FileChange); fails_when=_codex_call loosens or the done set is ignored; why_new=only exact-match and no-match on command were covered; seam=none
+def test_codex_tool_use_id_never_guesses():
+    args = {"argv": ["finnamon", "status"]}
+    entries = [completed({"type": "McpToolCall", "id": "m1", "server": "finnamon", "tool": "finnamon", "arguments": args}),
+               completed({"type": "McpToolCall", "id": "m2", "server": "finnamon", "tool": "finnamon", "arguments": args}),
+               completed({"type": "FileChange", "id": "f1", "changes": {}})]
+    assert approval.tool_use_id(entries, TOOL, args, set()) == "m2", "the newest"
+    assert approval.tool_use_id(entries, TOOL, args, {"m2"}) == "m1", "not one already answered"
+    assert approval.tool_use_id(entries, TOOL, {"argv": ["finnamon", "alerts"]}, set()) is None
+    assert approval.tool_use_id(entries, "apply_patch", {"command": "*** Begin Patch"}, set()) is None, "a FileChange keeps no patch"
+
+
+# Value: protects=the PermissionRequest hook resolves a relative patch path against the event's cwd; fails_when=ask() stops passing cwd to protected_path; why_new=cwd was only tested via secret-guard; seam=none
+def test_permission_request_denies_a_relative_patch_into_the_household(home, conn, tg):
+    e = payload("pre_tool_use_apply_patch", command="*** Begin Patch\n*** Add File: ../finnamon.db\n+x\n*** End Patch")
+    e["hook_event_name"], e["cwd"] = "PermissionRequest", "/Users/jane/.finnamon/assistant"
+    out = approval.ask(e, conn, deny=[], env={})
+    assert out["hookSpecificOutput"]["decision"]["behavior"] == "deny" and "off limits" in out["hookSpecificOutput"]["decision"]["message"]
+    assert tg == []
+
+
+# Value: protects=a hung CLI call returns a structured error instead of crashing the MCP tool; fails_when=TimeoutExpired is not caught or the shape changes; why_new=timeout branch had no test; seam=none
+def test_a_cli_call_that_hangs_comes_back_as_an_error(monkeypatch):
+    import subprocess
+
+    def hang(*a, **k):
+        raise subprocess.TimeoutExpired(a[0], k.get("timeout"))
+    monkeypatch.setattr(subprocess, "run", hang)
+    out = mcp_server.run_argv(["finnamon", "status"])
+    assert out["exit_code"] is None and out["stdout"] == "" and "did not finish" in out["stderr"]

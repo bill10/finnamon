@@ -52,7 +52,9 @@ CHANNEL_ONLY = re.compile(r"Claude Code's (own )?Telegram channel")   # the chan
 CODEX_TOOL_NOTE = ("**On Codex, every `finnamon …` command in these instructions and the skills is a call to the `finnamon` tool**"
                    " (MCP server `finnamon`), not a shell command: `argv` is the command line as a list, one string per"
                    ' argument (`finnamon query "SELECT 1"` is `["finnamon", "query", "SELECT 1"]`). Your shell cannot reach'
-                   " the household's data; the tool can. A command the tool refuses is one a person runs in a terminal.\n")
+                   " the household's data; the tool can. There is no shell and no stdin: where a skill pipes text in through"
+                   " `-` (a heredoc), pass the text itself as that argument, `$` signs and all. A command the tool refuses is"
+                   " one a person runs in a terminal.\n")
 
 
 def _items(text: str) -> list[list[str]]:
