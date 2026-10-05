@@ -797,6 +797,8 @@ test('Link account files the bank under the chosen owner, through the OAuth roun
   try {
     assert.equal((await post('/api/link/token', { owner: 'nobody; rm' })).status, 400);
     assert.ok(!calls.some(c => c[1] === '--token'), 'an unknown owner never reaches `link --token`');
+    assert.equal((await post('/api/link/token', { owner: 'joint' })).status, 200);
+    assert.deepEqual(calls.at(-1), ['link', '--token', '--owner', 'joint'], 'joint is a choice, not a member');
     assert.equal((await post('/api/link/token', { owner: 'sam' })).status, 200);
     assert.deepEqual(calls.at(-1), ['link', '--token', '--owner', 'sam']);
     assert.deepEqual(await (await fetch(base + '/api/link/token')).json(), { link_token: 'lt', owner: 'sam' });
@@ -951,4 +953,26 @@ test('a re-login alert shows Reconnect and Dismiss, never It\'s normal, and the 
   assert.ok(!relogin.includes('data-act="normal"') && !relogin.includes('Reply'), 'the button replaces both the reply hint and It’s normal');
   assert.ok(dup.includes('data-act="normal"') && !dup.includes('data-reconnect'));
   assert.ok(els['alerts-resolved-body'].innerHTML.includes('Reconnected') && !els['alerts-resolved-body'].innerHTML.includes('data-act="undo"'));
+});
+
+test('a manual account carries its owner, and merge / unmerge reach the CLI with checked ids', async () => {
+  const calls = [];
+  const cli = async (...a) => { calls.push(a); return {}; };
+  const app = buildApp({ token: () => KEY, cli, allowHost: () => true });
+  const srv = app.listen(0, '127.0.0.1'); await new Promise(r => srv.once('listening', r));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  const post = (path, body) => fetch(`${base}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  try {
+    await post('/api/account', { name: 'HSBC Joint', institution: 'HSBC', owner: 'joint' });
+    assert.deepEqual(calls.at(-1), ['account', 'add', '--institution', 'HSBC', '--type', 'checking', '--owner', 'joint', '--', 'HSBC Joint']);
+    await post('/api/account', { name: 'HSBC Joint 2', institution: 'HSBC' });
+    assert.ok(!calls.at(-1).includes('--owner'), 'no owner: the CLI picks the first member, as before');
+    assert.equal((await post('/api/account/merge', { account: 'acc_2', same_as: 'acc_1' })).status, 200);
+    assert.deepEqual(calls.at(-1), ['account', 'merge', '--', 'acc_2', 'acc_1']);
+    assert.equal((await post('/api/account/merge', { account: 'acc 2; --force', same_as: 'acc_1' })).status, 400);
+    assert.equal((await post('/api/account/merge', { account: 'acc_2' })).status, 400);
+    assert.equal((await post('/api/account/unmerge', { account: 'acc_2' })).status, 200);
+    assert.deepEqual(calls.at(-1), ['account', 'unmerge', '--', 'acc_2']);
+    assert.equal((await post('/api/account/unmerge', {})).status, 400);
+  } finally { srv.close(); }
 });

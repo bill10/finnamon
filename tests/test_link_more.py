@@ -240,7 +240,7 @@ def test_link_start_is_non_blocking_and_the_daemon_finishes_it(home, conn, tg, m
     monkeypatch.setattr(plaid_api, "link_token_get", lambda lt: {"link_sessions": [{"results": {}}]})
     assert link.check_pending(conn)["state"] == "waiting" and store.get_state(conn, "pending_link")
     cli.main(["link", "--finish"]); assert "still waiting" in capsys.readouterr().out
-    # logged in: the daemon tick completes, syncs, announces, reports a mirror instead of applying it
+    # logged in: the daemon tick completes, syncs, announces, marks the mirror the way a terminal's yes does
     monkeypatch.setattr(plaid_api, "link_token_get", lambda lt: {"link_sessions": [{"results": {"item_add_results": [{"public_token": "pt"}]}}]})
     monkeypatch.setattr(plaid_api, "public_token_exchange", lambda pt: {"item_id": "new", "access_token": "tok"})
     def fake_register(conn, owner, tok, item):
@@ -253,8 +253,8 @@ def test_link_start_is_non_blocking_and_the_daemon_finishes_it(home, conn, tg, m
     monkeypatch.setattr(d.stop, "wait", lambda t=None: d.stop.set())
     d.sync_loop()
     assert store.get_state(conn, "pending_link") is None
-    assert "Linked Chase" in tg.sent[-1]["text"] and "account merge n1 chk" in tg.sent[-1]["text"]
-    assert conn.execute("SELECT mirror_of FROM accounts WHERE account_id='chk'").fetchone()[0] is None   # reported, not applied
+    assert "Linked Chase" in tg.sent[-1]["text"] and "marked joint" in tg.sent[-1]["text"] and "account unmerge n1" in tg.sent[-1]["text"]
+    assert conn.execute("SELECT owner FROM accounts WHERE account_id='chk'").fetchone()[0] == "joint"
     cli.main(["link", "--finish"]); assert "nothing pending" in capsys.readouterr().out
 
 
@@ -311,11 +311,11 @@ def test_link_finish_from_claude_prints_summary_and_mirror_note(home, conn, tg, 
     monkeypatch.setattr(plaid_api, "link_token_get", lambda lt: {"link_sessions": [{"results": {"item_add_results": [{"public_token": "pt"}]}}]})
     monkeypatch.setattr(link, "complete", lambda c, o, pt, u=None, **kw: {"item_id": "item9", "institution": "Ally", "sync": {"accounts": 2, "transactions": 5, "recurring": 0, "holdings": 1, "error": "RuntimeError: boom"},
                                                                      "mirror_candidates": [{"new": "n1", "existing": "chk", "name": "Checking", "mask": "4821", "match": "persistent_account_id"}]})
-    monkeypatch.setattr(link, "announce", lambda c, i, m=None: tg.sent.append({"text": f"announce {i} {len(m or [])}"}))
+    monkeypatch.setattr(link, "announce", lambda c, i, m=None, k=None: tg.sent.append({"text": f"announce {i} {len(m or [])} {len(k or [])}"}))
     cli.main(["link", "--finish"])
     out = capsys.readouterr().out
     assert "Linked Ally (item9): 2 accounts, 5 transactions, 1 holdings, error RuntimeError: boom" in out
-    assert "account merge n1 chk" in out and tg.sent[-1]["text"] == "announce item9 1" and store.get_state(conn, "pending_link") is None
+    assert "marked joint" in out and "account unmerge n1" in out and tg.sent[-1]["text"] == "announce item9 0 1" and store.get_state(conn, "pending_link") is None
 
 
 def test_daemon_tick_survives_a_failing_pending_check(home, conn, tg, monkeypatch, caplog):

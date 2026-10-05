@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 
 const src = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const block = src.slice(src.indexOf('const KIND ='), src.indexOf('const STALE_MS'));
-const { kindOf, acctName, bankTotal, loadOpen, saveOpen } = new Function(`${block}; return { kindOf, acctName, bankTotal, loadOpen, saveOpen };`)();
+const { kindOf, acctName, bankTotal, loadOpen, saveOpen, isManual, bankKey } = new Function(`${block}; return { kindOf, acctName, bankTotal, loadOpen, saveOpen, isManual, bankKey };`)();
 
 test('kindOf: Plaid subtype reads as a plain label, falling back to the type', () => {
   assert.equal(kindOf({ subtype: 'cash management', type: 'depository' }), 'Cash management');
@@ -97,4 +97,11 @@ test('views: a single member hides Owner; the choice is remembered, defaults to 
   assert.equal(loadView(two, mem('junk')), 'bank');
   assert.equal(loadView(two, { getItem() { throw new Error('blocked'); } }), 'bank');
   saveView('type', { setItem() { throw new Error('full'); } });   // must not throw
+});
+
+test('a Plaid link and an account added by hand at the same bank are separate groups', () => {
+  assert.equal(isManual({ item_id: 'manual:chase' }), true);
+  assert.equal(isManual({ item_id: 'item-abc' }), false);
+  assert.notEqual(bankKey('Chase', true), bankKey('Chase', false));
+  assert.equal(bankKey('Chase', false), 'Chase');   // a Plaid bank keeps the key its open/closed state was saved under
 });

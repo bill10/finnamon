@@ -76,7 +76,8 @@ def test_init_then_link_flow(home, tg, fake_claude, capsys, monkeypatch, tmp_pat
     assert merged == [("n1", "chk")] and announced == ["item2"] and not any("hosted.plaid" in m["text"] for m in tg.sent)  # the link stays in the terminal
     # declining the mirror, and a session closed without a bank
     answers(monkeypatch, "n")
-    out = run_cli(capsys, "link", "--owner", "jane")
+    conn.execute("INSERT INTO owners (owner) VALUES ('jane')")
+    out = run_cli(capsys, "link", "--owner", "JANE")   # any case: the member is jane
     assert "marked joint" not in out and merged == [("n1", "chk")]
     monkeypatch.setattr(link, "wait_for_public_token", lambda lt: None)
     with pytest.raises(SystemExit):
@@ -260,13 +261,15 @@ def test_command_surface(home, tg, capsys, monkeypatch, tmp_path):
     assert {a["account_id"]: a["balance"] for a in json.loads(run_cli(capsys, "account", "list"))}["chk"] == 10.5
     conn.execute("INSERT INTO balances (account_id, as_of, current) VALUES ('chk','2026-01-03 00:00:00',NULL)")   # a sync that sent no figure
     assert {a["account_id"]: a["balance"] for a in json.loads(run_cli(capsys, "account", "list"))}["chk"] == 10.5   # the dashboard's Accounts list shows the latest
+    conn.execute("INSERT OR IGNORE INTO owners (owner) VALUES ('jane')")
     conn.execute("INSERT INTO accounts (account_id, item_id, name, type, mask, owner) VALUES ('chk_j','item1','x','depository','4821','jane')")
     run_cli(capsys, "account", "merge", "chk_j", "chk")
     assert tuple(conn.execute("SELECT mirror_of, owner FROM accounts WHERE account_id='chk_j'").fetchone()) == ("chk", "joint")
     assert json.loads(run_cli(capsys, "account", "failover", "chk"))["promoted"] == "chk_j"  # mirror's Item is healthy: promoted
     run_cli(capsys, "account", "failover", "chk_j")  # and back
     run_cli(capsys, "account", "unmerge", "chk_j")
-    run_cli(capsys, "account", "owner", "chk_j", "jane")
+    assert [r[0] for r in conn.execute("SELECT owner FROM accounts WHERE account_id IN ('chk_j','chk') ORDER BY account_id")] == ["bill", "jane"]   # the owners they had
+    run_cli(capsys, "account", "owner", "chk_j", "Jane")
     assert tuple(conn.execute("SELECT mirror_of, owner FROM accounts WHERE account_id='chk_j'").fetchone()) == (None, "jane")
     assert json.loads(run_cli(capsys, "owner", "list"))[0]["owner"] == "bill"
     monkeypatch.setattr(owners, "add_member", lambda c, name, code, **kw: {"owner": name, "code_len": len(code)})
@@ -932,17 +935,16 @@ def test_human_only_commands_refuse_a_claude_session(conn, monkeypatch, capsys, 
     def reached(*a, **k):
         raise Reached()
     for mod, fn in [(sync, "sync_all"), (notify, "send_pending"), (runmod, "cycle"), (daemon, "Daemon"), (heartbeat, "check"),
-                    (triage, "run_if_needed"), (link, "mark_mirror"), (link, "failover"), (link, "remove_account"), (investments, "sync_all_holdings")]:
+                    (triage, "run_if_needed"), (link, "mark_mirror"), (link, "merge_problem"), (link, "unmerge"), (owners, "resolve"), (link, "failover"), (link, "remove_account"), (investments, "sync_all_holdings")]:
         monkeypatch.setattr(mod, fn, reached)
     gated = [["sync"], ["notify"], ["run"], ["daemon"], ["heartbeat"], ["triage"], ["account", "merge", "a", "b"],
-             ["account", "failover", "a"], ["account", "remove", "--yes", "a"], ["networth", "--sync"], ["networth", "--history", "--sync"]]
+             ["account", "unmerge", "a"], ["account", "owner", "a", "jane"], ["owner", "rename", "a", "b"], ["owner", "remove", "a"], ["account", "failover", "a"], ["account", "remove", "--yes", "a"], ["networth", "--sync"], ["networth", "--history", "--sync"]]
     for argv in gated:
         with pytest.raises(Reached):
             cli.main(argv)                               # a person at a terminal gets through
-    cli.main(["account", "unmerge", "a"])
     monkeypatch.setenv(env, "")
     capsys.readouterr()
-    for argv in gated + [["account", "unmerge", "a"], ["init", "--yes"]]:
+    for argv in gated + [["init", "--yes"]]:
         with pytest.raises(SystemExit):
             cli.main(argv)
         assert "is for a person at a terminal" in capsys.readouterr().err, argv
