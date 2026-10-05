@@ -68,6 +68,16 @@ def test_add_account_and_import_are_idempotent_and_keep_plaids_sign(conn):
     assert investments.net_worth(conn)["cash"] == 1200.0
 
 
+def test_sample_says_spending_or_money_in_and_flip_reverses_it(conn):
+    card = manual(conn, "Amex", "credit")
+    parsed = imports.parse("Date,Description,Amount\n09/16/2026,PAYMENT,-300.00\n09/15/2026,COSTCO,42.00\n")   # an Amex file: purchases positive
+    as_is = imports.apply(conn, card, parsed, dry_run=True)["sample"]
+    assert [(x["name"], x["reads_as"]) for x in as_is] == [("PAYMENT", "spending"), ("COSTCO", "money in")]   # the default reads it backwards
+    flipped = imports.apply(conn, card, parsed, flip=True, dry_run=True)["sample"]
+    assert [(x["name"], x["reads_as"]) for x in flipped] == [("PAYMENT", "money in"), ("COSTCO", "spending")]
+    assert imports.apply(conn, card, imports.parse("\n".join(["Date,Description,Amount"] + [f"09/0{i}/2026,X{i},1" for i in range(1, 8)])), dry_run=True)["sample"].__len__() == 5
+
+
 def test_flip_balance_column_and_credit_accounts(conn):
     card = manual(conn, "HSBC Card", "credit")
     r = imports.apply(conn, card, imports.parse("Date,Description,Amount,Balance\n09/16/2026,PAYMENT THANK YOU,-500.00,-250.00\n09/15/2026,COSTCO,142.17,-750.00\n"), flip=True, now=AS_OF)

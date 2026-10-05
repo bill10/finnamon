@@ -110,7 +110,7 @@ def test_holdings_sync_and_net_worth(conn, monkeypatch):
     assert [h["date"] for h in hist] == ["2026-09-01", "2026-09-19", "2026-09-20"]
     assert [h["net_worth"] for h in hist] == [500, 1755, 1855]   # 09-01: checking only; 09-19: last snapshots; 09-20: 1100 + 1005 - 250, the others carried
     nw = investments.net_worth(conn)
-    assert hist[-1]["net_worth"] == round(nw["net_worth"] - nw["property"], 2)
+    assert hist[-1]["net_worth"] == nw["net_worth"]
     conn.execute("INSERT INTO accounts (account_id, item_id, name, type, subtype, mask, owner) VALUES ('ln','item1','Car loan','loan','auto','9','bill')")
     conn.execute("INSERT INTO balances VALUES ('ln', '2000-01-01 00:00:00', 100, NULL)")   # only ever synced before the window: carried into every day, never a day of its own
     hist = investments.net_worth_history(conn, months=240)
@@ -143,7 +143,8 @@ def test_net_worth_splits_cash_investments_property(conn):
     nw = investments.net_worth(conn)
     hist = investments.net_worth_history(conn, months=240)
     assert (nw["investments"], nw["assets"]) == (4200, 5200)
-    assert (hist[-1]["assets"], hist[-1]["liabilities"], hist[-1]["net_worth"]) == (5200, 4250, 950) and hist[-1]["net_worth"] == nw["net_worth"] - nw["property"]
+    assert (hist[-1]["assets"], hist[-1]["liabilities"], hist[-1]["net_worth"]) == (805200, 4250, 800950)   # property counts, at its current value
+    assert hist[-1]["net_worth"] == nw["net_worth"] and hist[-1]["property"] == 800000 and "no history" in hist[-1]["property_basis"]   # the last point is net worth today
 
 
 def test_colour_legends_never_take_plot_width(home, conn):   # #97

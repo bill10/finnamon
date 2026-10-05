@@ -73,8 +73,10 @@ def net_worth(conn: sqlite3.Connection) -> dict:
 def net_worth_history(conn: sqlite3.Connection, months: int = 12) -> list[dict]:
     """One point per day (net worth, assets, liabilities): every account's last known balance on that day, carried forward from earlier days when
     a bank did not sync (a login that expired, a Plaid hiccup, the days before it was linked). Several syncs a day
-    count once. The last point is what the banks report in net_worth() (assets minus liabilities; the page adds the
-    stated property on top), and the dashboard's month change is read off this series."""
+    count once. Property counts too, at its current value on every day: properties keeps no value history, only
+    the latest figure, and each point says so (property_basis). The last point equals net_worth() today, and the
+    dashboard's month change is read off this series."""
+    prop = round(properties.total(conn), 2)
     since = f"-{months} months"
     rows = conn.execute(
         "WITH acct AS (SELECT account_id, type FROM accounts WHERE mirror_of IS NULL), "
@@ -93,9 +95,10 @@ def net_worth_history(conn: sqlite3.Connection, months: int = 12) -> list[dict]:
         latest[r["account_id"]] = (r["current"] or 0, r["type"] in LIABILITY_TYPES)
         if not r["shown"]:
             continue   # the balance an account carried into the window
-        assets = sum(v for v, debt in latest.values() if not debt)
+        assets = sum(v for v, debt in latest.values() if not debt) + prop
         liabilities = sum(v for v, debt in latest.values() if debt)
-        point = {"date": r["d"], "net_worth": round(assets - liabilities, 2), "assets": round(assets, 2), "liabilities": round(liabilities, 2)}
+        point = {"date": r["d"], "net_worth": round(assets - liabilities, 2), "assets": round(assets, 2), "liabilities": round(liabilities, 2),
+                 "property": prop, "property_basis": "current value; property values keep no history"}
         if out and out[-1]["date"] == r["d"]:
             out[-1] = point
         else:
