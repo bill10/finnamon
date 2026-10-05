@@ -10,6 +10,7 @@ const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 const icon = (name, weight = 'regular') => `<svg class="ic" aria-hidden="true"><use href="#i-${weight}-${name}"/></svg>`;
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 const amount = (v) => Number(String(v ?? '').replace(/[$,\s]/g, ''));
+const limit = (v, what) => { const n = amount(v); if (!String(v ?? '').trim() || !(n > 0)) throw new Error(`${what} has to be a positive number of dollars, like 400 or $1,200.`); return n; };   // its own sentence: the name was fine
 
 // ---- theme ----------------------------------------------------------------------------------------------------------
 
@@ -61,7 +62,7 @@ async function loadSummary() {
 }
 
 function renderHeader(s) {
-  const n = (s.accounts || []).filter(a => !a.mirror_of).length, b = (s.status.items || []).length;
+  const n = (s.accounts || []).filter(a => !a.mirror_of).length, b = new Set((s.status.items || []).map(i => String(i.institution || i.item_id).toLowerCase())).size;   // a Plaid link and a manual account at one bank are one bank
   const banks = `${plural(b, 'bank')}, ${plural(n, 'account')}`;   // no bank, no count: a clickable zero opens an empty list
   $('banks-btn').hidden = !b; $('banks-btn').textContent = banks; $('banks-btn').setAttribute('aria-label', `${banks}: show the list`);
   $('status').textContent = (b ? ' · ' : '') + (s.status.last_run ? `synced ${when(s.status.last_run)}` : 'not synced yet');
@@ -135,7 +136,8 @@ function renderSettingsPop() {
     + `<p class="ver num"><span class="nm">Finnamon</span> ${ver ? esc(ver) : (setx || upd) ? '<span class="nm">version unknown</span>' : ''}</p>` + state
     + (demo ? '' : `<div class="acts"><button type="button" class="quiet" id="update-check"${busy || updChecking ? ' disabled' : ''}>Check for updates</button>`
         + (offer ? `<button type="button" class="primary" id="update-go">${updPhase === 'failed' ? 'Try again' : 'Update'}</button>` : '') + '</div>')
-    + settingsRows();
+    + settingsRows()
+    + '<p class="more foot">Settings are read-only here. Change an alert setting in a terminal on the Finnamon box: <code>finnamon settings</code> lists them, <code>finnamon settings set &lt;name&gt; &lt;value&gt;</code> changes one.</p>';
   if (html === pop.dataset.html) return;   // a poll that changed nothing leaves the dialog, and its focus, alone
   const f = pop.contains(document.activeElement) ? document.activeElement.id : null;
   pop.innerHTML = pop.dataset.html = html;
@@ -337,10 +339,11 @@ function renderBudgets(s) {
   const spent = s.overall?.spent ?? bs.reduce((a, b) => a + b.spent, 0), limit = s.overall?.limit ?? bs.reduce((a, b) => a + b.monthly_limit, 0);
   const pct = limit ? Math.min(100, Math.round(100 * spent / limit)) : 0, left = limit - spent;
   const now = new Date(), day = bs[0].day || now.getDate(), togo = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate() - day;
-  const note = left < 0 ? `${money(-left)} over with ${togo} days to go` : `${pct}% used, ${money(left)} left with ${togo} days to go`;
+  const over = bs.filter(b => b.spent > b.monthly_limit).length;   // the total can look healthy while one budget has run out
+  const note = (left < 0 ? `${money(-left)} over with ${togo} days to go` : `${pct}% used, ${money(left)} left with ${togo} days to go`) + (over ? ` · ${over} ${over === 1 ? 'budget' : 'budgets'} over` : '');
   const top = [...bs].sort((a, b) => (b.spent / b.monthly_limit) - (a.spent / a.monthly_limit)).slice(0, 4);
   body.innerHTML = `<div class="overall"><div class="row"><span>Overall</span><span class="amt num">${money(spent)} <small>/ ${money(limit)}</small></span></div>` +
-    `<div class="bar"><div class="fill ${left < 0 ? 'over' : pct > 80 ? 'warn' : ''}" style="width:${pct}%"></div></div><div class="note ${left < 0 ? 'over' : ''}">${note}</div></div>` +
+    `<div class="bar"><div class="fill ${left < 0 ? 'over' : pct > 80 || over ? 'warn' : ''}" style="width:${pct}%"></div></div><div class="note ${left < 0 || over ? 'over' : ''}">${note}</div></div>` +
     `<h3>${bs.length > 4 ? 'Top categories' : 'Categories'}</h3><div class="cats">` + top.map(b =>
       `<div class="cat"><span class="ic">${icon(catIcon(b))}</span><span class="name">${esc(b.name)}</span><span class="amt num">${money(b.spent)} / ${money(b.monthly_limit)}</span>` +
       `<div class="bar"><div class="fill ${barState(b)}" style="width:${pctOf(b)}%"></div></div>${covers(b) ? `<span class="covers" title="${esc(covers(b))}">${esc(covers(b))}</span>` : ''}</div>`).join('') + '</div>' +
@@ -375,7 +378,7 @@ function renderManage(s) {
   wireEditor(m, {
     remove: (n) => ({ ask: `Remove the ${n} budget?`, url: `/api/budget/${encodeURIComponent(n)}` }),
     changes: () => [...m.querySelectorAll('.erow[data-name]')].map(row => {
-      const b = summary.budgets.find(x => x.name === row.dataset.name), v = amount(row.querySelector('input').value), p = picks[b.name];
+      const b = summary.budgets.find(x => x.name === row.dataset.name), v = limit(row.querySelector('input').value, `The monthly limit for ${b.name}`), p = picks[b.name];
       const picked = p && !(sameList(p.categories, b.categories || []) && sameList(p.merchants, b.merchants || []));
       if (picked && !p.categories.length && !p.merchants.length) throw new Error(`The ${b.name} budget needs at least one category or merchant.`);
       return v !== b.monthly_limit || picked ? ['/api/budget', { name: b.name, amount: v, ...(picked ? { categories: p.categories, merchants: p.merchants } : {}) }] : null;
@@ -384,7 +387,7 @@ function renderManage(s) {
       const n = $('b-new-name').value.trim(), p = picks[NEW], picked = p && (p.categories.length || p.merchants.length);
       if (!n) { if (picked) throw new Error('Name the new budget first.'); return null; }
       if (summary.budgets.some(b => b.name === n.toLowerCase())) throw new Error(`There is already a ${n.toLowerCase()} budget: change it in its own row.`);   // budget set would replace it
-      return ['/api/budget', { name: $('b-new-name').value.trim(), amount: amount($('b-new-amt').value), ...(picked ? { categories: p.categories, merchants: p.merchants } : {}) }];
+      return ['/api/budget', { name: $('b-new-name').value.trim(), amount: limit($('b-new-amt').value, `The monthly limit for ${n}`), ...(picked ? { categories: p.categories, merchants: p.merchants } : {}) }];
     },
     err: 'b-err', cancel: 'b-cancel', save: 'b-save', rerender: () => redrawManage(), close: () => toggleManage(false),
   });
@@ -532,8 +535,9 @@ function renderImport(s) {
   $('i-cancel').addEventListener('click', () => toggleImport(false));
   $('a-add').addEventListener('click', async (e) => {
     const btn = e.currentTarget;   // held: currentTarget is null once the dispatch that raised it has finished, and this handler awaits
-    const n = $('a-name').value.trim(), inst = $('a-inst').value.trim() || n.split(/\s+/)[0];   // \s+, as the CLI's own split() fallback does
+    const n = $('a-name').value.trim(), inst = $('a-inst').value.trim();   // never guessed from the name: "Credit Union Checking" is not a bank called "Credit"
     if (!n) { $('a-err').textContent = 'The account needs a name.'; return; }
+    if (!inst) { $('a-err').textContent = 'Which bank is it at? Fill in Bank, e.g. HSBC.'; $('a-inst').focus(); return; }
     $('a-err').textContent = ''; btn.disabled = true;   // a second click while the first is in flight comes back as "already exists", which reads like a failure
     const r = await api('POST', '/api/account', { name: n, institution: inst, type: $('a-type').value, ...($('a-owner') ? { owner: $('a-owner').value } : {}) });
     if (!r.ok) { $('a-err').textContent = r.error; btn.disabled = false; return; }
@@ -790,7 +794,8 @@ async function api(method, url, body) {
 const KIND_ICONS = [[/sync|login/, 'plug', 'hot'], [/duplicate/, 'copy', ''], [/recurring/, 'arrows-clockwise', ''], [/balance/, 'drop', 'warn'],
   [/budget|pace/, 'target', 'warn'], [/merchant/, 'storefront', ''], [/large|unusual|spike|anomal/, 'warning-circle', 'hot']];
 const EMOJI_LEAD = /^\s*(?:[☀-➿]️?|[\uD83C-\uDBFF][\uDC00-\uDFFF]️?)+\s*/;
-const ALERTS_SHOWN = 8;
+const MAX_CHARTS = 8;   // finnamon.charts.MAX_CHARTS
+const ALERTS_SHOWN = 8, UNDO_DAYS = 7;   // Undo is for a slip, not for reopening last month's
 let alertsAll = false;   // Show N more: the whole open list until the page reloads
 const reconnectBtn = (item) => `<button class="link" type="button" data-reconnect="${esc(item)}">Reconnect</button>`;
 function renderAlerts(s) {
@@ -819,7 +824,7 @@ function renderAlerts(s) {
   $('alerts-resolved').hidden = !done.length;
   $('alerts-resolved-n').textContent = done.length;
   $('alerts-resolved-body').innerHTML = done.map(a => item(a, `<div class="when">${esc(how(a))} · ${esc(when(a.resolved_at))}</div></span>`) +
-    `<span>${a.resolution === 'normal' || a.resolution === 'dismissed' ? act(a, 'undo', 'Undo') : ''}</span></li>`).join('');   // the rest Finnamon resolved (a bank reconnected), or came before the page could undo
+    `<span>${(a.resolution === 'normal' || a.resolution === 'dismissed') && Date.now() - Date.parse(String(a.resolved_at).replace(' ', 'T')) < UNDO_DAYS * 864e5 ? act(a, 'undo', 'Undo') : ''}</span></li>`).join('');   // last month's is settled, so no Undo; the rest Finnamon resolved (a bank reconnected), or came before the page could undo
 }
 const ALERT_DONE = { normal: 'Marked normal: alerts like it stay quiet.', dismiss: 'Dismissed: the next one still alerts.', undo: 'Undone: the alert is open again.' };
 // Reconnect: Plaid's re-login page for one bank, in a new tab. The tab opens on the click itself (one opened after an await
@@ -861,6 +866,7 @@ let board = [];   // charts/current.json: the specs on the board, one panel each
 const chartId = (s) => s.usermeta?.finnamon?.id || s.usermeta?.finnamon?.chart || 'chart';   // a pre-list file's entry has no id (finnamon.charts.board)
 const EMPTY_BOARD = $('chart-panel').innerHTML;
 function chartOpts() {
+  const narrow = document.querySelector('main').clientWidth < 520;   // a phone: fewer ticks, and a label that would overlap its neighbour is dropped
   const muted = token('--muted'), grid = token('--line'), mint = token('--mint'), cinnamon = token('--cinnamon'), gold = token('--gold'), track = token('--track');
   // mode: never infer full Vega from $schema; the loader refuses every fetch and link: the spec is all there is (the CLI checks both too)
   const nothing = () => Promise.reject(new Error('charts load nothing from outside the spec'));
@@ -869,7 +875,7 @@ function chartOpts() {
   return { actions: false, renderer: 'svg', mode: 'vega-lite', ast: true, expr: vega.expressionInterpreter, loader: Object.assign(vega.loader(), { load: nothing, sanitize: nothing }),
     config: { background: 'transparent', font: 'Geist, -apple-system, system-ui, sans-serif',
     title: { anchor: 'start', fontSize: 13, fontWeight: 600, color: muted, offset: 12 },
-    axis: { labelColor: muted, titleColor: muted, gridColor: grid, domainColor: grid, tickColor: grid, tickCount: 6 }, view: { stroke: null },
+    axis: { labelColor: muted, titleColor: muted, gridColor: grid, domainColor: grid, tickColor: grid, tickCount: narrow ? 3 : 6, labelOverlap: true, labelFontSize: narrow ? 10 : 11, titlePadding: narrow ? 4 : 6 }, view: { stroke: null },
     // a legend never takes plot width (#97): a row above the plot; a spec's own legend.orient still wins over this config
     legend: { orient: 'top', direction: 'horizontal', labelColor: muted, titleColor: muted, labelLimit: 120 },
     // budgets: limit (track) then spent (mint); in/out: in (mint) then out (cinnamon); balances: one per account
@@ -935,7 +941,8 @@ async function drawChart() {
       : `<div class="vis"></div><figcaption class="asof">${asOf(s)}</figcaption>`) + '</figure>').join('');
   const cells = panel.querySelectorAll('.vis');
   // usermeta.embedOptions would win over chartOpts() (actions, sourceHeader, patch: script on this origin): the CLI drops it, and so does the page
-  const made = await Promise.all(board.map((s, i) => isTable(s) ? null : vegaEmbed(cells[i], { ...s, usermeta: { finnamon: s.usermeta?.finnamon } }, chartOpts()).then(r => r.view,
+  const noRows = (s) => Array.isArray(s.data?.values) && !s.data.values.length;   // axes with nothing on them read as broken
+  const made = await Promise.all(board.map((s, i) => isTable(s) ? null : noRows(s) ? (cells[i].innerHTML = '<div class="muted nodata">No data yet. This fills in once the accounts have the transactions for it.</div>', null) : vegaEmbed(cells[i], { ...s, usermeta: { finnamon: s.usermeta?.finnamon } }, chartOpts()).then(r => r.view,
     e => { cells[i].innerHTML = `<div class="muted">This chart did not draw: ${esc(e.message)}</div>`; return null; })));
   if (gen === drawn) views = made.filter(Boolean);
   else made.forEach(v => v?.finalize());   // a newer draw replaced these cells while they embedded
@@ -948,6 +955,7 @@ async function loadChart() {
   document.querySelectorAll('[data-chart]').forEach(b => {
     const on = board.some(s => s.usermeta?.finnamon?.chart === b.dataset.chart);
     b.classList.toggle('active', on); b.setAttribute('aria-pressed', on);
+    b.title = on ? 'On the board. Click to take it off.' : board.length >= MAX_CHARTS ? `The board holds ${MAX_CHARTS} charts at most; remove one first.` : 'Add to the board.';
   });
   drawChart();
 }

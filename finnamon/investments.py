@@ -84,20 +84,24 @@ def net_worth_history(conn: sqlite3.Connection, months: int = 12) -> list[dict]:
         "             WHERE b.as_of >= datetime('now', ?) GROUP BY b.account_id, date(b.as_of)), "
         "     seed AS (SELECT b.account_id, max(b.as_of) m FROM balances b JOIN acct USING (account_id) "
         "              WHERE b.as_of < datetime('now', ?) GROUP BY b.account_id) "
-        "SELECT b.account_id, a.type, date(b.as_of) d, b.current, b.as_of >= datetime('now', ?) shown "
+        "SELECT b.account_id, a.type, date(b.as_of) d, b.current, b.as_of >= datetime('now', ?) shown, "
+        "(SELECT date(min(as_of)) FROM balances WHERE account_id = b.account_id) first "
         "FROM balances b JOIN acct a USING (account_id) "
         "WHERE EXISTS (SELECT 1 FROM day WHERE day.account_id = b.account_id AND day.m = b.as_of) "
         "   OR EXISTS (SELECT 1 FROM seed WHERE seed.account_id = b.account_id AND seed.m = b.as_of) "
         "ORDER BY b.as_of", (since, since, since)).fetchall()
     latest: dict[str, tuple[float, bool]] = {}   # account -> (balance, is a liability)
+    first: dict[str, str] = {}
     out: list[dict] = []
     for r in rows:
         latest[r["account_id"]] = (r["current"] or 0, r["type"] in LIABILITY_TYPES)
+        first[r["account_id"]] = r["first"]
         if not r["shown"]:
             continue   # the balance an account carried into the window
         assets = sum(v for v, debt in latest.values() if not debt) + prop
         liabilities = sum(v for v, debt in latest.values() if debt)
-        point = {"date": r["d"], "net_worth": round(assets - liabilities, 2), "assets": round(assets, 2), "liabilities": round(liabilities, 2),
+        new = sum(-v if debt else v for k, (v, debt) in latest.items() if first[k] >= r["d"][:8] + "01")   # accounts first seen this month: the page leaves them out of "this month"
+        point = {"date": r["d"], "new_this_month": round(new, 2), "net_worth": round(assets - liabilities, 2), "assets": round(assets, 2), "liabilities": round(liabilities, 2),
                  "property": prop, "property_basis": "current value; property values keep no history"}
         if out and out[-1]["date"] == r["d"]:
             out[-1] = point

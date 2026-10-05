@@ -13,16 +13,30 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from . import budgets, config, query, store
+from . import budgets, config, query, store, taxonomy
 
 CHARTS = ("budgets", "spend_by_category", "balance_history", "merchant_history", "monthly_in_out")
 # Both read tx_now's `flow` (migrations/008_tx_flow.sql): transfers between the household's own accounts and payments
 # onto linked cards are neither in nor out, refunds net against spending, and the mortgage is out but its own series.
-SPEND_BY_CATEGORY = ("SELECT COALESCE(category_primary,'?') c, round(sum(amount)) s FROM tx_now "
+SPEND_BY_CATEGORY = ("SELECT category_primary c, round(sum(amount)) s FROM tx_now "
                      "WHERE flow IN ('expense','refund') AND pending=0 AND date>=date('now', ?) GROUP BY c HAVING s>0 ORDER BY s DESC LIMIT 12")
 IN_OUT = ("SELECT strftime('%Y-%m',date) ym, round(sum(CASE WHEN flow='income' THEN -amount END)) i, "
           "round(sum(CASE WHEN flow IN ('expense','refund') THEN amount END)) o, round(sum(CASE WHEN flow='mortgage' THEN amount END)) m "
           "FROM tx_now WHERE pending=0 AND date>=date('now', ?) GROUP BY ym ORDER BY ym")
+
+
+def _cat(code) -> str:
+    """A category as people read it: Plaid's FOOD_AND_DRINK is "Food and drink", none is "Uncategorized"."""
+    return taxonomy.label(code) if code else "Uncategorized"
+
+
+# balances: a loan (the mortgage) is hundreds of thousands, and flattens checking against it on one axis; arg "all" brings loans back
+NOT_LOAN = "AND a.type <> 'loan' "
+
+
+def _balance_rows(conn: sqlite3.Connection, months: int, arg: str | None) -> list:
+    return conn.execute("SELECT a.name||COALESCE(' …'||a.mask, '') n, b.as_of, b.current FROM balances b JOIN accounts a ON a.account_id=b.account_id "
+                        f"WHERE a.mirror_of IS NULL {'' if arg == 'all' else NOT_LOAN}AND b.as_of>=datetime('now', ?) ORDER BY n, b.as_of", (f"-{months} months",)).fetchall()
 
 
 def _out(name: str) -> Path:
@@ -43,9 +57,12 @@ def _plt():
 
 def render(conn: sqlite3.Connection, name: str, arg: str | None = None, months: int = 12) -> Path:
     plt = _plt()
+    from matplotlib.ticker import StrMethodFormatter
+    dollars = StrMethodFormatter("${x:,.0f}")
     fig, ax = plt.subplots(figsize=(8, 4.5), dpi=150)
     if name == "budgets":
         rows = budgets.budget_list(conn)
+        ax.xaxis.set_major_formatter(dollars)
         names = [r["name"] for r in rows]
         ax.barh(names, [r["monthly_limit"] for r in rows], color="#e6e6e6", label="limit")
         ax.barh(names, [r["spent"] for r in rows], color="#4a7ebb", label="spent")
@@ -56,24 +73,25 @@ def render(conn: sqlite3.Connection, name: str, arg: str | None = None, months: 
         ax.invert_yaxis(); ax.legend()
     elif name == "spend_by_category":
         rows = conn.execute(SPEND_BY_CATEGORY, (f"-{months} months",)).fetchall()
-        ax.barh([r[0] for r in rows], [r[1] for r in rows], color="#4a7ebb"); ax.invert_yaxis()
+        ax.barh([_cat(r[0]) for r in rows], [r[1] for r in rows], color="#4a7ebb"); ax.invert_yaxis(); ax.xaxis.set_major_formatter(dollars)
         ax.set_title(f"Spend by category, last {months} months")
     elif name == "balance_history":
-        rows = conn.execute("SELECT a.name||COALESCE(' …'||a.mask, '') n, b.as_of, b.current FROM balances b JOIN accounts a ON a.account_id=b.account_id "
-                            "WHERE a.mirror_of IS NULL AND b.as_of>=datetime('now', ?) ORDER BY n, b.as_of", (f"-{months} months",)).fetchall()
+        rows = _balance_rows(conn, months, arg)
         series: dict[str, list] = {}
         for n, t, v in rows:
             series.setdefault(n, []).append((datetime.fromisoformat(t), v))
         for n, pts in series.items():
             ax.plot([p[0] for p in pts], [p[1] for p in pts], label=n)
-        ax.set_title("Balances"); ax.legend(fontsize=7)
+        ax.set_title("Balances" + ("" if arg == "all" else " (loans left out)")); ax.yaxis.set_major_formatter(dollars)
+        if series:
+            ax.legend(fontsize=7)
     elif name == "merchant_history":
         if not arg:
             raise ValueError("merchant_history needs a merchant name")
         rows = conn.execute("SELECT date, amount FROM tx_now WHERE lower(COALESCE(display,'')||' '||COALESCE(merchant_name,'')||' '||COALESCE(name,'')) LIKE ? AND pending=0 ORDER BY date",
                             (f"%{arg.lower()}%",)).fetchall()
         ax.bar([datetime.fromisoformat(r[0]) for r in rows], [r[1] for r in rows], width=3, color="#4a7ebb")
-        ax.set_title(f"{arg}: every charge")
+        ax.set_title(f"{arg}: every charge"); ax.yaxis.set_major_formatter(dollars)
     elif name == "monthly_in_out":
         rows = conn.execute(IN_OUT, (f"-{months} months",)).fetchall()
         x = range(len(rows))
@@ -81,9 +99,12 @@ def render(conn: sqlite3.Connection, name: str, arg: str | None = None, months: 
         ax.bar([i + 0.2 for i in x], [r[2] or 0 for r in rows], width=0.4, label="spending", color="#d9534f")
         ax.bar([i + 0.2 for i in x], [r[3] or 0 for r in rows], width=0.4, bottom=[r[2] or 0 for r in rows], label="mortgage", color="#f0ad4e")
         ax.set_xticks(list(x)); ax.set_xticklabels([r[0] for r in rows], rotation=45, fontsize=7); ax.legend()
-        ax.set_title("Monthly in vs out")
+        ax.set_title("Monthly in vs out"); ax.yaxis.set_major_formatter(dollars)
     else:
         raise ValueError(f"{name} is a table, on the dashboard only: finnamon chart --spec {name}" if name in TABLES else f"unknown chart {name}; one of {', '.join(CHARTS)}")
+    if not ax.has_data():   # empty axes read as a broken chart
+        ax.set_axis_off()
+        ax.text(0.5, 0.5, "No data yet", ha="center", va="center", transform=ax.transAxes, fontsize=16, color="#888")
     fig.tight_layout()
     out = _out(name)
     fig.savefig(out)
@@ -98,7 +119,7 @@ def render(conn: sqlite3.Connection, name: str, arg: str | None = None, months: 
 # Colours are the page's (its Vega config), not fixed here.
 
 CURRENT_SPEC = "current.json"
-MAX_CHARTS = 8              # the board keeps the newest; the oldest falls off the front
+MAX_CHARTS = 8              # a ninth is refused, not dropped: put() says to remove one
 MAX_BYTES = 256_000         # one serialised entry; the page fetches and holds every one
 MAX_ROWS = 5000             # a data.sql result
 VEGA_LITE = "https://vega.github.io/schema/vega-lite/v5.json"
@@ -156,14 +177,13 @@ def spec(conn: sqlite3.Connection, name: str, arg: str | None = None, months: in
                                             "tooltip": [{"field": "budget"}, {"field": "kind"}, {"field": "amount", "format": "$,.0f"}]}}
     if name == "spend_by_category":
         rows = conn.execute(SPEND_BY_CATEGORY, (f"-{months} months",)).fetchall()
-        return {**base, "title": f"Spend by category, last {months} months", "data": {"values": [{"category": r[0].replace("_", " ").title(), "amount": r[1]} for r in rows]},
+        return {**base, "title": f"Spend by category, last {months} months", "data": {"values": [{"category": _cat(r[0]), "amount": r[1]} for r in rows]},
                 "mark": "bar", "encoding": {"y": {"field": "category", "type": "nominal", "sort": "-x", "title": None},
                                             "x": {"field": "amount", "type": "quantitative", "title": "$"},
                                             "tooltip": [{"field": "category"}, {"field": "amount", "format": "$,.0f"}]}}
     if name == "balance_history":
-        rows = conn.execute("SELECT a.name||COALESCE(' …'||a.mask, '') n, b.as_of, b.current FROM balances b JOIN accounts a ON a.account_id=b.account_id "
-                            "WHERE a.mirror_of IS NULL AND b.as_of>=datetime('now', ?) ORDER BY n, b.as_of", (f"-{months} months",)).fetchall()
-        return {**base, "title": f"Balances, last {months} months", "data": {"values": [{"account": r[0], "as_of": r[1], "balance": r[2]} for r in rows]},
+        rows = _balance_rows(conn, months, arg)
+        return {**base, "title": f"Balances, last {months} months" + ("" if arg == "all" else ", loans left out"), "data": {"values": [{"account": r[0], "as_of": r[1], "balance": r[2]} for r in rows]},
                 "mark": {"type": "line", "point": True}, "encoding": {"x": {"field": "as_of", "type": "temporal", "title": None},
                                                                       "y": {"field": "balance", "type": "quantitative", "title": "$"},
                                                                       "color": {"field": "account", "title": None, "legend": {"columns": 2}},   # account names are long: two columns wrap under the plot on a phone
@@ -477,6 +497,8 @@ def put(sp: dict) -> Path:
     with _board() as entries:
         i = next((i for i, e in enumerate(entries) if e["usermeta"]["finnamon"]["id"] == id), None)
         if i is None:
+            if len(entries) >= MAX_CHARTS:   # the oldest used to fall off the front without a word
+                raise ValueError(f"the board holds {MAX_CHARTS} charts at most; remove one (its × on the dashboard, or finnamon chart --remove <id>; --list names them)")
             entries.append(sp)
         else:
             entries[i] = sp

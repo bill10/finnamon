@@ -22,6 +22,10 @@ test('a Telegram mode flipped after start-up asks for a restart', () => {
   assert.deepEqual(health({ items: [], inbound: 'channel' }), { level: 'ok', label: 'All good' });   // no expectation given: no complaint
 });
 
+test('delta leaves out an account added this month', () => {
+  assert.deepEqual(delta([{ date: '2026-08-31', net_worth: 1000 }, { date: '2026-09-05', net_worth: 6010, new_this_month: 5000 }]), { amount: 10, pct: 1 });
+});
+
 test('delta is this month against the end of last month, null in the first month', () => {
   assert.equal(delta([]), null);
   assert.equal(delta([{ date: '2026-09-03', net_worth: 100 }, { date: '2026-09-20', net_worth: 120 }]), null);   // no earlier month yet

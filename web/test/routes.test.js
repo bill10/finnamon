@@ -33,6 +33,9 @@ test('bad input is refused before the CLI runs', async () => {
   await withApp(async ({ base, post, calls }) => {
     for (const body of [{ name: 'x', amount: 0 }, { name: '', amount: 5 }, { name: 'x', amount: 'abc' }, { amount: 5 }, { name: 'x'.repeat(81), amount: 5 }])
       assert.equal((await post('/api/budget', body)).status, 400, JSON.stringify(body));
+    const bad = await post('/api/budget', { name: 'dining', amount: 'abc' });   // a bad amount says so, and does not blame the name
+    assert.match((await bad.json()).error, /monthly limit/);
+    assert.match((await (await post('/api/budget', { name: '', amount: 5 })).json()).error, /name/);
     assert.equal((await post('/api/property', { value: 5 })).status, 400);
     assert.equal((await post('/api/property', { name: 'x'.repeat(81), value: 5 })).status, 400, 'over-long names are refused, not cut');
     assert.equal((await fetch(`${base}/api/property/${encodeURIComponent('x'.repeat(81))}`, { method: 'DELETE' })).status, 400);
@@ -48,6 +51,8 @@ test('names reach the CLI after a -- so they can never be options; a merchant se
   await withApp(async ({ base, post, calls }) => {
     assert.equal((await post('/api/budget', { name: '--help', amount: 300 })).status, 200);
     assert.deepEqual(calls.at(-1), ['budget', 'set', '--', '--help', '300']);
+    assert.equal((await post('/api/budget', { name: 'travel', amount: '$1,200' })).status, 200);   // typed the way people type it
+    assert.deepEqual(calls.at(-1), ['budget', 'set', '--', 'travel', '1200']);
     assert.equal((await post('/api/property', { name: ' Cabin,  Lake Tahoe ', value: '$44,000' })).status, 200);
     assert.deepEqual(calls.at(-1), ['property', 'set', '--', 'Cabin,  Lake Tahoe', '$44,000']);
     assert.equal((await fetch(`${base}/api/property/${encodeURIComponent('--version')}`, { method: 'DELETE' })).status, 200);
@@ -750,8 +755,10 @@ test('resolved alerts render apart, greyed, saying how; only an undoable one get
   const els = {};
   const $ = (id) => (els[id] ||= { style: {}, innerHTML: '' });
   const renderAlerts = new Function('$', 'esc', 'icon', 'when', `${src}; return renderAlerts;`)($, String, () => '', String);
+  const recent = new Date(Date.now() - 3600e3).toISOString().slice(0, 19).replace('T', ' ');   // Undo is for the last 7 days
   renderAlerts({ status: { items: [{}] }, alerts: [{ id: 7, kind: 'duplicate_charge', text: 'dup', sent_at: 't' }], resolved: [
-    { id: 5, text: 'a', resolved_at: 'r', resolution: 'normal', suppression_id: 9 }, { id: 4, text: 'b', resolved_at: 'r', resolution: 'dismissed' },
+    { id: 5, text: 'a', resolved_at: recent, resolution: 'normal', suppression_id: 9 }, { id: 4, text: 'b', resolved_at: recent, resolution: 'dismissed' },
+    { id: 6, text: 'old', resolved_at: '2020-01-01 09:00:00', resolution: 'dismissed' },
     { id: 3, text: 'c', resolved_at: 'r', resolution: null }, { id: 2, text: 'd', resolved_at: 'r', resolution: 'recovered' },
     { id: 1, text: 'e', resolved_at: 'r', resolution: 'unlinked' }] });
   const open = els['alerts-body'].innerHTML, done = els['alerts-resolved-body'].innerHTML;
@@ -760,7 +767,7 @@ test('resolved alerts render apart, greyed, saying how; only an undoable one get
   assert.ok(open.includes('data-alert="7" data-act="normal"') && open.includes('data-alert="7" data-act="dismiss"'));
   assert.ok(!/onclick/i.test(open + done), 'no inline handlers: the CSP would refuse them');
   assert.ok(done.includes('It’s normal (rule 9)') && done.includes('Dismissed') && done.includes('Resolved · r'));
-  assert.deepEqual([...done.matchAll(/data-alert="(\d+)" data-act="undo"/g)].map(m => m[1]), ['5', '4'], 'one Finnamon resolved itself has nothing to undo');
+  assert.deepEqual([...done.matchAll(/data-alert="(\d+)" data-act="undo"/g)].map(m => m[1]), ['5', '4'], 'one Finnamon resolved itself has nothing to undo, and last year\'s dismissal is settled');
   assert.equal(els['alerts-resolved'].hidden, false);
   renderAlerts({ status: { items: [{}] }, alerts: [], resolved: [] });
   assert.equal(els['alerts-resolved'].hidden, true);

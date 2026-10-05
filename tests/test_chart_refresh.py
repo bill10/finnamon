@@ -54,7 +54,7 @@ def test_load_time_refresh_returns_fresh_values_and_rewrites_only_when_one_moved
     txn(conn, "t2", "chk", today(), 9, "SOMETHING NEW", primary="GENERAL_MERCHANDISE", detailed="GENERAL_MERCHANDISE_OTHER_GENERAL_MERCHANDISE")
     cli.main(["chart", "--refresh"])
     shown = json.loads(capsys.readouterr().out)
-    assert {"category": "General Merchandise", "amount": 9.0} in shown[0]["data"]["values"]
+    assert {"category": "General merchandise", "amount": 9.0} in shown[0]["data"]["values"]
     assert p.read_text() == text, "the page's load never writes: its watch would re-fetch, and a query on 'now' differs every run"
     charts.refresh(conn)
     assert json.loads(p.read_text())[0]["data"]["values"] == shown[0]["data"]["values"], "a write's refresh does"
@@ -93,7 +93,7 @@ def test_a_garbled_source_does_not_stop_the_rest(home, conn, monkeypatch, capsys
     board[0]["data"]["values"] = []
     p.write_text(json.dumps(board))
     charts.refresh(conn)
-    assert _values("spend_by_category") == [{"category": "Food And Drink", "amount": 50.0}]
+    assert _values("spend_by_category") == [{"category": "Food and drink", "amount": 50.0}]
 
 
 def test_stored_sql_still_runs_read_only(home, conn, monkeypatch, capsys):

@@ -431,6 +431,11 @@ body.editing #intercom-btn { display: none; }   /* Manage budgets, Property: Sav
 @keyframes toast-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { #intercom-btn .dot, #talk-call .live { animation: none; } .toast, .toast.busy > .ic svg.ic { animation: none; } #intercom { transition: none; } button { transition: none; } }
 
+@media (max-width: 700px) {   /* a phone: table cells wrap instead of running off the panel, so no column is cut */
+  #chart-panel .tbl { font-size: 12px; }
+  #chart-panel .tbl th, #chart-panel .tbl td { white-space: normal; max-width: none; padding: 6px 5px; overflow-wrap: anywhere; }
+  #chart-panel .tbl td.r, #chart-panel .tbl th.r { white-space: nowrap; }
+}
 @media (max-width: 700px) {
   .toast-row { padding: 0 16px; } .toast { padding-right: 4px; }
   .chead .pills button { min-height: 36px; padding: 8px 12px; }

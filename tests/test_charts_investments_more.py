@@ -16,7 +16,7 @@ def test_spend_by_category_buckets_null_category_instead_of_dropping_it(conn):
     seed(conn)
     txn(conn, "u", "chk", today(), 42, "MYSTERY BIZ", None, None, None, None)
     by_cat = {v["category"]: v["amount"] for v in charts.spec(conn, "spend_by_category")["data"]["values"]}
-    assert by_cat == {"?": 42}
+    assert by_cat == {"Uncategorized": 42}
     out = charts.render(conn, "spend_by_category")
     assert out.exists() and out.stat().st_size > 1000   # PNG side runs the identical query without raising
 
@@ -156,3 +156,25 @@ def test_colour_legends_never_take_plot_width(home, conn):   # #97
         legend = charts.spec(conn, name)["encoding"]["color"].get("legend", {})
         assert "orient" not in legend, f"{name} leaves orient to the theme default (a spec that sets its own still wins)"
     assert charts.spec(conn, "monthly_in_out")["encoding"]["color"]["legend"]["values"] == ["income", "spending", "mortgage"], "#92 order kept"
+
+
+def test_balance_chart_leaves_loans_out_unless_asked_and_empty_charts_say_so(conn):
+    seed(conn)
+    conn.execute("INSERT INTO accounts (account_id, item_id, name, type, subtype, mask, owner) VALUES ('mtg','item1','Mortgage','loan','mortgage','1','bill')")
+    for a, v in (("chk", 900), ("mtg", 400000)):
+        conn.execute("INSERT INTO balances (account_id, as_of, current) VALUES (?, datetime('now','-1 day'), ?)", (a, v))
+    names = lambda arg=None: {v["account"] for v in charts.spec(conn, "balance_history", arg)["data"]["values"]}
+    assert names() == {"Chase Checking …4821"} and len(names("all")) == 2
+    assert "loans left out" in charts.spec(conn, "balance_history")["title"]
+    conn.execute("DELETE FROM balances")
+    assert charts.render(conn, "balance_history").stat().st_size > 1000   # "No data yet" text, not bare axes
+    assert charts.spec(conn, "balance_history")["data"]["values"] == []
+
+
+def test_net_worth_history_points_carry_what_an_account_added_this_month_contributes(conn):
+    seed(conn)
+    conn.execute("INSERT INTO balances (account_id, as_of, current) VALUES ('chk', '2026-08-31 10:00:00', 1000)")
+    conn.execute("INSERT INTO accounts (account_id, item_id, name, type, subtype, mask, owner) VALUES ('new','item1','HSBC','depository','checking','9','bill')")
+    conn.execute("INSERT INTO balances (account_id, as_of, current) VALUES ('new', '2026-09-05 10:00:00', 5000)")
+    hist = investments.net_worth_history(conn, months=240)
+    assert [(h["date"], h["net_worth"], h["new_this_month"]) for h in hist] == [("2026-08-31", 1000, 1000), ("2026-09-05", 6000, 5000)]

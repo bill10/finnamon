@@ -81,7 +81,7 @@ def test_tx_now_view_matches_prelude_and_every_read_path(conn):
                                                               "top_merchants": [{"merchant": "Sunset Apartments", "total": 1800.0}]}]   # same relation and same months as the totals, so they add up
     assert "LOAN_PAYMENTS_MORTGAGE_PAYMENT" in {c["category"] for c in sug}   # a mortgage is budgetable, so suggest shows it
     by_cat = {v["category"]: v["amount"] for v in charts.spec(conn, "spend_by_category")["data"]["values"]}
-    assert by_cat == {"Rent And Utilities": 3600}                        # moved out of rent and, being a loan payment, out of the chart
+    assert by_cat == {"Rent and utilities": 3600}                        # moved out of rent and, being a loan payment, out of the chart
     assert [v["merchant"] for v in charts.spec(conn, "merchant_history", "1st Security bank MORTGAGE")["data"]["values"]] == ["1st Security Bank mortgage"] * 2
 
 def test_flow_classifies_own_account_transfers_mortgage_and_card_payments(conn):
@@ -139,7 +139,7 @@ def test_flow_classifies_own_account_transfers_mortgage_and_card_payments(conn):
     assert flows()["mchk"] == "transfer" and flows()["mpay"] == "transfer"
     assert in_out() == {"income": 3900, "spending": 655, "mortgage": 2500}
     by_cat = {v["category"]: v["amount"] for v in charts.spec(conn, "spend_by_category")["data"]["values"]}
-    assert by_cat == {"Loan Payments": 450, "Transfer Out": 200, "Food And Drink": 30}             # refunds netted (a category netted below zero drops out); no transfer, card payment or mortgage
+    assert by_cat == {"Loan payments": 450, "Transfer out": 200, "Food and drink": 30}             # refunds netted (a category netted below zero drops out); no transfer, card payment or mortgage
     budgets.budget_set(conn, "groceries", 500, "FOOD_AND_DRINK_GROCERIES")
     assert budgets.budget_list(conn)[0]["spent"] == 30.0
 
