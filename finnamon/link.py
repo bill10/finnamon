@@ -3,7 +3,9 @@ for the public_token (available for 6h after completion, no redirect or webhook 
 write the token to secrets.toml, register the Item, first sync, one-time summary.
 Two shapes: the blocking `finnamon link` waits in the terminal; `start_pending` (what the assistant runs)
 records the session in state.pending_link and returns, and `check_pending` (the daemon's tick, or
-`finnamon link --finish`) completes it. `remove` undoes a link under the run lock: /item/remove, the
+`finnamon link --finish`) completes it. A re-login (`start_update`, from the chat or the dashboard's Reconnect) is
+remembered in state.update_sessions, and `check_updates` (the daemon's tick) syncs the bank as soon as Plaid says the
+login worked. `remove` undoes a link under the run lock: /item/remove, the
 Item's rows dropped, its token forgotten.
 
 Joint-account detection (Step 5) runs on every link: a new account that matches an existing one
@@ -130,24 +132,119 @@ def _update_rate_limit(conn: sqlite3.Connection, item_id: str, now: float) -> li
     return sent
 
 
-def start_update(conn: sqlite3.Connection, item_id: str, now: float | None = None) -> dict:
-    """Non-blocking re-login (the assistant may run this, always to the chat): an update-mode Hosted Link for an Item we
-    already have, under the Item's own owner, and the message names whose login it is (two logins at one bank are
-    common in a joint household). Nothing to exchange afterwards (same Item, same token), so nothing is recorded: the
-    next sync succeeds and sets the Item back to good."""
+UPDATE_SESSION_TTL_S = 3600   # how long the tick polls a re-login: the token lives 30 min, and a login begun at minute 29 may still finish
+UPDATE_REUSE_S = 20 * 60      # the dashboard's Reconnect hands back a session this young (with 10 min left of its 30) rather than open another
+
+
+UPDATE_SESSION_KEYS = {"item_id", "link_token", "url", "started_at", "expires_at"}
+
+
+def _update_sessions(conn: sqlite3.Connection) -> list[dict]:
+    """state.update_sessions: [{item_id, link_token, url, started_at, expires_at}, ...], epochs. Only we write it; a
+    corrupt value reads as empty rather than wedging every re-login."""
+    try:
+        return [x for x in json.loads(store.get_state(conn, "update_sessions") or "[]") if UPDATE_SESSION_KEYS <= x.keys()]
+    except (ValueError, TypeError, AttributeError):
+        return []
+
+
+def _set_update_sessions(conn: sqlite3.Connection, keep) -> None:
+    """Re-read, then filter: a session the page opened while the tick was polling is not lost.
+    ponytail: read-then-write without a lock; the window is one statement wide."""
+    kept = [x for x in _update_sessions(conn) if keep(x)]
+    store.set_state(conn, "update_sessions", json.dumps(kept) if kept else None)
+
+
+def start_update(conn: sqlite3.Connection, item_id: str, now: float | None = None, to_chat: bool = True) -> dict:
+    """Non-blocking re-login: an update-mode Hosted Link for an Item we already have, under the Item's own owner.
+    to_chat (the assistant's `fix X`, always to the chat): rate limited, and the message names whose login it is (two
+    logins at one bank are common in a joint household). Not to_chat (the dashboard's Reconnect, a person's click): no
+    15-min budget, but a double click reuses the session still open rather than starting another. Either way the session
+    is remembered, and the daemon's tick syncs the bank once the login is done (check_updates)."""
     row = conn.execute("SELECT institution, owner FROM items WHERE item_id=? AND source='plaid'", (item_id,)).fetchone()
     if not row:
         raise ValueError(f"no linked bank {item_id}; `finnamon status` lists them")
-    if not store.get_state(conn, "chat_id"):   # before start(): no Link session opened only to be dropped
-        raise ValueError("no household chat to send the link to")
     now = time.time() if now is None else now
-    sent = _update_rate_limit(conn, item_id, now)
-    s = start(row[1], item_id)
     inst = row[0] or item_id
+    if to_chat:
+        if not store.get_state(conn, "chat_id"):   # before start(): no Link session opened only to be dropped
+            raise ValueError("no household chat to send the link to")
+        sent = _update_rate_limit(conn, item_id, now)
+    else:
+        fresh = [x for x in _update_sessions(conn) if x["item_id"] == item_id and x.get("url") and 0 <= now - float(x["started_at"]) < UPDATE_REUSE_S]
+        if fresh:
+            return {"item_id": item_id, "institution": inst, "owner": row[1], "url": fresh[-1]["url"], "reused": True}
+    s = start(row[1], item_id)
+    sessions = _update_sessions(conn) + [{"item_id": item_id, "link_token": s["link_token"], "url": s["url"],
+                                          "started_at": now, "expires_at": now + UPDATE_SESSION_TTL_S}]
+    store.set_state(conn, "update_sessions", json.dumps(sessions))
+    if not to_chat:
+        return {"item_id": item_id, "institution": inst, "owner": row[1], "url": s["url"], "reused": False}
     send_url(conn, s["url"], f"Log back into {inst} ({row[1]}'s login)", UPDATE_LINK_VALID)
     store.set_state(conn, "update_links", json.dumps(sent + [[item_id, now]]))   # only a link that reached the chat counts
     return {"item_id": item_id, "institution": inst, "owner": row[1], "sent": True, "valid_for": UPDATE_LINK_VALID,
-            "next": "once they log in at the link, the next sync picks the bank back up"}
+            "next": "once they log in at the link, Finnamon syncs the bank within a minute and says so in the chat"}
+
+
+def check_updates(conn: sqlite3.Connection, now: float | None = None) -> list[dict]:
+    """The daemon's tick: each open re-login session, polled. Once its Link session is over, that one bank syncs at
+    once; a sync that works is the login that worked (Plaid's update-mode results are thin, so success is not read from
+    them), and then the Item is good, its health alerts are resolved 'reconnected' and the chat hears "<bank> is
+    reconnected". A session that expired, that Plaid forgot, or that ended with the bank still refusing is dropped
+    quietly: the next sync, or another Reconnect, covers it. Under the run lock; when it is held, the next tick retries."""
+    sessions = _update_sessions(conn)
+    if not sessions:
+        return []
+    now = time.time() if now is None else now
+    try:
+        held = run.lock()
+    except run.Locked:
+        return []
+    gone, fixed, out = set(), set(), []
+    try:
+        for x in sessions:
+            if x["item_id"] in fixed or now >= float(x["expires_at"]):
+                gone.add(x["link_token"])
+                continue
+            try:
+                over = poll_public_token(x["link_token"]) is not None
+            except plaid_api.PlaidError as e:
+                if e.code != "INVALID_LINK_TOKEN":
+                    log.warning("re-login %s: %s", x["item_id"], e)
+                    continue   # retried next tick
+                over = True
+            if not over:
+                continue
+            gone.add(x["link_token"])
+            row = conn.execute("SELECT institution FROM items WHERE item_id=?", (x["item_id"],)).fetchone()
+            if not row:
+                continue   # unlinked meanwhile
+            r = {"item_id": x["item_id"], "institution": row[0] or x["item_id"], "sync": reconnect(conn, x["item_id"])}
+            out.append(r)
+            if r["sync"]["error"]:
+                log.info("re-login session for %s ended; the bank still says %s", x["item_id"], r["sync"]["error"])
+                continue
+            fixed.add(x["item_id"])   # a second session for the same bank needs no second sync
+            try:
+                if chat := store.get_state(conn, "chat_id"):
+                    telegram.send_message(chat, f"{telegram.esc(r['institution'])} is reconnected.")
+            except telegram.TelegramError as e:   # the bank is back either way
+                log.warning("reconnected %s but the chat message failed: %s", x["item_id"], e)
+    finally:
+        _set_update_sessions(conn, lambda x: x["link_token"] not in gone and x["item_id"] not in fixed)
+        held.close()
+    return out
+
+
+def reconnect(conn: sqlite3.Connection, item_id: str) -> dict:
+    """Sync one Item after a re-login; when that works, it is good again and its open health alerts are resolved."""
+    result = sync.sync_item(conn, item_id)
+    if not result["error"]:
+        conn.execute("UPDATE items SET status='good', last_error=NULL WHERE item_id=?", (item_id,))
+        prefix = f"health:{item_id}:"   # not LIKE: an _ in the id would match another bank's
+        conn.execute("UPDATE alerts SET resolved_at=?, resolution='reconnected' WHERE resolved_at IS NULL AND substr(key, 1, ?) = ?",
+                     (store.now_local(), len(prefix), prefix))
+    return result
 
 
 def start_pending(conn: sqlite3.Connection, owner: str, to_telegram: bool = False, limited: bool = False, now: float | None = None) -> dict:
@@ -256,7 +353,7 @@ def complete(conn: sqlite3.Connection, owner: str, public_token: str, update_ite
     if update_item:
         # Update mode: same Item, same token; just clear the error and resync.
         conn.execute("UPDATE items SET status='good', last_error=NULL WHERE item_id=?", (update_item,))
-        return {"item_id": update_item, "updated": True, "sync": sync.sync_item(conn, update_item)}
+        return {"item_id": update_item, "updated": True, "sync": reconnect(conn, update_item)}
     if resume:
         item_id, access_token = resume   # exchanged on an earlier attempt; a public_token is single-use
     else:

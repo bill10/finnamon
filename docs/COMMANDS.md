@@ -20,7 +20,8 @@ undoes it; it wins over the rule); the assistant asks which you mean when it can
 It can start adding a bank ("add my Chase account" → `finnamon link --start` gives you the Plaid link; you
 log in, the daemon finishes), and send a broken bank's re-login link to the chat (reply "fix Chase" to a re-login or
 expiring-connection alert → `finnamon link --update <item_id> --telegram`; when two logins share a bank the alert says
-"fix <item id>" and names whose login it is). Links it sends to the chat are rate-limited: one per bank per 15 minutes,
+"fix <item id>" and names whose login it is; on the dashboard the alert has a Reconnect button that opens the login
+page directly). Within a minute of the login the daemon syncs that bank and says "<bank> is reconnected". Links it sends to the chat are rate-limited: one per bank per 15 minutes,
 6 a day counting added banks; a person at the terminal is not limited. It cannot unlink, sync, or add people; those are yours:
 
 | You want | Run |

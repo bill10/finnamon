@@ -69,17 +69,29 @@ def _fix(p: dict) -> tuple[str, str]:
     return bank, f"fix {bank}"
 
 
-def render(alert: sqlite3.Row) -> str:
+RELOGIN = ("ITEM_LOGIN_REQUIRED", "PENDING_EXPIRATION", "PENDING_DISCONNECT")   # what an update-mode login fixes
+
+
+def relogin_item(alert: sqlite3.Row) -> str | None:
+    """The Item a re-login fixes, when that is what the alert asks for: the dashboard shows Reconnect for it."""
+    p = json.loads(alert["payload_json"])
+    if alert["kind"] == "consent_expiring" or (alert["kind"] == "sync_health" and p.get("status") in RELOGIN):
+        return p.get("item_id")
+    return None
+
+
+def render(alert: sqlite3.Row, page: bool = False) -> str:
     """Telegram HTML for an alert. The web dashboard puts this straight into the page too, so every bank string
-    goes through esc(): this is an XSS boundary, not just Telegram formatting."""
+    goes through esc(): this is an XSS boundary, not just Telegram formatting. page: the dashboard's words where it
+    shows a Reconnect button instead of "reply fix X"."""
     p = json.loads(alert["payload_json"])
     k = alert["kind"]
     acct = f"{esc(p.get('account'))} …{esc(p.get('mask'))}" if p.get("mask") else esc(p.get("account"))
     if k == "sync_health":
         if p.get("status") == "ITEM_LOGIN_REQUIRED":
             bank, fix = _fix(p)
-            return (f"🔌 <b>{bank} needs a re-login.</b> Reply <i>{fix}</i> and I'll send the login link here. "
-                    f"Until then its accounts aren't updating.")
+            return (f"🔌 <b>{bank} needs a re-login.</b> " + ("" if page else f"Reply <i>{fix}</i> and I'll send the login link here. ")
+                    + "Until then its accounts aren't updating.")
         if p.get("status") not in (None, "good"):
             return f"🔌 <b>{esc(p.get('institution') or p.get('item_id'))} sync error:</b> {esc(p.get('status'))}. {esc(p.get('last_error') or '')}"
         if p.get("source") == "manual":
@@ -88,6 +100,8 @@ def render(alert: sqlite3.Row) -> str:
         return f"🩺 <b>{esc(p.get('institution') or p.get('item_id'))} hasn't synced since {esc(p.get('last_synced_at') or 'link')}.</b>"
     if k == "consent_expiring":   # raised by sync.sync_accounts, once per expiry date
         bank, fix = _fix(p)
+        if page:
+            return f"⏳ <b>{bank}'s connection expires {esc(str(p.get('expires') or '')[:10])}.</b> After that date its accounts stop updating."
         return (f"⏳ <b>{bank}'s connection expires {esc(str(p.get('expires') or '')[:10])}.</b> Reply <i>{fix}</i> and I'll send a link "
                 f"to renew it here; after that date its accounts stop updating.")
     if k == "duplicate_charge":   # the bank sends no name at all for some charges: say so, the way the anomaly line does
