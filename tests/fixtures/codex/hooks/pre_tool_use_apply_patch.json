@@ -1,0 +1,14 @@
+{
+  "session_id": "01a10e2d-9a37-76c0-9e68-b563e3f90b15",
+  "turn_id": "01a10e2d-9a80-77c3-b3d8-3fde904f2035",
+  "transcript_path": "/tmp/spike/home/sessions/2026/10/05/rollout-2026-10-05T15-27-12-01a10e2d-9a37-76c0-9e68-b563e3f90b15.jsonl",
+  "cwd": "/tmp/spike/work",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-6-luna",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "apply_patch",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Add File: patched.txt\n+hello\n*** End Patch"
+  },
+  "tool_use_id": "exec-eb2def65-3d3f-4a6f-af42-a569ec7ca6ae"
+}

@@ -1,0 +1,16 @@
+{
+  "session_id": "01a10e2d-9a37-76c0-9e68-b563e3f90b15",
+  "turn_id": "01a10e2d-9a80-77c3-b3d8-3fde904f2035",
+  "transcript_path": "/tmp/spike/home/sessions/2026/10/05/rollout-2026-10-05T15-27-12-01a10e2d-9a37-76c0-9e68-b563e3f90b15.jsonl",
+  "cwd": "/tmp/spike/work",
+  "hook_event_name": "PermissionRequest",
+  "model": "gpt-6-luna",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "mcp__spike__echo",
+  "tool_input": {
+    "argv": [
+      "finnamon",
+      "status"
+    ]
+  }
+}
