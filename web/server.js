@@ -644,7 +644,8 @@ export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon',
     if (!BANK_NAME.test(inst)) return res.status(400).json({ error: `a bank name is letters, digits, spaces and .&'- up to ${MAX_NAME} characters` });   // an account whose bank fails this could never use Fetch by AI, and there is no rename
     if (!KINDS.includes(kind)) return res.status(400).json({ error: `type is one of ${KINDS.join(', ')}` });
     const owner = name(req.body?.owner);   // a member or joint; the CLI refuses any other name, so a typo never becomes a member
-    write(res, ['account', 'add', '--institution', inst, '--type', kind, ...(owner ? ['--owner', owner] : []), '--', n]);
+    const ownerArgs = owner ? ['--owner', owner] : [];
+    write(res, ['account', 'add', '--institution', inst, '--type', kind, ...ownerArgs, '--', n]);
   });
   // "These two are the same account" (a joint account seen through two logins), and the undo. The CLI does the checking: a different
   // type or a very different balance comes back as its sentence, and --force is for a terminal.
