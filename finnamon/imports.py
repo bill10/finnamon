@@ -198,7 +198,7 @@ def apply(conn: sqlite3.Connection, account_id: str, parsed: dict, flip: bool = 
     summary = {"account_id": account_id, "rows": len(recs), "added": len(new), "already": len(recs) - len(new), "skipped": parsed["skipped"],
                "from": dates[0] if dates else None, "to": dates[-1] if dates else None,
                "money_out": round(sum(x[2] for x in recs if x[2] > 0), 2), "money_in": round(-sum(x[2] for x in recs if x[2] < 0), 2),
-               "balance": balance, "columns": parsed["columns"], "sample": [{"date": d, "amount": a, "name": nm} for _, d, a, nm, _ in recs[:3]], "dry_run": dry_run}
+               "balance": balance, "columns": parsed["columns"], "sample": [{"date": d, "amount": a, "name": nm, "reads_as": "spending" if a > 0 else "money in"} for _, d, a, nm, _ in recs[:5]], "dry_run": dry_run}
     if dry_run:
         return summary
     with store.tx(conn):

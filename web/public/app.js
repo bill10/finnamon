@@ -209,8 +209,8 @@ function renderNetWorth(s) {
   $('v-invest').textContent = linked ? money(nw.investments) : '—'; $('p-invest').textContent = linked ? share(nw.investments) : '';
   $('v-prop').textContent = nw.property || linked ? money(nw.property || 0) : '—'; $('p-prop').textContent = share(nw.property);
   $('v-debt').textContent = linked ? money(-(nw.liabilities || 0)) : '—'; $('p-debt').textContent = linked && nw.liabilities ? share(nw.liabilities) : '';   // of assets
-  const prop = nw.property || 0;   // a stated property value has no history: flat, an asset
-  nwHistory = (s.history || []).map(r => ({ date: String(r.date), v: Number(r.net_worth) + prop, a: Number(r.assets) + prop, l: Number(r.liabilities) }))
+  nwHistory = (s.history || []).map(r => ({ date: String(r.date), v: Number(r.net_worth), a: Number(r.assets),   // the CLI's history already counts property (at its current value)
+    l: Number(r.liabilities) }))
     .filter(r => Number.isFinite(r.v) && Number.isFinite(Date.parse(r.date))).sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
   drawNetWorth();
 }
@@ -427,7 +427,8 @@ function renderImport(s) {
       `<input type="file" id="i-file" accept=".csv,text/csv" aria-label="CSV file">` +
       `<input id="i-bal" class="num" placeholder="Balance now (optional)" inputmode="decimal" aria-label="Balance now" title="Some exports carry no running balance; the figure here becomes the account's balance in net worth">` +
       `<button class="del" id="i-del" aria-label="Remove the chosen account" title="Remove the chosen account and its transactions">${icon('trash')}</button></div>` +
-      `<div class="eactions"><span class="err" id="i-err"></span><button class="quiet" id="i-fetch"${ON_BOX ? '' : ' disabled'} title="${ON_BOX ? 'Opens a browser window on this machine for you to log in; the file is downloaded and imported for you' : 'The browser window would open on the Finnamon box, not here: upload the CSV, or on this computer run finnamon import --browser <bank> --to ' + esc(location.origin)}">Fetch by AI</button><button class="primary" id="i-go">Import</button></div>` +
+      `<div id="i-prev" class="prev" hidden aria-live="polite"></div>` +
+      `<div class="eactions"><span class="err" id="i-err"></span><button class="quiet" id="i-fetch"${ON_BOX ? '' : ' disabled'} title="${ON_BOX ? 'Opens a browser window on this machine for you to log in; the file is downloaded and imported for you' : 'The browser window would open on the Finnamon box, not here: upload the CSV, or on this computer run finnamon import --browser <bank> --to ' + esc(location.origin)}">Fetch by AI</button><button class="primary" id="i-go" disabled>Import</button></div>` +
       (ON_BOX ? '' : `<p class="muted">Fetch by AI works on the Finnamon box itself; from here, upload the CSV, or run <code>finnamon import --browser &lt;bank&gt; --to ${esc(location.origin)}</code> on this computer, with <code>FINNAMON_WEB_TOKEN</code> set to what <code>finnamon web token</code> prints on the box.</p>`)
     : `<p class="muted">No manual account yet — add one below.</p>`) +
     `<h3 class="sep">Add a manual account<span class="hint">one per account; add as many as the bank has (HSBC Checking, HSBC Savings, HSBC Credit Card)</span></h3>` +
@@ -466,16 +467,40 @@ function renderImport(s) {
     if (!r.ok) { $('i-err').textContent = r.error; return; }
     toggleImport(false); showView('import'); openIntercom(true);
   });
+  // Before anything is saved: a dry run of the chosen file (the CLI's --dry-run, with --flip when the toggle is on) shows the first rows
+  // and whether each reads as spending or money in. A file that parses to no rows is an error here, never a success.
+  const post = (extra, text) => fetch(`/api/import?account=${encodeURIComponent($('i-acct').value)}${extra}`, { method: 'POST', headers: { 'content-type': 'text/csv' }, body: text });
+  let flip = false, ticket = 0;
+  const preview = async () => {
+    const f = $('i-file').files[0], box = $('i-prev'), go = $('i-go'), n = ++ticket;   // the newest request wins
+    go.disabled = true; $('i-err').textContent = ''; box.hidden = !f;
+    if (!f) return;
+    box.textContent = 'Reading the file…';
+    let r = null, out = {};
+    try { r = await post(`&dry_run=1${flip ? '&flip=1' : ''}`, await f.text()); out = await r.json(); } catch {}
+    if (n !== ticket) return;
+    if (r?.status === 401) return lock();
+    if (!r || !r.ok) { box.hidden = true; $('i-err').textContent = out.error || 'The page lost the server; reload to see where things stand.'; return; }
+    if (!out.rows) { box.hidden = true; $('i-err').textContent = `No rows could be read${out.skipped ? ` (${plural(out.skipped, 'row')} skipped)` : ''}. Dates need to look like 2026-09-30 or 09/30/2026, and amounts like 1234.56 (not 1.234,56).`; return; }
+    box.innerHTML = `<p class="muted">${plural(out.rows, 'row')} read${out.skipped ? `, ${plural(out.skipped, 'row')} unreadable` : ''}; the first ${out.sample.length}:</p>` +
+      `<table class="prev-t"><tbody>${out.sample.map(x => `<tr><td>${esc(x.date)}</td><td class="pn">${esc(x.name)}</td><td class="num">${money(Math.abs(x.amount))}</td><td class="${x.reads_as === 'spending' ? 'out' : 'in'}">${x.reads_as}</td></tr>`).join('')}</tbody></table>` +
+      `<label class="flip"><input type="checkbox" id="i-flip"${flip ? ' checked' : ''}> Flip signs <span class="hint">if purchases show as money in (some card exports list spending as positive)</span></label>`;
+    $('i-flip').addEventListener('change', (e) => { flip = e.target.checked; preview(); });
+    go.disabled = false;
+  };
+  $('i-file').addEventListener('change', () => { flip = false; preview(); });
+  $('i-acct').addEventListener('change', preview);
   $('i-go')?.addEventListener('click', async () => {
     const f = $('i-file').files[0];
     if (!f) { $('i-err').textContent = 'Pick the CSV file first.'; return; }
     $('i-err').textContent = ''; toast('Importing', { kind: 'busy' });
     let r = null, out = {};
-    if ($('i-bal').value.trim() && !Number.isFinite(amount($('i-bal').value))) { $('i-err').textContent = 'The balance has to be a number, like 1200 or 1,234.56.'; return; }
+    if ($('i-bal').value.trim() && !Number.isFinite(amount($('i-bal').value))) { toast(''); $('i-err').textContent = 'The balance has to be a number, like 1200 or 1,234.56.'; return; }
     const bal = $('i-bal').value.trim() ? `&balance=${encodeURIComponent(amount($('i-bal').value))}` : '';
-    try { r = await fetch(`/api/import?account=${encodeURIComponent($('i-acct').value)}${bal}`, { method: 'POST', headers: { 'content-type': 'text/csv' }, body: await f.text() }); out = await r.json(); } catch {}
+    try { r = await post(`${bal}${flip ? '&flip=1' : ''}`, await f.text()); out = await r.json(); } catch {}
     if (r?.status === 401) return lock();   // a rotated key is not an outage
     if (!r || !r.ok) { toast(''); $('i-err').textContent = out.error || 'The page lost the server; reload to see where things stand.'; return; }
+    if (!out.rows) { toast(''); $('i-err').textContent = 'No rows could be read, so nothing was imported.'; return; }
     toast(`${plural(out.added ?? 0, 'new transaction')}${out.already ? `, ${out.already} already there` : ''}${out.skipped ? `, ${plural(out.skipped, 'row')} unreadable` : ''}${out.balance != null ? `, balance ${money(out.balance)}` : ''}`);
     toggleImport(false); loadSummary();
   });
