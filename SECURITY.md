@@ -16,6 +16,9 @@ Finnamon is self-hosted: it runs on your own machine and holds your bank data in
   over Tailscale; never Tailscale Funnel or the public internet).
 - Escapes from the assistant's sealed permission set: the allow/deny list, the read-only headless triage, the
   reply-guard hook, or the rule that unattended runs have no web access.
+- Getting past the dashboard session's permission prompts: an action off the allow list that runs without a person's
+  Allow, a Telegram Allow / Deny press that counts though it is forged, replayed, out of time or from someone who is not
+  a household member of that chat, or a phone prompt that shows something other than what would run.
 - Prompt injection through untrusted data (bank memos, merchant names, imported files) that makes the assistant act
   outside what the household allowed.
 - Leaks of secrets (`secrets.toml`, Plaid tokens, the bot token) to logs, messages, the database or the repository.
