@@ -21,7 +21,29 @@ def resolve_category(text: str) -> str:
     code, cands = taxonomy.resolve(text)
     if code:
         return code
-    raise ResolveError(text, cands)
+    raise ResolveError(text, cands or taxonomy.suggestions(text))
+
+
+def _budget_codes(text: str, from_name: bool) -> list[str]:
+    """A budget's category text to its codes: one category, or a name that is several ("utilities"). A budget's own name
+    that is no category is refused here, with what it might mean, rather than make a budget that counts nothing."""
+    code, cands = taxonomy.resolve(text)
+    if code:
+        return [code]
+    if (group := taxonomy.GROUPS.get(text.strip().lower())):
+        return group
+    if not from_name:
+        raise ResolveError(text, cands or taxonomy.suggestions(text))
+    sug = cands or taxonomy.suggestions(text)
+    raise ValueError(f"'{text}' is not a category, so a budget by that name would count nothing. Say what it counts: --category <category> "
+                     "(repeat it for several" + (f"; maybe {' or '.join(_cat_name(c) for c in sug[:6])}{', …' if len(sug) > 6 else ''}" if sug else "") + ") or --merchant <name> "
+                     "(each merchant, e.g. for subscriptions or car insurance); `finnamon category list` has every category")
+
+
+def _cat_name(code: str) -> str:
+    """A category as a person can type it back: its label, or the code when that label is shared ("Savings")."""
+    lab = taxonomy.label(code)
+    return f'"{lab}"' if taxonomy.resolve(lab)[0] == code else code
 
 
 # --- budgets ---------------------------------------------------------------------------------
@@ -50,7 +72,9 @@ def budget_set(conn: sqlite3.Connection, name: str, amount: float, categories: l
     with store.tx(conn):   # one write, read and all: a crash or a concurrent edit mid-way would leave a budget counting nothing
         old = conn.execute("SELECT id FROM budgets WHERE name=?", (name,)).fetchone()
         keep = not (categories or merchants) and old and conn.execute("SELECT 1 FROM budget_selectors WHERE budget_id=?", (old[0],)).fetchone()
-        codes = [] if keep else list(dict.fromkeys(resolve_category(c) for c in categories or ([] if merchants else [name])))
+        texts = [] if keep else categories or ([] if merchants else [name])
+        read = {t: _budget_codes(t, not categories) for t in texts}
+        codes = list(dict.fromkeys(c for cs in read.values() for c in cs))
         sel = [("category", c, None) for c in codes] + [("merchant", c, m) for m in merchants for c in resolve_merchant(conn, m)["canonicals"]]
         conn.execute(
             "INSERT INTO budgets (name, category, monthly_limit, active, fixed) VALUES (?,?,?,1,?) "
@@ -62,6 +86,27 @@ def budget_set(conn: sqlite3.Connection, name: str, amount: float, categories: l
             conn.execute("DELETE FROM budget_selectors WHERE budget_id=?", (bid,))
             conn.executemany("INSERT OR IGNORE INTO budget_selectors (budget_id, kind, value, label) VALUES (?,?,?,?)", [(bid, *s) for s in sel])
     out = next(b for b in _budgets(conn, "WHERE id=?", (bid,)))
+    # what it counts, in words, every time: a name read as a category ("utilities", "dining") is said to be a guess
+    out["counts"] = [taxonomy.describe(c) for c in out["categories"]] + [f"merchant {m}" for m in out["merchants"]]
+    guesses = [f"'{t}' was read as {', '.join(taxonomy.describe(c) for c in cs)}" for t, cs in read.items()
+               if len(cs) > 1 or taxonomy.guessed(t, cs[0])]
+    if guesses:
+        out["guessed"] = "; ".join(guesses) + (" (from the budget's name)" if not categories else "") + \
+            ". If that is not what it should count, pick its categories or merchants (--category, repeatable, or --merchant)"
+    if not keep:   # another budget counting the same charges: both would alert on them
+        both = MATCH.replace(":bid", ":other")
+        mine = {(s["kind"], s["value"]) for s in conn.execute("SELECT kind, value FROM budget_selectors WHERE budget_id=?", (bid,))}
+        wide = mine | {("category", taxonomy.primary_of(v)) for k, v in mine if k == "category"}   # groceries is inside a food-and-drink budget
+        overlaps = []
+        for o in conn.execute("SELECT id, name FROM budgets WHERE active=1 AND id<>? ORDER BY name", (bid,)).fetchall():
+            theirs = {(s["kind"], s["value"]) for s in conn.execute("SELECT kind, value FROM budget_selectors WHERE budget_id=?", (o["id"],))}
+            n = conn.execute(f"SELECT count(*) FROM tx_now t WHERE pending=0 AND {SPEND} AND {MATCH} AND {both}", {"bid": bid, "other": o["id"]}).fetchone()[0]
+            if n or wide & theirs or mine & {("category", taxonomy.primary_of(v)) for k, v in theirs if k == "category"}:   # past charges in both, or the same selector before any charge
+                overlaps.append({"budget": o["name"], "charges": n})
+        if overlaps:
+            out["overlaps"] = overlaps
+            out["warning"] = ("these charges are also in " + ", ".join(f"the {o['budget']} budget ({o['charges']} past charges)" for o in overlaps)
+                              + ": each budget counts them and alerts on them; narrow one's categories or merchants (--category, --merchant) if they should count once")
     if merchants:
         one = MERCHANT.replace(":v", "s.value").replace(":l", "s.label")
         out["matches"] = {m: conn.execute(f"SELECT count(*) FROM tx_now t WHERE pending=0 AND {SPEND} AND EXISTS (SELECT 1 FROM budget_selectors s "
@@ -124,6 +169,38 @@ RECURRING = ("(t.flow = 'mortgage' OR EXISTS (SELECT 1 FROM recurring r WHERE r.
              "AND (abs(abs(t.amount) - r.avg_amount) <= 0.25 * abs(r.avg_amount) OR abs(abs(t.amount) - r.last_amount) <= 0.25 * abs(r.last_amount))))")
 
 
+# Any active budget's selectors: the Overall line counts a charge two budgets share once. Built from MATCH's own text, so
+# a reworded MATCH must keep this scope clause (the assert says so at import, not as a silently double-counting Overall).
+assert "s.budget_id = :bid" in MATCH
+ANY_BUDGET = MATCH.replace("s.budget_id = :bid", "s.budget_id IN (SELECT id FROM budgets WHERE active = 1)")
+UNCATEGORIZED = "category IS NULL AND pending = 0 AND flow IN ('expense', 'refund', 'income')"   # not a paired transfer; an imported transfer-in reads as income until categorized   # the Budgets card's count and charts' uncategorized table: one rule
+UNCATEGORIZED_SHOWN = 20   # merchants, and ids per merchant, in a reply; the count is always the whole
+
+
+def overall(conn: sqlite3.Connection, as_of: str | None = None) -> dict:
+    """The dashboard's Overall: this month's spending any budget counts, each charge once; the limits' sum; and how many
+    transactions have no category at all (an import's rows: they count toward no budget until someone categorizes them)."""
+    as_of = as_of or store.now_local()
+    spent = conn.execute(f"SELECT COALESCE(SUM(amount),0) FROM tx_now t WHERE pending=0 AND date >= date(:as_of, 'start of month') AND date <= date(:as_of) "
+                         f"AND {SPEND} AND {ANY_BUDGET}", {"as_of": as_of}).fetchone()[0]
+    limit = conn.execute("SELECT COALESCE(SUM(monthly_limit),0) FROM budgets WHERE active=1").fetchone()[0]
+    n = conn.execute(f"SELECT count(*) FROM tx_now WHERE {UNCATEGORIZED}").fetchone()[0]
+    return {"spent": round(float(spent), 2), "limit": round(float(limit), 2), "uncategorized": n}
+
+
+def uncategorized(conn: sqlite3.Connection, transaction_ids: list[str] | None = None) -> dict:
+    """Transactions with no category, by merchant (one rule each covers them all) with their ids (for one charge at a time)."""
+    if transaction_ids == []:
+        return {"uncategorized": 0, "merchants": []}
+    # the ids as one JSON parameter: an import of years of rows never meets SQLite's limit on bound variables
+    where, args = (UNCATEGORIZED, ()) if transaction_ids is None else (UNCATEGORIZED + " AND transaction_id IN (SELECT value FROM json_each(?))", (json.dumps(transaction_ids),))
+    rows = conn.execute(f"SELECT display, count(*) n, round(sum(amount), 2) total, group_concat(transaction_id) ids FROM tx_now WHERE {where} "
+                        "GROUP BY lower(display) ORDER BY n DESC, display", args).fetchall()   # one merchant as people see it, as resolve_merchant has it
+    return {"uncategorized": sum(r["n"] for r in rows),
+            "merchants": [{"merchant": r["display"], "charges": r["n"], "total": r["total"], "transaction_ids": r["ids"].split(",")[:UNCATEGORIZED_SHOWN]}
+                          for r in rows][:UNCATEGORIZED_SHOWN]}
+
+
 def month_to_date(conn: sqlite3.Connection, budget_id: int, as_of: str) -> tuple[float, float]:
     """(spent, the part of it that is recurring charges)."""
     r = conn.execute(
@@ -179,22 +256,32 @@ def find_account(conn: sqlite3.Connection, text: str) -> sqlite3.Row:
     t = text.strip()
     rows = conn.execute("SELECT account_id, name, mask, type FROM accounts WHERE mirror_of IS NULL AND (account_id=? OR mask=? OR lower(name) LIKE ?)",
                         (t, t.lstrip("."), f"%{t.lower()}%")).fetchall()
+    if not rows:   # the name the person says ("Chase Checking") is often not the bank's ("Total Checking"): the closest, or every one
+        every = conn.execute("SELECT name, mask, type FROM accounts WHERE mirror_of IS NULL ORDER BY name").fetchall()
+        words = set(t.lower().split())
+        near = sorted(every, key=lambda r: (-len(words & set(r["name"].lower().split())), -difflib.SequenceMatcher(None, t.lower(), r["name"].lower()).ratio()))
+        raise ValueError(f"'{text}' matches no account; " + ("the closest: " + ", ".join(f"\"{r['name']}\" …{r['mask']} ({r['type']})" for r in near[:5])
+                                                           + ". Name one of them, or its last four digits" if near else "there are no accounts yet"))
     if len(rows) != 1:
-        raise ValueError(f"'{text}' matches {len(rows)} accounts: " + ", ".join(f"{r['name']} …{r['mask']}" for r in rows))
+        raise ValueError(f"'{text}' matches {len(rows)} accounts: " + ", ".join(f"{r['name']} …{r['mask']}" for r in rows) + ". Name one of them, or its last four digits")
     return rows[0]
 
 
 def threshold_set(conn: sqlite3.Connection, account_text: str, amount: float) -> dict:
     a = find_account(conn, account_text)
+    if a["type"] != "depository":   # low_balance.sql reads depository balances only: a card's or a brokerage's line could never fire
+        raise ValueError(f"{a['name']} …{a['mask']} is a {a['type']} account; a low-balance alert watches the cash in a checking or savings "
+                         "account, so a threshold here would never fire. Name a checking or savings account")
     store.set_setting(conn, "low_balance_threshold", amount, a["account_id"])
     return {"account": a["name"], "mask": a["mask"], "threshold": float(amount)}
 
 
-def category_set(conn: sqlite3.Connection, merchant: str, category_text: str) -> dict:
+def category_set(conn: sqlite3.Connection, merchant: str, category_text: str, m: dict | None = None) -> dict:
+    """A merchant rule; m is the merchant already resolved (from a transaction: its own canonical, never a name lookup)."""
     code = resolve_category(category_text)
     if code in taxonomy.DETAILED:
         raise ValueError("a merchant override needs a detailed category, e.g. FOOD_AND_DRINK_GROCERIES")
-    m = resolve_merchant(conn, merchant)
+    m = m or resolve_merchant(conn, merchant)
     for c in m["canonicals"]:
         conn.execute("INSERT INTO category_override (canonical, pfc_primary, pfc_detailed) VALUES (?,?,?) "
                      "ON CONFLICT(canonical) DO UPDATE SET pfc_primary=excluded.pfc_primary, pfc_detailed=excluded.pfc_detailed, created_at=datetime('now','localtime')",
@@ -261,6 +348,19 @@ def tx_category_set(conn: sqlite3.Connection, transaction_id: str, category_text
     elif t["pending"]:
         out["note"] = "pending: the edit follows it when the bank posts it, unless the bank posts it as an unrelated new transaction"
     return out
+
+
+def tx_merchant_rule(conn: sqlite3.Connection, transaction_id: str, category_text: str) -> dict:
+    """"Every charge from this merchant", picked from one transaction (the dashboard's row): the rule on that charge's own
+    merchant, and that charge's one-time edit, if it had one, goes so the charge picked follows the rule too."""
+    t = conn.execute("SELECT transaction_id, canonical, display FROM tx_now WHERE transaction_id=?", (transaction_id.strip(),)).fetchone()
+    if not t:
+        raise ValueError(f"no transaction '{transaction_id}' (ids are tx_now.transaction_id)")
+    n = conn.execute("SELECT count(*) FROM tx_now WHERE canonical=?", (t["canonical"],)).fetchone()[0]
+    with store.tx(conn):   # a refused category leaves the edit where it was
+        conn.execute("DELETE FROM tx_category_override WHERE transaction_id=?", (t["transaction_id"],))
+        out = category_set(conn, t["display"], category_text, {"canonicals": [t["canonical"]], "display": t["display"], "charges": n})
+    return {**out, "transaction_id": t["transaction_id"]}
 
 
 def canonical_for(conn: sqlite3.Connection, merchant: str) -> str:
@@ -331,11 +431,78 @@ def alias_set(conn: sqlite3.Connection, raw_name: str, canonical: str) -> dict:
     if not raw_name or not canonical.strip():
         raise ValueError("an alias needs a raw name and a canonical")
     # what it covers today, so a too-broad pattern is visible at the one moment a person can still narrow it
-    n, distinct = conn.execute("SELECT count(*), count(DISTINCT name) FROM transactions WHERE name = ? OR (instr(?, '%') > 0 AND name LIKE ?)",
-                               (raw_name, raw_name, raw_name)).fetchone()
+    n, distinct = _alias_matches(conn, raw_name)
+    if not n:   # a typo would sit there matching nothing, with no way to see it
+        sug = _suggest_raw(conn, raw_name.replace("%", "").replace("_", " "))
+        raise ValueError(f"'{raw_name}' matches no transaction's bank text" + (f"; did you mean {' or '.join(repr(x) for x in sug)}?" if sug else "")
+                         + " (an alias names the raw bank text exactly, or a pattern of it with %: finnamon query \"SELECT DISTINCT name FROM transactions WHERE name LIKE '%word%'\")")
     conn.execute("INSERT INTO merchant_alias (name, canonical) VALUES (?,?) ON CONFLICT(name) DO UPDATE SET canonical=excluded.canonical, created_at=datetime('now','localtime')",
                  (raw_name, canonical.strip()))
     return {"name": raw_name, "canonical": canonical.strip(), "matches": n, "distinct_names": distinct}
+
+
+def _alias_matches(conn: sqlite3.Connection, name: str) -> tuple[int, int]:
+    """(transactions, distinct raw names) an alias name covers: the exact text, or a pattern's LIKE."""
+    return tuple(conn.execute("SELECT count(*), count(DISTINCT name) FROM transactions WHERE name = ? OR (instr(?, '%') > 0 AND name LIKE ?)",
+                              (name, name, name)).fetchone())
+
+
+def _suggest_raw(conn: sqlite3.Connection, t: str, limit: int = 3) -> list[str]:
+    """Raw bank texts a mistyped alias probably meant: containing it first, then close spellings."""
+    names = [r[0] for r in conn.execute("SELECT name FROM transactions WHERE name IS NOT NULL GROUP BY name ORDER BY count(*) DESC")]
+    low = t.lower().strip()
+    hits = [x for x in names if low and low in x.lower()]
+    by_low = {x.lower(): x for x in names}
+    hits += [by_low[m] for m in difflib.get_close_matches(low, list(by_low), n=limit, cutoff=0.6)]
+    return list(dict.fromkeys(hits))[:limit]
+
+
+def alias_list(conn: sqlite3.Connection) -> list[dict]:
+    """Every alias with the transactions it covers today: a pattern that grew too broad, or one that matches nothing, shows here."""
+    out = []
+    for r in conn.execute("SELECT name, canonical, created_at FROM merchant_alias ORDER BY canonical, name").fetchall():
+        n, distinct = _alias_matches(conn, r["name"])
+        out.append({"name": r["name"], "canonical": r["canonical"], "pattern": "%" in r["name"], "matches": n, "distinct_names": distinct, "created_at": r["created_at"]})
+    return out
+
+
+def alias_remove(conn: sqlite3.Connection, name: str) -> dict:
+    """Delete one alias by its name (the raw text or pattern, as `alias --list` shows it); its charges go back to their own names."""
+    r = conn.execute("SELECT name, canonical FROM merchant_alias WHERE name=?", (name.strip(),)).fetchone() or \
+        conn.execute("SELECT name, canonical FROM merchant_alias WHERE name=? COLLATE NOCASE", (name.strip(),)).fetchone()
+    if not r:
+        names = [x[0] for x in conn.execute("SELECT name FROM merchant_alias WHERE canonical=? COLLATE NOCASE", (name.strip(),))]
+        raise ValueError(f"no alias named '{name.strip()}'" + (f"; '{name.strip()}' is the merchant of {', '.join(repr(x) for x in names)}: remove those by name" if names
+                                                              else " (finnamon alias --list shows them)"))
+    # What the alias decided for its charges, before and after: a budget that stops counting them, a category rule that
+    # stops applying, a "normal" rule keyed on the old name. Measured on the charges themselves, whatever other alias,
+    # pattern or Plaid entity id ends up naming them.
+    ids = [x[0] for x in conn.execute("SELECT transaction_id FROM transactions WHERE name = ? OR (instr(?, '%') > 0 AND name LIKE ?)", (r["name"],) * 3)]
+    def state() -> tuple[dict, dict]:
+        marks = "SELECT value FROM json_each(:ids)"
+        rows = {x[0]: (x[1], x[2], x[3]) for x in conn.execute(f"SELECT transaction_id, canonical, category, account_id FROM tx_now WHERE transaction_id IN ({marks})", {"ids": json.dumps(ids)})}
+        counted = {b[1]: {x[0] for x in conn.execute(f"SELECT transaction_id FROM tx_now t WHERE transaction_id IN ({marks}) AND pending=0 AND {SPEND} AND {MATCH}",
+                                                       {"ids": json.dumps(ids), "bid": b[0]})} for b in conn.execute("SELECT id, name FROM budgets WHERE active=1")}
+        return rows, counted
+    with store.tx(conn):
+        before, counted_before = state()
+        conn.execute("DELETE FROM merchant_alias WHERE name=?", (r["name"],))
+        after, counted_after = state()
+    out = {"removed": {"name": r["name"], "canonical": r["canonical"]}, "matches": len(ids)}
+    # a "normal" rule the way the prelude applies it: that exact canonical, that account or any; never a subscription's (keyed on its stream)
+    renamed = [{"c": before[t][0], "a": before[t][2]} for t in before if t in after and after[t][0] != before[t][0]]
+    keyed = {k: v for k, v in (
+        ("budgets", sorted(n for n, got in counted_before.items() if got - counted_after.get(n, set()))),
+        ("charges_recategorized", sum(1 for t in before if t in after and after[t][1] != before[t][1])),
+        ("suppressions", conn.execute("SELECT count(DISTINCT s.id) FROM suppressions s JOIN json_each(?) r ON s.canonical = json_extract(r.value, '$.c') "
+                                      "AND (s.account_id IS NULL OR s.account_id = json_extract(r.value, '$.a')) AND COALESCE(s.kind, '') <> 'anomaly:recurring_changed'",
+                                      (json.dumps(renamed),)).fetchone()[0])) if v}
+    if keyed:
+        out["still_keyed_on_it"] = keyed
+        out["warning"] = (f"'{r['canonical']}' no longer names those charges, so what was set up under that name stops covering them: "
+                          + "; ".join(f"{k.replace('_', ' ')}: {', '.join(v) if isinstance(v, list) else v}" for k, v in keyed.items())
+                          + ". Set them again under the charges' own name, or add the alias back")
+    return out
 
 
 def rule_kinds() -> list[str]:

@@ -1680,6 +1680,8 @@ def cmd_budget(a) -> None:
     try:
         if a.action == "suggest":
             out(budgets.suggest(conn, a.months, a.as_of))
+        elif a.action == "overall":
+            out(budgets.overall(conn, a.as_of))
         elif a.action == "set":
             _triage_read_only()
             out(budgets.budget_set(conn, a.name, a.amount, a.category, a.merchants, a.fixed))
@@ -1725,27 +1727,38 @@ def cmd_settings(a) -> None:
 def cmd_category(a) -> None:
     conn = store.connect()
     if a.tx is not None:
-        if a.category or (a.clear and a.merchant) or not (a.clear or a.merchant):
-            die("usage: finnamon category --tx <transaction_id> <category> | --tx <transaction_id> --clear")
+        if a.category or (a.clear and a.merchant) or not (a.clear or a.merchant) or (a.every and a.clear) or a.uncategorized or a.rules:
+            die("usage: finnamon category --tx <transaction_id> <category> [--every] | --tx <transaction_id> --clear")
         _triage_read_only()
         try:
-            out(budgets.tx_category_set(conn, a.tx, None if a.clear else a.merchant))
+            out(budgets.tx_merchant_rule(conn, a.tx, a.merchant) if a.every else budgets.tx_category_set(conn, a.tx, None if a.clear else a.merchant))
         except (budgets.ResolveError, ValueError) as e:
             die(str(e))
         return
+    if a.every:
+        die("usage: finnamon category --tx <transaction_id> <category> --every (the rule for that charge's merchant)")
     if a.rules:
         if a.merchant or a.category or a.clear:
             die("usage: finnamon category --rules")
         out(budgets.category_rules(conn)); return
+    if a.uncategorized:
+        if a.merchant or a.category or a.clear or a.rules:
+            die("usage: finnamon category --uncategorized")
+        out(budgets.uncategorized(conn)); return
     if a.clear:
         if not a.merchant or a.category or a.merchant in ("list", "resolve"):
             die("usage: finnamon category <merchant> --clear")
         _triage_read_only()
         out(budgets.category_clear(conn, a.merchant)); return
     if a.merchant is None:
-        die("usage: finnamon category <merchant> <category> | <merchant> --clear | --rules | --tx <transaction_id> <category> | list | resolve <text>")
+        die("usage: finnamon category <merchant> <category> | <merchant> --clear | --rules | --uncategorized | --tx <transaction_id> <category> [--every] | list [--json] | resolve <text>")
     if a.merchant == "list":
-        print(taxonomy.listing()); return
+        if a.json:   # the dashboard's pickers: every category as people read it, and the merchants the household has seen
+            out({"categories": [{"code": c, "label": taxonomy.label(c), "primary": p} for p, ds in taxonomy.DETAILED.items() for c in [p] + [f"{p}_{d}" for d in ds]],
+                 "merchants": [r[0] for r in conn.execute("SELECT display FROM tx_now WHERE display IS NOT NULL GROUP BY lower(display) ORDER BY count(*) DESC LIMIT 500")]})
+        else:
+            print(taxonomy.listing())
+        return
     if a.merchant == "resolve":
         code, cands = taxonomy.resolve(a.category); out({"code": code, "candidates": cands}); return
     _triage_read_only()
@@ -1756,9 +1769,20 @@ def cmd_category(a) -> None:
 
 
 def cmd_alias(a) -> None:
+    conn = store.connect()
+    if a.list:
+        if a.name or a.remove is not None:
+            die("usage: finnamon alias --list")
+        out(budgets.alias_list(conn)); return
     _triage_read_only()
     try:
-        out(budgets.alias_set(store.connect(), a.name, a.canonical))
+        if a.remove is not None:
+            if a.name:
+                die("usage: finnamon alias --remove <name>")
+            out(budgets.alias_remove(conn, a.remove)); return
+        if not a.name or not a.canonical:
+            die('usage: finnamon alias "<raw name or pattern>" "<merchant>" | --list | --remove "<raw name or pattern>"')
+        out(budgets.alias_set(conn, a.name, a.canonical))
     except ValueError as e:
         die(str(e))
 
@@ -2020,15 +2044,18 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--check", action="store_true", help="fetch and print, as JSON, whether there is anything to pull (the dashboard's Update button); changes nothing")
     s.add_argument("--dry-run", action="store_true", help="look only: fetch, then name the commits to pull and the services that would restart; nothing is pulled, migrated, installed or restarted"); s.add_argument("--force", action="store_true", help="register the Telegram channel plugin even outside ~/.finnamon/assistant"); s.set_defaults(fn=cmd_update)
 
-    s = sp.add_parser("budget"); s.add_argument("action", choices=["list", "suggest", "set", "remove"], nargs="?", default="list")
+    s = sp.add_parser("budget"); s.add_argument("action", choices=["list", "suggest", "set", "remove", "overall"], nargs="?", default="list")
     s.add_argument("name", nargs="?"); s.add_argument("amount", nargs="?", type=float)
     s.add_argument("--category", action="append"); s.add_argument("--merchant", action="append", dest="merchants")   # each repeatable; given, they replace the budget's
     s.add_argument("--fixed", action=argparse.BooleanOptionalAction); s.add_argument("--months", type=int, default=6); s.add_argument("--as-of"); s.set_defaults(fn=cmd_budget)
     s = sp.add_parser("threshold"); s.add_argument("account"); s.add_argument("amount", type=float); s.set_defaults(fn=cmd_threshold)
     s = sp.add_parser("settings"); s.add_argument("action", choices=["list", "get", "set"], nargs="?", default="list"); s.add_argument("key", nargs="?"); s.add_argument("value", nargs="?"); s.add_argument("--account"); s.add_argument("--ops", action="store_true", help="operational keys (daemon interval, timeouts); not for Claude"); s.set_defaults(fn=cmd_settings)
     s = sp.add_parser("category", help="<merchant> <category> (a rule: every past and future charge) | --tx <transaction_id> <category> (one charge, a one-time edit; --clear undoes it) | list | resolve <text>")
-    s.add_argument("merchant", nargs="?"); s.add_argument("category", nargs="?"); s.add_argument("--tx", metavar="TRANSACTION_ID"); s.add_argument("--clear", action="store_true"); s.add_argument("--rules", action="store_true"); s.set_defaults(fn=cmd_category)
-    s = sp.add_parser("alias", help="raw bank string -> canonical merchant; a %% makes it a pattern (%% any run of characters, then _ one; every match becomes one merchant)"); s.add_argument("name"); s.add_argument("canonical"); s.set_defaults(fn=cmd_alias)
+    s.add_argument("merchant", nargs="?"); s.add_argument("category", nargs="?"); s.add_argument("--tx", metavar="TRANSACTION_ID"); s.add_argument("--clear", action="store_true"); s.add_argument("--rules", action="store_true")
+    s.add_argument("--every", action="store_true", help="with --tx: the rule for that charge's merchant (every charge), not the one charge")
+    s.add_argument("--uncategorized", action="store_true", help="transactions with no category, by merchant"); s.add_argument("--json", action="store_true"); s.set_defaults(fn=cmd_category)
+    s = sp.add_parser("alias", help="raw bank string -> canonical merchant; a %% makes it a pattern (%% any run of characters, then _ one; every match becomes one merchant) | --list | --remove <name>")
+    s.add_argument("name", nargs="?"); s.add_argument("canonical", nargs="?"); s.add_argument("--list", action="store_true"); s.add_argument("--remove", metavar="NAME"); s.set_defaults(fn=cmd_alias)
     s = sp.add_parser("normal", help="suppress a pattern. No --kind = every alert kind except recurring_changed (a merchant charging is normal; its subscription "
                      "stopping is still news). --alert on a recurring_changed or recurring_price alert acknowledges that one stream (a price: up to the accepted one). --list shows ids; --remove ID deletes one"); s.add_argument("merchant", nargs="?"); s.add_argument("--kind"); s.add_argument("--account"); s.add_argument("--max-amount", type=float)
     s.add_argument("--note"); s.add_argument("--alert", type=int); s.add_argument("--roundup-item", nargs=2, type=int, metavar=("MESSAGE_ID", "N")); s.add_argument("--list", action="store_true"); s.add_argument("--remove", type=int, metavar="ID", help="delete the rule with this id (from --list)"); s.set_defaults(fn=cmd_normal)
@@ -2099,13 +2126,14 @@ def main(argv: list[str] | None = None) -> None:
 # (category, alias, account add/remove/merge), budgets, and what is suppressed or resolved. Their reads (`account list`, `budget`,
 # which the dashboard's summary runs on every load) do not.
 CHART_INPUTS = {"sync", "import", "link", "category", "alias", "normal", "account", "budget"}
-CHART_READS = {("category", "list"), ("category", "resolve"), ("account", "list"), ("budget", "list"), ("budget", "suggest")}
+CHART_READS = {("category", "list"), ("category", "resolve"), ("account", "list"), ("budget", "list"), ("budget", "suggest"), ("budget", "overall")}
 
 
 def _changes_charts(a) -> bool:
     if os.environ.get("FINNAMON_TRIAGE"):   # read-only, current.json included
         return False
-    if (a.cmd, getattr(a, "merchant", None) or getattr(a, "action", None)) in CHART_READS or (a.cmd == "normal" and a.list) or (a.cmd == "import" and a.dry_run):
+    if (a.cmd, getattr(a, "merchant", None) or getattr(a, "action", None)) in CHART_READS or (a.cmd == "normal" and a.list) or (a.cmd == "import" and a.dry_run) \
+            or (a.cmd == "alias" and a.list) or (a.cmd == "category" and (a.rules or a.uncategorized)):
         return False
     return a.cmd in CHART_INPUTS or (a.cmd == "alerts" and (a.dismiss or a.undo)) or (a.cmd == "networth" and a.sync)
 

@@ -272,15 +272,19 @@ def _check(node, key: str | None = None) -> None:
 # A table entry is not Vega-Lite: {"title", "table": {"columns", "total", "more"}, "data": {"values"}, "usermeta"}. Its rows come from
 # the same read-only query.run as a chart's data.sql; the page renders every cell as escaped text in a format named here, so a
 # table carries no spec grammar at all to check.
-TABLES = ("recent_transactions", "large_transactions", "recurring")
+TABLES = ("recent_transactions", "large_transactions", "recurring", "uncategorized")
 TABLE_ROWS = 50             # rows kept on the board; the panel says "showing 50 of 312"
 MAX_COLUMNS = 12
 FORMATS = ("text", "money", "date", "number")   # money is tx_now's sign: positive is money out, drawn as -$52.10 in the debt colour
 TX_COLUMNS = [{"field": "date", "label": "Date", "format": "date"}, {"field": "merchant", "label": "Merchant"},
               {"field": "category", "label": "Category"}, {"field": "account", "label": "Account"},
               {"field": "amount", "label": "Amount", "format": "money"}]
-TX_SELECT = ("SELECT date, COALESCE(display, merchant_name, name) merchant, replace(lower(COALESCE(category_primary, '')), '_', ' ') category, "
-             "account_name || COALESCE(' …' || mask, '') account, amount FROM tx_now ")
+# category: the detailed one as people read it ("restaurant", not "food and drink"; taxonomy.label in SQL), "uncategorized" for none.
+# transaction_id rides along, not as a column: the page puts a Change category button on a row that has one.
+TX_SELECT = ("SELECT date, COALESCE(display, merchant_name, name) merchant, CASE WHEN category IS NULL THEN 'uncategorized' "
+             "WHEN category_primary IS NOT NULL AND category <> category_primary AND substr(category, 1, length(category_primary) + 1) = category_primary || '_' "
+             "THEN replace(lower(substr(category, length(category_primary) + 2)), '_', ' ') ELSE replace(lower(category), '_', ' ') END category, "
+             "account_name || COALESCE(' …' || mask, '') account, amount, transaction_id FROM tx_now ")
 
 
 def table_preset(name: str, arg: str | None = None, months: int = 12) -> dict:
@@ -293,6 +297,9 @@ def table_preset(name: str, arg: str | None = None, months: int = 12) -> dict:
             raise ValueError("large_transactions takes an amount: finnamon chart --spec large_transactions 1000") from None
         title, cols = f"Transactions over ${over:,.0f}, last {int(months)} months", TX_COLUMNS
         sql = TX_SELECT + f"WHERE flow NOT IN ('transfer', 'card_payment', 'skipped') AND abs(amount) >= {over} AND date >= date('now', '-{int(months)} months') ORDER BY date DESC"
+    elif name == "uncategorized":   # an import's rows, mostly: no category, so no budget counts them
+        title, cols = "Uncategorized transactions", [c for c in TX_COLUMNS if c["field"] != "category"]   # every row would say "uncategorized"
+        sql = TX_SELECT + f"WHERE {budgets.UNCATEGORIZED} ORDER BY date DESC, transaction_id"
     elif name == "recurring":
         title = "Recurring charges"
         cols = [{"field": "merchant", "label": "Merchant"}, {"field": "frequency", "label": "Every"}, {"field": "last_date", "label": "Last", "format": "date"},

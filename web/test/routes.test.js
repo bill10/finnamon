@@ -65,6 +65,39 @@ test('names reach the CLI after a -- so they can never be options; a merchant se
   });
 });
 
+test('a budget\'s picks and a transaction\'s category reach the CLI as values, never options', async () => {
+  await withApp(async ({ base, post, calls }) => {
+    assert.equal((await post('/api/budget', { name: 'eating out', amount: 400, categories: ['Restaurant', ' FOOD_AND_DRINK_COFFEE '], merchants: ['-rf'] })).status, 200);
+    assert.deepEqual(calls.at(-1), ['budget', 'set', '--category=Restaurant', '--category=FOOD_AND_DRINK_COFFEE', '--merchant=-rf', '--', 'eating out', '400']);
+    for (const bad of [{ categories: 'x' }, { categories: [''] }, { merchants: [3] }, { merchants: ['x'.repeat(81)] }, { categories: Array(41).fill('x') }])
+      assert.equal((await post('/api/budget', { name: 'x', amount: 5, ...bad })).status, 400, JSON.stringify(bad));
+    assert.equal((await post('/api/tx/category', { transaction_id: 'import:abc', category: 'Groceries' })).status, 200);
+    assert.deepEqual(calls.at(-1), ['category', '--tx=import:abc', '--', 'Groceries']);
+    assert.equal((await post('/api/tx/category', { transaction_id: 'tx1', category: 'transfer', every: true })).status, 200);
+    assert.deepEqual(calls.at(-1), ['category', '--tx=tx1', '--every', '--', 'transfer']);
+    for (const bad of [{ transaction_id: 'a b', category: 'x' }, { transaction_id: 'tx1' }, { transaction_id: 'tx1', category: 'x'.repeat(81) }])
+      assert.equal((await post('/api/tx/category', bad)).status, 400, JSON.stringify(bad));
+    await fetch(`${base}/api/categories`);
+    assert.deepEqual(calls.at(-1), ['category', 'list', '--json']);
+    await fetch(`${base}/api/summary`);
+    assert.ok(calls.some(c => c[0] === 'budget' && c[1] === 'overall'), 'the Overall line counts a shared charge once');
+  });
+});
+
+// Value: protects=the dashboard summary still loads when `budget overall` fails (an older CLI), with overall null so the page
+// falls back to summing budgets; fails_when=the .catch on the overall call is removed; why_new=the picks test only checks the call is made; seam=none
+test('a CLI without budget overall still serves the summary, with overall null', async () => {
+  const cli = async (...args) => { if (args[0] === 'budget' && args[1] === 'overall') throw new Error('invalid choice: overall'); return args[0] === 'budget' ? [] : {}; };
+  const app = buildApp({ token: () => KEY, cli, exec: async () => '', allowHost: (h) => h.startsWith('127.0.0.1:') });
+  const srv = app.listen(0, '127.0.0.1');
+  await new Promise(r => srv.once('listening', r));
+  try {
+    const r = await fetch(`http://127.0.0.1:${srv.address().port}/api/summary`);
+    assert.equal(r.status, 200);
+    assert.equal((await r.json()).overall, null);
+  } finally { srv.close(); }
+});
+
 test('the board reaches the page as a list, whatever the file holds', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'finnamon-board-')), spec = join(dir, 'current.json');
   const app = buildApp({ token: () => KEY, cli: async () => ({}), allowHost: () => true, spec });

@@ -599,11 +599,12 @@ export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon',
 
   app.get('/api/summary', async (_req, res) => {
     try {
-      const [status, accounts, budgets, networth, alerts, resolved, properties, history] = await Promise.all([
+      const [status, accounts, budgets, networth, alerts, resolved, properties, history, overall] = await Promise.all([
         call('status'), call('account', 'list'), call('budget'), call('networth'), call('alerts', '--sent', '--open'), call('alerts', '--sent', '--resolved', '--limit', '20'),
-        call('property', 'list'), call('networth', '--history', '--months', '12').catch(() => [])]);
+        call('property', 'list'), call('networth', '--history', '--months', '12').catch(() => []),
+        call('budget', 'overall').catch(() => null)]);   // a charge two budgets share, once; and how many rows have no category
       const owners = await call('owner', 'list').catch(() => []);   // the Link account picker asks whose bank it is when there are several
-      res.json({ owners: Array.isArray(owners) ? owners : [], status, accounts, budgets, networth, alerts, resolved, properties, inbound, health: health(status, inbound), delta: delta(history), history: Array.isArray(history) ? history : [] });
+      res.json({ owners: Array.isArray(owners) ? owners : [], status, accounts, budgets, overall, networth, alerts, resolved, properties, inbound, health: health(status, inbound), delta: delta(history), history: Array.isArray(history) ? history : [] });
     } catch (e) { fail(res, e, 500); }
   });
   app.get('/api/chart', async (_req, res) => {   // the board: a list of specs; a pre-0.7.5 file holds one object
@@ -626,10 +627,23 @@ export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon',
     if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(req.params.id)) return res.status(400).json({ error: 'bad chart id' });
     try { await sh('chart', '--remove', req.params.id); res.json({ ok: true }); } catch (e) { fail(res, e); }
   });
+  // What a budget counts, when the page's picker sent it: categories (a code or a label) and merchants (a name its charges show).
+  // Each rides as --flag=value, so a value starting with - stays a value. Neither list sent keeps the budget's own.
+  const picks = (v) => v === undefined ? [] : Array.isArray(v) && v.length <= 40 && v.every(x => typeof x === 'string' && x.trim() && x.length <= MAX_NAME) ? v.map(x => x.trim()) : null;
   app.post('/api/budget', (req, res) => {
-    const n = name(req.body?.name), amount = Number(req.body?.amount);
+    const n = name(req.body?.name), amount = Number(req.body?.amount), cats = picks(req.body?.categories), merchants = picks(req.body?.merchants);
     if (!n || !(amount > 0)) return res.status(400).json({ error: `a budget needs a name of 1 to ${MAX_NAME} characters and a positive monthly amount` });
-    write(res, ['budget', 'set', '--', n, String(amount)]);
+    if (!cats || !merchants) return res.status(400).json({ error: `categories and merchants are lists of up to 40 names of 1 to ${MAX_NAME} characters` });
+    write(res, ['budget', 'set', ...cats.map(c => `--category=${c}`), ...merchants.map(m => `--merchant=${m}`), '--', n, String(amount)]);
+  });
+  // The pickers: every category as people read it, and the merchants the household has seen.
+  app.get('/api/categories', (_req, res) => call('category', 'list', '--json').then(out => res.json(out)).catch(e => fail(res, e, 500)));
+  // Change category on a transaction row: this charge only (a one-time edit), or every charge from its merchant (the rule).
+  app.post('/api/tx/category', (req, res) => {
+    const { transaction_id: id, category, every } = req.body ?? {};
+    if (!isId(id) || typeof category !== 'string' || !category.trim() || category.length > MAX_NAME) return res.status(400).json({ error: 'pick a transaction and a category' });
+    const scope = every === true ? ['--every'] : [];   // every charge from its merchant: the rule
+    write(res, ['category', `--tx=${id}`, ...scope, '--', category.trim()]);
   });
   app.delete('/api/budget/:name', (req, res) => name(req.params.name) ? write(res, ['budget', 'remove', '--', name(req.params.name)]) : res.status(400).json({ error: 'bad name' }));
   app.post('/api/property', (req, res) => {

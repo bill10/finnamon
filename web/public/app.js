@@ -332,8 +332,9 @@ function renderBudgets(s) {
   const bs = s.budgets, body = $('budgets-body');
   $('budgets-empty').style.display = bs.length || managing ? 'none' : '';
   $('budgets-toggle').textContent = managing ? 'Done' : bs.length ? 'Manage' : 'Add';
-  if (!bs.length) { body.innerHTML = ''; return; }
-  const spent = bs.reduce((a, b) => a + b.spent, 0), limit = bs.reduce((a, b) => a + b.monthly_limit, 0);
+  if (!bs.length) { body.innerHTML = managing ? '' : uncatLine(s); $('uncat-open')?.addEventListener('click', openUncategorized); return; }
+  // the CLI's overall counts a charge two budgets share once; the sum is the fallback for an older CLI
+  const spent = s.overall?.spent ?? bs.reduce((a, b) => a + b.spent, 0), limit = s.overall?.limit ?? bs.reduce((a, b) => a + b.monthly_limit, 0);
   const pct = limit ? Math.min(100, Math.round(100 * spent / limit)) : 0, left = limit - spent;
   const now = new Date(), day = bs[0].day || now.getDate(), togo = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate() - day;
   const note = left < 0 ? `${money(-left)} over with ${togo} days to go` : `${pct}% used, ${money(left)} left with ${togo} days to go`;
@@ -342,28 +343,107 @@ function renderBudgets(s) {
     `<div class="bar"><div class="fill ${left < 0 ? 'over' : pct > 80 ? 'warn' : ''}" style="width:${pct}%"></div></div><div class="note ${left < 0 ? 'over' : ''}">${note}</div></div>` +
     `<h3>${bs.length > 4 ? 'Top categories' : 'Categories'}</h3><div class="cats">` + top.map(b =>
       `<div class="cat"><span class="ic">${icon(catIcon(b))}</span><span class="name">${esc(b.name)}</span><span class="amt num">${money(b.spent)} / ${money(b.monthly_limit)}</span>` +
-      `<div class="bar"><div class="fill ${barState(b)}" style="width:${pctOf(b)}%"></div></div>${covers(b) ? `<span class="covers" title="${esc(covers(b))}">${esc(covers(b))}</span>` : ''}</div>`).join('') + '</div>';
+      `<div class="bar"><div class="fill ${barState(b)}" style="width:${pctOf(b)}%"></div></div>${covers(b) ? `<span class="covers" title="${esc(covers(b))}">${esc(covers(b))}</span>` : ''}</div>`).join('') + '</div>' +
+    uncatLine(s);
+  $('uncat-open')?.addEventListener('click', openUncategorized);
+}
+// Rows with no category (an import's, mostly) count toward no budget: say how many, and open them to categorize
+const uncatLine = (s) => s.overall?.uncategorized ? `<div class="uncat"><button class="link" id="uncat-open">${icon('tag')}Uncategorized (${s.overall.uncategorized.toLocaleString('en-US')})</button>` +
+  `<span class="note">counted in no budget until they have a category</span></div>` : '';
+async function openUncategorized() {
+  if (!board.some(e => e.usermeta?.finnamon?.chart === 'uncategorized')) await chartRequest('POST', '/api/chart', { name: 'uncategorized' });
+  await loadChart();
+  $('chart').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-let managing = false;
+const NEW = ' new';   // the add row's picks: a budget's name is trimmed, so none starts with a space
+let managing = false, picks = {};   // picks: a budget's categories and merchants as edited here, by name, until Save
+const sameList = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+const counts = (b) => [...(b.covers || []), ...(b.fixed ? ['fixed'] : [])].join(' · ') || 'nothing yet';
 function renderManage(s) {
   const m = $('budgets-manage');
   m.innerHTML = s.budgets.map(b =>
     `<div class="erow" data-name="${esc(b.name)}"><span class="name"><span class="ic">${icon(catIcon(b))}</span><span class="lbl">${esc(b.name)} <span class="pace num">${money(b.spent)} so far</span>` +
-    `${covers(b) ? `<span class="covers" title="${esc(covers(b))}">${esc(covers(b))}</span>` : ''}</span></span>` +
-    `<input class="num" value="${b.monthly_limit}" inputmode="decimal" aria-label="Monthly limit for ${esc(b.name)}"><button class="del" aria-label="Remove ${esc(b.name)}" data-del="${esc(b.name)}">${icon('trash')}</button></div>`).join('') +
-    `<div class="erow add"><input id="b-new-name" placeholder="New category, e.g. travel"><input id="b-new-amt" class="num" placeholder="$ per month" inputmode="decimal"><span></span></div>` +
+    `<button class="link pick" data-pick="${esc(b.name)}" aria-expanded="${picks[b.name] ? 'true' : 'false'}" title="Pick what this budget counts"><span class="covers">${esc(counts(b))}</span>${icon('pencil-simple')}</button></span></span>` +
+    `<input class="num" value="${b.monthly_limit}" inputmode="decimal" aria-label="Monthly limit for ${esc(b.name)}"><button class="del" aria-label="Remove ${esc(b.name)}" data-del="${esc(b.name)}">${icon('trash')}</button></div>` +
+    (picks[b.name] ? pickerHtml(b.name, picks[b.name]) : '')).join('') +
+    `<div class="erow add"><span class="name new"><input id="b-new-name" placeholder="New budget, e.g. travel" aria-label="New budget's name">` +
+    `<button class="link pick" data-pick="${NEW}" aria-expanded="${picks[NEW] ? 'true' : 'false'}" title="Pick what the new budget counts, when its name is not a category">${picks[NEW] ? 'counts:' : 'pick what it counts'}${icon('pencil-simple')}</button></span>` +
+    `<input id="b-new-amt" class="num" placeholder="$ per month" inputmode="decimal" aria-label="New budget's monthly limit"><span></span></div>` +
+    (picks[NEW] ? pickerHtml(NEW, picks[NEW]) : '') + `<datalist id="merchant-list">${(cats?.merchants || []).map(x => `<option value="${esc(x)}">`).join('')}</datalist>` +
     `<div class="eactions"><span class="err" id="b-err"></span><button class="quiet" id="b-cancel">Cancel</button><button class="primary" id="b-save">Save</button></div>`;
   wireEditor(m, {
     remove: (n) => ({ ask: `Remove the ${n} budget?`, url: `/api/budget/${encodeURIComponent(n)}` }),
     changes: () => [...m.querySelectorAll('.erow[data-name]')].map(row => {
-      const b = summary.budgets.find(x => x.name === row.dataset.name), v = amount(row.querySelector('input').value);
-      return v !== b.monthly_limit ? ['/api/budget', { name: b.name, amount: v }] : null;
+      const b = summary.budgets.find(x => x.name === row.dataset.name), v = amount(row.querySelector('input').value), p = picks[b.name];
+      const picked = p && !(sameList(p.categories, b.categories || []) && sameList(p.merchants, b.merchants || []));
+      if (picked && !p.categories.length && !p.merchants.length) throw new Error(`The ${b.name} budget needs at least one category or merchant.`);
+      return v !== b.monthly_limit || picked ? ['/api/budget', { name: b.name, amount: v, ...(picked ? { categories: p.categories, merchants: p.merchants } : {}) }] : null;
     }).filter(Boolean),
-    added: () => $('b-new-name').value.trim() ? ['/api/budget', { name: $('b-new-name').value.trim(), amount: amount($('b-new-amt').value) }] : null,
-    err: 'b-err', cancel: 'b-cancel', save: 'b-save', rerender: () => renderManage(summary), close: () => toggleManage(false),
+    added: () => {
+      const n = $('b-new-name').value.trim(), p = picks[NEW], picked = p && (p.categories.length || p.merchants.length);
+      if (!n) { if (picked) throw new Error('Name the new budget first.'); return null; }
+      if (summary.budgets.some(b => b.name === n.toLowerCase())) throw new Error(`There is already a ${n.toLowerCase()} budget: change it in its own row.`);   // budget set would replace it
+      return ['/api/budget', { name: $('b-new-name').value.trim(), amount: amount($('b-new-amt').value), ...(picked ? { categories: p.categories, merchants: p.merchants } : {}) }];
+    },
+    err: 'b-err', cancel: 'b-cancel', save: 'b-save', rerender: () => redrawManage(), close: () => toggleManage(false),
+  });
+  m.querySelectorAll('[data-pick]').forEach(btn => btn.addEventListener('click', async () => {
+    const n = btn.dataset.pick, b = summary.budgets.find(x => x.name === n);
+    if (picks[n]) delete picks[n];
+    else {
+      if (!await categories()) { $('b-err').textContent = 'The category list did not load; try again.'; return; }
+      picks[n] = n === NEW ? { categories: [], merchants: [] } : { categories: [...(b.categories || [])], merchants: [...(b.merchants || [])] };
+    }
+    redrawManage(n);
+  }));
+  m.querySelectorAll('.picker').forEach(el => {
+    const p = picks[el.dataset.for], redraw = () => redrawManage(el.dataset.for);
+    el.querySelectorAll('[data-unpick]').forEach(x => x.addEventListener('click', () => {
+      const [kind, v] = JSON.parse(x.dataset.unpick); p[kind] = p[kind].filter(y => y !== v); redraw();
+    }));
+    el.querySelector('select').addEventListener('change', (e) => { if (e.target.value && !p.categories.includes(e.target.value)) p.categories.push(e.target.value); redraw(); });
+    const add = () => { const v = el.querySelector('input').value.trim(); if (v && !p.merchants.some(y => y.toLowerCase() === v.toLowerCase())) p.merchants.push(v); redraw(); };
+    el.querySelector('.add-m').addEventListener('click', add);
+    el.querySelector('input').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
   });
 }
+// A picker change redraws the panel: what was typed (a limit, the new budget's name) and not yet saved stays.
+function redrawManage(focusPicker) {
+  const m = $('budgets-manage'), key = (i) => i.id ? `#${CSS.escape(i.id)}` : `.erow[data-name="${CSS.escape(i.closest('.erow').dataset.name)}"] input`;
+  const typed = [...m.querySelectorAll('.erow input')].map(i => [key(i), i.value]);   // a budget named "health" is its row, never the page's #health
+  renderManage(summary);
+  for (const [k, v] of typed) { const i = m.querySelector(k); if (i) i.value = v; }
+  if (focusPicker != null) m.querySelector(`.picker[data-for="${CSS.escape(focusPicker)}"] select`)?.focus();
+}
+// The picker under a budget's row: what it counts as chips, a category from the taxonomy, a merchant the household has seen.
+function pickerHtml(name, p) {
+  const label = name === NEW ? 'the new budget' : name;
+  const chip = (kind, v, text) => `<span class="chip">${esc(text)}<button data-unpick="${esc(JSON.stringify([kind, v]))}" aria-label="Stop counting ${esc(text)}">${icon('x')}</button></span>`;
+  return `<div class="picker" data-for="${esc(name)}">` +
+    `<div class="chipset">${p.categories.map(c => chip('categories', c, catLabel(c))).join('')}${p.merchants.map(x => chip('merchants', x, x)).join('')}` +
+    `${p.categories.length || p.merchants.length ? '' : '<span class="muted">Counts nothing: add a category or a merchant</span>'}</div>` +
+    `<div class="pickrow"><select aria-label="Add a category to ${esc(label)}">${categoryOptions('Add a category…')}</select>` +
+    `<span class="mpick"><input list="merchant-list" placeholder="Add a merchant" aria-label="Add a merchant to ${esc(label)}" maxlength="${MAX_NAME}"><button class="quiet add-m">Add</button></span></div></div>`;
+}
+
+// The taxonomy and the merchants seen, for the pickers (finnamon category list --json); fetched when a picker first opens.
+let cats = null;
+async function categories() {
+  if (cats) return cats;
+  const r = await api('GET', '/api/categories');
+  if (r.ok) cats = r;
+  return cats;
+}
+const catLabel = (code) => {
+  const c = cats?.categories.find(x => x.code === code);
+  if (!c) return code;
+  return c.code === c.primary ? `${c.label} (all)` : c.label;
+};
+// a primary first (all of it), then its parts: a native select, so a phone shows its own picker
+const categoryOptions = (placeholder) => `<option value="">${esc(placeholder)}</option>` + (cats?.categories || []).filter(c => c.code === c.primary).map(p =>
+  `<optgroup label="${esc(p.label)}"><option value="${esc(p.code)}">All of ${esc(p.label.toLowerCase())}</option>` +
+  cats.categories.filter(c => c.primary === p.code && c.code !== p.code).map(c => `<option value="${esc(c.code)}">${esc(c.label)}</option>`).join('') + '</optgroup>').join('');
 
 // One wiring for both edit panels: delete with a confirm, then Save posts every changed row and the new row. If a
 // write fails, what did land is refreshed and shown with the message, so a half-applied save is never invisible.
@@ -378,20 +458,28 @@ function wireEditor(el, o) {
   $(o.cancel).addEventListener('click', o.close);
   $(o.save).addEventListener('click', async () => {
     $(o.err).textContent = '';
-    const writes = o.changes(); const add = o.added(); if (add) writes.push(add);
+    let writes;
+    try { writes = o.changes(); const add = o.added(); if (add) writes.push(add); } catch (e) { $(o.err).textContent = e.message; return; }
+    const notes = [];   // what the CLI wants said: a name read as a category, or charges another budget counts too
     for (const [url, body] of writes) {
       const r = await api('POST', url, body);
       if (!r.ok) { await loadSummary(); o.rerender(); $(o.err).textContent = r.error; return; }
+      for (const k of ['guessed', 'warning']) if (r[k]) notes.push(`${r.name}: ${r[k]}.`);
     }
     await loadSummary(); o.close();
+    if (notes.length) toast(notes.join(' '), { kind: 'warn' });
   });
 }
+// An inline editor's Save sits at its bottom right, wherever scrolling leaves it, which is where the fixed chat button
+// is: while one is open the button steps aside (body.editing), and Done, Cancel or Save brings it back.
+const editing = () => document.body.classList.toggle('editing', managing || propsOpen);
 function toggleManage(on) {
-  managing = on;
+  managing = on; picks = {};
   $('budgets-manage').style.display = on ? 'block' : 'none';
   $('budgets-body').style.display = on ? 'none' : '';
   renderBudgets(summary);
   if (on) { renderManage(summary); $('b-new-name').focus(); }
+  editing();
 }
 $('budgets-toggle').addEventListener('click', () => { if (summary) toggleManage(!managing); });
 
@@ -414,7 +502,7 @@ function renderProps(s) {
     err: 'p-err', cancel: 'p-cancel', save: 'p-save', rerender: () => renderProps(summary), close: () => toggleProps(false),
   });
 }
-function toggleProps(on) { propsOpen = on; $('prop-pop').style.display = on ? '' : 'none'; if (on) { renderProps(summary); $('p-new-name').focus(); } }
+function toggleProps(on) { propsOpen = on; $('prop-pop').style.display = on ? '' : 'none'; if (on) { renderProps(summary); $('p-new-name').focus(); } editing(); }
 $('row-prop').addEventListener('click', () => { if (summary) toggleProps(!propsOpen); });
 $('row-prop').addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && summary) { e.preventDefault(); toggleProps(!propsOpen); } });
 
@@ -506,8 +594,12 @@ function renderImport(s) {
     if (r?.status === 401) return lock();   // a rotated key is not an outage
     if (!r || !r.ok) { toast(''); $('i-err').textContent = out.error || 'The page lost the server; reload to see where things stand.'; return; }
     if (!out.rows) { toast(''); $('i-err').textContent = 'No rows could be read, so nothing was imported.'; return; }
-    toast(`${plural(out.added ?? 0, 'new transaction')}${out.already ? `, ${out.already} already there` : ''}${out.skipped ? `, ${plural(out.skipped, 'row')} unreadable` : ''}${out.balance != null ? `, balance ${money(out.balance)}` : ''}`);
-    toggleImport(false); loadSummary();
+    const done = `${plural(out.added ?? 0, 'new transaction')}${out.already ? `, ${out.already} already there` : ''}${out.skipped ? `, ${plural(out.skipped, 'row')} unreadable` : ''}${out.balance != null ? `, balance ${money(out.balance)}` : ''}`;
+    toggleImport(false); loadSummary(); cats = null;   // the picker's merchants include the file's from now on
+    if (!out.uncategorized) return toast(done);
+    // a bank file has no categories: those rows count toward no budget until someone says what they are (never guessed here)
+    toast(`${done}. ${out.uncategorized} ${out.uncategorized === 1 ? 'has' : 'have'} no category, so no budget counts ${out.uncategorized === 1 ? 'it' : 'them'}: they're under Charts now; tap one to categorize it, or every charge from its merchant.`, { kind: 'warn' });
+    openUncategorized();
   });
 }
 function toggleImport(on) {
@@ -812,13 +904,19 @@ function tableNote(t, shown) {
   return shown < t.total || t.more ? `showing ${shown} of ${of}` : `${shown} row${shown === 1 ? '' : 's'}`;
 }
 const isTable = (s) => Array.isArray(s.table?.columns);
+const PEN = '<svg class="ic" aria-hidden="true"><use href="#i-regular-pencil-simple"/></svg>';
 function tableHtml(s, year) {   // a hand-edited entry of the wrong shape draws nothing rather than throwing out every panel
   const obj = (x) => x && typeof x === 'object';
   const cols = s.table.columns.filter(obj), rows = (Array.isArray(s.data?.values) ? s.data.values : []).filter(obj);
   const head = cols.map(c => `<th scope="col"${c.align === 'right' ? ' class="r"' : ''}>${esc(c.label)}</th>`).join('');
-  const body = rows.map(r => '<tr>' + cols.map(c => {
-    const x = tableCell(r[c.field], c.format, year), cls = [c.align === 'right' && 'r', x.out && 'out'].filter(Boolean).join(' ');
-    return `<td${cls ? ` class="${cls}"` : ''}${c.format === 'text' ? ` title="${esc(x.text)}"` : ''}>${esc(x.text)}</td>`;
+  // a row that carries its transaction_id can be recategorized: the whole row opens the picker (a phone's tap), and the
+  // category cell is its button for the keyboard
+  const tx = (r) => typeof r.transaction_id === 'string' && r.transaction_id;
+  const at = cols.some(c => c.field === 'category') ? 'category' : 'merchant';   // the cell that is the row's button
+  const body = rows.map(r => (tx(r) ? `<tr class="tx" data-tx="${esc(r.transaction_id)}">` : '<tr>') + cols.map(c => {
+    const x = tableCell(r[c.field], c.format, year), cls = [c.align === 'right' && 'r', x.out && 'out', tx(r) && c.field === 'category' && x.text === 'uncategorized' && 'none'].filter(Boolean).join(' ');
+    const text = tx(r) && c.field === at ? `<button class="recat" data-recat="${esc(r.transaction_id)}" aria-label="Change category${at === 'category' ? '' : ' of'}: ${esc(x.text)}">${esc(x.text)}${PEN}</button>` : esc(x.text);
+    return `<td${cls ? ` class="${cls}"` : ''}${c.format === 'text' ? ` title="${esc(x.text)}"` : ''}>${text}</td>`;
   }).join('') + '</tr>').join('');
   return `<div class="tbl-title">${esc(s.title)}</div><div class="tbl-wrap" tabindex="0" role="region" aria-label="${esc(s.title)}">`
     + `<table class="tbl num"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
@@ -864,8 +962,42 @@ document.querySelectorAll('[data-chart]').forEach(b => b.addEventListener('click
 }));
 $('chart-panel').addEventListener('click', (e) => {
   const x = e.target.closest('[data-remove]');
-  if (x) chartRequest('DELETE', `/api/chart/${encodeURIComponent(x.dataset.remove)}`);
+  if (x) return chartRequest('DELETE', `/api/chart/${encodeURIComponent(x.dataset.remove)}`);
+  const t = e.target.closest('tr.tx');
+  if (t) recategorize(t.dataset.tx);
 });
+
+// Change category on one transaction: this charge only (category --tx), or every charge from its merchant (the rule)
+async function recategorize(id) {
+  const row = board.flatMap(s => Array.isArray(s.data?.values) ? s.data.values : []).find(r => r?.transaction_id === id);
+  if (!row) return;
+  if (!await categories()) return toast('The category list did not load; try again.', { kind: 'warn' });
+  const d = $('recat-pop'), who = row.merchant || 'this merchant';
+  d.innerHTML = `<div class="phead"><h2>Change category</h2><button class="x" id="rc-x" type="button" aria-label="Close">${icon('x')}</button></div>` +
+    `<p class="what"><b>${esc(who)}</b> · ${esc(shortDate(row.date))} · ${esc(tableCell(row.amount, 'money').text)}</p>` +
+    `<p class="muted now">Now: ${esc(row.category || 'uncategorized')}</p>` +
+    `<select id="rc-cat" aria-label="New category">${categoryOptions('Pick a category…')}</select>` +
+    `<fieldset class="scope"><legend class="sr-only">Which charges</legend>` +
+    `<label><input type="radio" name="rc-scope" value="tx" checked> <span><b>Only this charge</b><small>a one-time edit; ${esc(who)}'s other charges keep theirs</small></span></label>` +
+    `<label><input type="radio" name="rc-scope" value="every"> <span><b>Every charge from ${esc(who)}</b><small>past and future: a rule</small></span></label></fieldset>` +
+    `<p class="muted tip">Money moved between your own accounts? Pick <b>Account transfer</b> under Transfer out (or in): it stops counting as spending.</p>` +
+    `<div class="eactions"><span class="err" id="rc-err"></span><button class="quiet" id="rc-cancel">Cancel</button><button class="primary" id="rc-save">Save</button></div>`;
+  // the native select only offers detailed categories here: a rule or an edit needs one
+  d.querySelectorAll('#rc-cat option').forEach(o => { if (o.value && cats.categories.find(c => c.code === o.value)?.primary === o.value) o.remove(); });
+  $('rc-x').onclick = $('rc-cancel').onclick = () => d.close();
+  $('rc-save').onclick = async () => {
+    const category = $('rc-cat').value, every = d.querySelector('[name=rc-scope]:checked').value === 'every';
+    if (!category) { $('rc-err').textContent = 'Pick a category first.'; return; }
+    $('rc-save').disabled = true;
+    const r = await api('POST', '/api/tx/category', { transaction_id: id, category, every });
+    $('rc-save').disabled = false;
+    if (!r.ok) { $('rc-err').textContent = r.error; return; }
+    d.close();
+    toast(every ? `${who}: ${catLabel(category)} on ${plural(r.charges ?? 1, 'charge')}${r.one_time_edits_kept ? ` (${r.one_time_edits_kept} edited one by one keep theirs)` : ''}` : `This ${who} charge is now ${catLabel(category)}`);
+    loadSummary(); loadChart();
+  };
+  d.showModal(); $('rc-cat').focus();
+}
 
 // ---- toast: link progress and errors, out of the layout's way -------------------------------------------------------
 
