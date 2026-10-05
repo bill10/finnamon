@@ -116,3 +116,11 @@ def test_its_normal_on_an_alert_no_rule_can_quiet_resolves_it(house, capsys, kin
     cli.main(["alerts", "--undo", str(a)])   # the dashboard's Undo
     assert json.loads(capsys.readouterr().out)["removed_rule"] is None
     assert house.execute("SELECT resolved_at FROM alerts WHERE id=?", (a,)).fetchone()[0] is None
+
+
+def test_a_kind_with_no_note_of_its_own_still_resolves_and_two_ids_with_an_alert_are_refused(house):
+    a = alert(house, "new_recurring", "recurring:s1", {"merchant": "Netflix", "stream_id": "s1"})
+    assert "next one still alerts" in budgets.normal(house, alert_id=a)["next"]
+    b = alert(house, "duplicate_charge", "dup:x:y", {"amount": 10})
+    with pytest.raises(ValueError, match="several merchant ids"):   # an undo removes the one rule it recorded
+        budgets.normal(house, "Amazon", alert_id=b)
