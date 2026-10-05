@@ -171,6 +171,44 @@ def denied_by(tool: str, inp: dict, deny: list[str]) -> str | None:
     return None
 
 
+# What no tool may touch, whoever approves it: the secrets, the database, the dashboard's key and session id, imported
+# statements, the bot's token and the two browser profiles holding bank and personal cookies. Read/Edit deny rules only
+# cover those tools; this covers Bash, Grep, Glob, an agent's prompt, anything. The bundle's PreToolUse hook (`finnamon
+# hook secret-guard`) runs it before any permission check, so it is never offered on the phone or the dashboard; the
+# Bash(*...*) deny rules in settings.json are the second layer.
+# ponytail: a string guard over the call's input, case-insensitive, for the forms a path is written in (~, $HOME, ${HOME},
+# /Users/<name>, /home/<name>, this box's own home); a path assembled at run time (variables, globs, base64) gets past it,
+# and the person approving still sees the whole command.
+PROTECTED = (r"\.finnamon/secrets\.toml", r"\.finnamon/finnamon\.db", r"\.finnamon/web-token", r"\.finnamon/intercom\.json",
+             r"\.finnamon/imports(?![\w.-])", r"\.finnamon/chrome(?![\w.-])", r"\.claude/channels/telegram/\.env",
+             r"\.agent-browser(?![\w.-])")
+_HOMES = r"(?:~|\$home|\$\{home\}|/users/[^/\s'\"]+|/home/[^/\s'\"]+)"
+_PROTECTED_RE = re.compile(rf"{_HOMES}/(?:{'|'.join(PROTECTED)})", re.IGNORECASE)
+# A Bash command that names the folder and, anywhere, one of its protected files (`cd ~/.finnamon && cat secrets.toml`).
+_IN_FOLDER_RE = re.compile(r"\.finnamon\b.*\b(?:secrets\.toml|finnamon\.db|web-token|intercom\.json|imports|chrome)\b"
+                           r"|\.claude/channels\b.*\.env\b", re.IGNORECASE | re.DOTALL)
+SAYS_ONLY = ("mcp__plugin_telegram_telegram__reply", "mcp__plugin_telegram_telegram__react")   # words to people, not file access
+
+
+def protected_path(tool: str, inp, home: str | None = None) -> str | None:
+    """The protected path this call's input names, or None."""
+    if tool in SAYS_ONLY:
+        return None
+    try:
+        text = json.dumps(inp, ensure_ascii=False) if not isinstance(inp, str) else inp
+    except (TypeError, ValueError):
+        text = str(inp)
+    text = text.replace("\\/", "/")
+    fhome = os.environ.get("FINNAMON_HOME", "").rstrip("/")
+    if fhome:   # a household kept somewhere else (FINNAMON_HOME) is the same folder
+        text = re.sub(re.escape(fhome) + r"(?=/|\b)", "~/.finnamon", text, flags=re.IGNORECASE)
+    home = (home or str(Path.home())).rstrip("/")
+    if home:   # this box's own home, whatever its root (/var/root, /private/...)
+        text = re.sub(re.escape(home) + r"(?=/)", "~", text, flags=re.IGNORECASE)
+    m = _PROTECTED_RE.search(text) or (tool == "Bash" and _IN_FOLDER_RE.search(str((inp or {}).get("command") or "") if isinstance(inp, dict) else ""))
+    return m.group(0) if m else None
+
+
 def _decision(behavior: str, message: str = "") -> dict:
     d = {"behavior": behavior, **({"message": message} if behavior == "deny" and message else {})}
     return {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": d}}
@@ -192,6 +230,8 @@ def ask(event: dict, conn: sqlite3.Connection, *, deny: list[str] | None = None,
         sleep=time.sleep, clock=time.monotonic, env=os.environ) -> dict | None:
     """The hook: a decision to print, or None (no decision; the dashboard's dialog stays)."""
     tool, inp = str(event.get("tool_name") or ""), event.get("tool_input") or {}
+    if (hit := protected_path(tool, inp)):   # the PreToolUse guard should have stopped it already; never ask about it
+        return _decision("deny", f"{hit} is off limits to every tool")
     rule = denied_by(tool, inp, _settings_deny(str(event.get("cwd") or ".")) if deny is None else deny)
     if rule:
         return _decision("deny", f"{rule} is on the deny list")

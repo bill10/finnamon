@@ -103,7 +103,15 @@
       "Read(//home/*/.agent-browser/**)",
       "Read(~/.finnamon/chrome/**)",
       "Read(//Users/*/.finnamon/chrome/**)",
-      "Read(//home/*/.finnamon/chrome/**)"
+      "Read(//home/*/.finnamon/chrome/**)",
+      "Bash(*.finnamon/secrets.toml*)",
+      "Bash(*.finnamon/finnamon.db*)",
+      "Bash(*.finnamon/web-token*)",
+      "Bash(*.finnamon/intercom.json*)",
+      "Bash(*.finnamon/imports*)",
+      "Bash(*.finnamon/chrome*)",
+      "Bash(*.claude/channels/telegram/.env*)",
+      "Bash(*.agent-browser*)"
     ]
   },
   "hooks": {
@@ -120,6 +128,15 @@
       }
     ],
     "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "finnamon hook secret-guard || exit 2"
+          }
+        ]
+      },
       {
         "matcher": "mcp__plugin_telegram_telegram__reply",
         "hooks": [

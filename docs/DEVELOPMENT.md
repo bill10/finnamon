@@ -86,6 +86,13 @@ the cwd of every household `claude`, and where Claude Code keeps their transcrip
   dashboard's session runs in ask mode (`--permission-mode default`, every mode but channel), so each
   fetch and search shows a dialog naming the site; `finnamon channel on` prints the hand-run channel
   command with the same flag. The tests in `tests/test_daemon_cli.py` and `web/test/session.test.js` pin the argv.
+- **Some paths are no one's to approve.** The secrets, the database (and its `-wal`/`-shm`), the dashboard key,
+  `intercom.json`, `imports/`, Finnamon's Chrome profile, the bot's `.env` and `~/.agent-browser` are refused for every
+  tool before any permission check: the bundle's first `PreToolUse` hook (`finnamon hook secret-guard`, matcher `*`, fails
+  closed) runs `approval.protected_path` over the call's whole input, case-insensitive, for the `~`, `$HOME`, `${HOME}`,
+  `/Users/<name>`, `/home/<name>`, this box's home and `FINNAMON_HOME` forms (and a Bash `cd` into `.finnamon` naming one).
+  `Bash(*<path>*)` deny rules are the second layer, and the permission hook denies them too. It is a string guard: a path
+  built at run time gets past it, and then the person approving still sees the whole command.
 - **A permission prompt reaches the phone only through the hook.** In session mode a Telegram turn has
   nobody at the dashboard, so the bundle's `PermissionRequest` hook (`finnamon hook permission`,
   `finnamon/approval.py`) also sends the request to the household chat with Allow / Deny. Claude Code shows

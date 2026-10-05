@@ -358,3 +358,65 @@ def test_a_question_for_the_screen_never_goes_to_the_phone(home, conn, tmp_path,
     seed(conn)
     path = transcript(tmp_path, "[telegram · bill] hi", "AskUserQuestion", {"questions": []})
     assert approval.ask(event(path, "AskUserQuestion", {"questions": []}), conn, deny=[], env={}) is None and tg == []
+
+
+# --- the protected paths: off limits to every tool, never offered for approval -------------------------------------
+
+PROTECTED_FILES = [".finnamon/secrets.toml", ".finnamon/finnamon.db", ".finnamon/finnamon.db-wal", ".finnamon/web-token",
+                   ".finnamon/intercom.json", ".finnamon/imports/2026-10-01T00-00-00-hsbc.csv", ".finnamon/chrome/Default/Cookies",
+                   ".claude/channels/telegram/.env", ".agent-browser/session.json"]
+HOME_FORMS = ["~/", "$HOME/", "${HOME}/", "/Users/bill/", "/home/jane/", "/USERS/Bill/", "~/"]
+
+
+@pytest.mark.parametrize("rel", PROTECTED_FILES)
+@pytest.mark.parametrize("prefix", HOME_FORMS)
+def test_every_form_of_every_protected_path_is_caught(rel, prefix):
+    path = prefix + (rel.upper() if prefix == HOME_FORMS[-1] else rel)   # the last form also shouts: case does not matter
+    for tool, inp in (("Bash", {"command": f"cat {path} | head"}), ("Read", {"file_path": path}), ("Grep", {"pattern": "token", "path": path}),
+                      ("Glob", {"pattern": path + "/**"}), ("Task", {"prompt": f"open {path} and summarise it"})):
+        assert approval.protected_path(tool, inp, home="/nonexistent"), (tool, path)
+
+
+def test_the_box_s_own_home_finnamon_home_and_a_cd_count_too(monkeypatch):
+    assert approval.protected_path("Read", {"file_path": "/var/root/.finnamon/web-token"}, home="/var/root")
+    monkeypatch.setenv("FINNAMON_HOME", "/srv/money")
+    assert approval.protected_path("Bash", {"command": "sqlite3 /srv/money/finnamon.db .dump"}, home="/nonexistent")
+    assert approval.protected_path("Bash", {"command": "cd ~/.finnamon && cat secrets.toml"}, home="/nonexistent")
+
+
+def test_what_stays_reachable():
+    for tool, inp in (("Bash", {"command": 'finnamon query "SELECT 1"'}), ("Bash", {"command": "ls ~/.finnamon/charts"}),
+                      ("Bash", {"command": 'finnamon import "HSBC Checking" ~/Downloads/hsbc.csv'}),
+                      ("Read", {"file_path": "~/.finnamon/assistant/CLAUDE.md"}), ("Bash", {"command": "agent-browser --session finnamon-import snapshot -i"}),
+                      ("mcp__plugin_telegram_telegram__reply", {"chat_id": 1, "text": "I can't read ~/.finnamon/secrets.toml"})):
+        assert approval.protected_path(tool, inp, home="/nonexistent") is None, inp
+
+
+def test_the_guard_hook_blocks_before_any_prompt(home, monkeypatch, capsys):
+    s = json.loads((assistant.BUNDLE / ".claude/settings.json").read_text())
+    first = s["hooks"]["PreToolUse"][0]
+    assert first["matcher"] == "*" and first["hooks"][0]["command"] == "finnamon hook secret-guard || exit 2", "every tool, fails closed"
+    def run(payload):
+        monkeypatch.setattr("sys.stdin", io.StringIO(payload))
+        try:
+            cli.main(["hook", "secret-guard"]); return 0
+        except SystemExit as e:
+            return e.code
+    assert run(json.dumps({"tool_name": "Bash", "tool_input": {"command": "cat $HOME/.finnamon/secrets.toml"}})) == 2
+    assert "off limits" in capsys.readouterr().err
+    assert run(json.dumps({"tool_name": "Bash", "tool_input": {"command": "finnamon alerts"}})) == 0
+    assert run("not json") == 2, "a guard that cannot read the call blocks it"
+
+
+def test_the_deny_list_names_them_for_bash_too():
+    deny = json.loads((assistant.BUNDLE / ".claude/settings.json").read_text())["permissions"]["deny"]
+    for rel in (".finnamon/secrets.toml", ".finnamon/finnamon.db", ".finnamon/web-token", ".finnamon/intercom.json", ".finnamon/imports",
+                ".finnamon/chrome", ".claude/channels/telegram/.env", ".agent-browser"):
+        assert f"Bash(*{rel}*)" in deny, rel
+
+
+def test_the_permission_hook_never_asks_about_a_protected_path(home, conn, tmp_path, tg):
+    seed(conn)
+    inp = {"command": "base64 ~/.finnamon/web-token"}
+    out = approval.ask(event(transcript(tmp_path, "[telegram · bill] hi", inp=inp), inp=inp), conn, deny=[], env={})
+    assert out["hookSpecificOutput"]["decision"]["behavior"] == "deny" and tg == [], "denied, and the phone never saw it"
