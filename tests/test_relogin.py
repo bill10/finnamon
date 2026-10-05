@@ -18,6 +18,7 @@ def env(home, conn, tg, monkeypatch):
     made = []
     monkeypatch.setattr(plaid_api, "link_token_create", lambda user_id, access_token=None, products=("transactions",), redirect_uri=None, hosted=True:
                         (made.append(access_token), {"link_token": f"lt{len(made)}", "hosted_link_url": f"https://hosted.plaid.com/{len(made)}", "expiration": "e"})[1])
+    monkeypatch.setattr(plaid_api, "link_token_get", lambda lt: {"link_sessions": []})   # opened by nobody yet; tests that need more say so
     conn.execute("UPDATE items SET status='ITEM_LOGIN_REQUIRED', last_error='login' WHERE item_id='item1'")
     return made
 
@@ -65,7 +66,7 @@ def test_the_tick_syncs_a_finished_relogin_at_once_resolves_its_alerts_and_says_
     assert link.check_updates(conn, now=T0 + 60) == [] and store.get_state(conn, "update_sessions")
     monkeypatch.setattr(plaid_api, "link_token_get", lambda lt: {"link_sessions": [{"started_at": "x"}]})  # logging in
     assert link.check_updates(conn, now=T0 + 120) == [] and not synced
-    monkeypatch.setattr(plaid_api, "link_token_get", lambda lt: {"link_sessions": [{"finished_at": "y", "results": {}}]})
+    monkeypatch.setattr(plaid_api, "link_token_get", lambda lt: {"link_sessions": [{"finished_at": "y", "results": {"item_add_results": [{"public_token": "p"}]}}]})
     held = run.lock()                                                                                      # a sync cycle is running
     try:
         assert link.check_updates(conn, now=T0 + 180) == [] and not synced
@@ -123,11 +124,19 @@ def test_closed_expired_and_forgotten_sessions_are_dropped_quietly(env, conn, tg
 def test_cli_web_prints_the_url_and_the_assistant_cannot_use_it(env, conn, tg, monkeypatch, capsys):
     cli.main(["link", "--update", "item1", "--web"])
     assert json.loads(capsys.readouterr().out)["url"] == "https://hosted.plaid.com/1" and not tg.sent
-    monkeypatch.setenv("FINNAMON_FROM_CLAUDE", "1")
-    with pytest.raises(SystemExit):
-        cli.main(["link", "--update", "item1", "--web"])
     with pytest.raises(SystemExit):
         cli.main(["link", "--update", "unknown", "--web"])
+    assert "no linked bank" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        cli.main(["link", "--web"])                                               # never the blocking add
+    assert "--web goes with --update" in capsys.readouterr().err
+    monkeypatch.setenv("FINNAMON_FROM_CLAUDE", "1")
+    monkeypatch.setattr(plaid_api, "link_token_create", lambda *a, **k: pytest.fail("the assistant never reaches the unlimited path"))
+    for argv in (["link", "--update", "item1", "--web"], ["link", "--update", "item1", "--web", "--telegram"]):   # the allow list's `--update * --telegram` matches the second
+        with pytest.raises(SystemExit):
+            cli.main(argv)
+        assert "from a Claude session" in capsys.readouterr().err
+    assert len(json.loads(store.get_state(conn, "update_sessions"))) == 1 and not tg.sent
 
 
 def test_the_page_gets_reconnect_and_its_own_words_and_telegram_keeps_the_reply_hint(env, conn, capsys):
@@ -143,3 +152,132 @@ def test_the_page_gets_reconnect_and_its_own_words_and_telegram_keeps_the_reply_
     shown = {r["kind"]: r for r in json.loads(capsys.readouterr().out)}
     assert shown["consent_expiring"]["reconnect"] == "item1" and "Reply" in shown["consent_expiring"]["text"]
     assert "reconnect" not in shown["duplicate_charge"] and "page_text" not in shown["duplicate_charge"]
+
+
+# Value: protects=a failed "<bank> is reconnected" chat message never stops the tick: every finished bank still syncs and goes good;
+# fails_when=the TelegramError guard in check_updates is removed or narrowed; why_new=no test fails the chat send after a reconnect; seam=none
+def test_a_failed_chat_message_still_reconnects_every_finished_bank(env, conn, tg, monkeypatch):
+    from finnamon import telegram
+    conn.execute("INSERT INTO items (item_id, institution, owner, status) VALUES ('item_2', 'Ally', 'bill', 'ITEM_LOGIN_REQUIRED')")
+    secrets.update(items={"item_2": "access-sandbox-z"})
+    link.start_update(conn, "item1", now=T0, to_chat=False)
+    link.start_update(conn, "item_2", now=T0, to_chat=False)
+    synced = []
+    monkeypatch.setattr(sync, "sync_item", lambda c_, item, token=None: synced.append(item) or {"item_id": item, "error": None})
+    monkeypatch.setattr(plaid_api, "link_token_get", lambda lt: {"link_sessions": [{"finished_at": "y", "results": {}}]})
+    tg.fail_with = telegram.TelegramError(502, "down")
+    assert [r["item_id"] for r in link.check_updates(conn, now=T0 + 60)] == ["item1", "item_2"] and synced == ["item1", "item_2"]
+    assert {r[0] for r in conn.execute("SELECT status FROM items WHERE item_id IN ('item1', 'item_2')")} == {"good"}
+    assert store.get_state(conn, "update_sessions") is None                     # not re-synced next tick
+
+
+# Value: protects=a bank unlinked while its re-login was open is dropped, never synced; fails_when=the missing-item guard is removed
+# (sync of a gone Item); why_new=check_updates tests always keep the item; seam=none
+def test_a_bank_unlinked_mid_relogin_is_dropped_without_a_sync(env, conn, tg, monkeypatch):
+    conn.execute("INSERT INTO items (item_id, institution, owner, status) VALUES ('item_3', 'Ally', 'bill', 'ITEM_LOGIN_REQUIRED')")
+    secrets.update(items={"item_3": "access-sandbox-z"})
+    link.start_update(conn, "item_3", now=T0, to_chat=False)
+    conn.execute("DELETE FROM items WHERE item_id='item_3'")                      # `link --remove` meanwhile
+    monkeypatch.setattr(sync, "sync_item", lambda *a, **k: pytest.fail("an unlinked bank is not synced"))
+    monkeypatch.setattr(plaid_api, "link_token_get", lambda lt: {"link_sessions": [{"finished_at": "y", "results": {}}]})
+    assert link.check_updates(conn, now=T0 + 60) == [] and store.get_state(conn, "update_sessions") is None and not tg.sent
+
+
+# Value: protects=a re-login check that throws never kills the daemon's sync loop; fails_when=check_relogins stops catching;
+# why_new=the tick test only runs a check_updates that works; seam=none
+def test_a_broken_relogin_check_never_stops_the_tick(conn, monkeypatch):
+    monkeypatch.setattr(link, "check_updates", lambda c_: (_ for _ in ()).throw(RuntimeError("db locked")))
+    daemon.Daemon(conn_factory=lambda: conn).check_relogins(conn)                 # logged, not raised
+
+
+# Value: protects=the dashboard's Reconnect gets a clean error (exit 1, message) on a Plaid failure, and no session is remembered;
+# fails_when=PlaidError leaves cmd_link's --web catch, or a session is stored before start() works; why_new=only the unknown-id die is tested; seam=none
+def test_cli_web_reports_a_plaid_error_and_remembers_no_session(env, conn, tg, monkeypatch, capsys):
+    monkeypatch.setattr(plaid_api, "link_token_create", lambda *a, **k: (_ for _ in ()).throw(PlaidError({"error_code": "INVALID_ACCESS_TOKEN"})))
+    with pytest.raises(SystemExit) as e:
+        cli.main(["link", "--update", "item1", "--web"])
+    assert e.value.code == 1 and "INVALID_ACCESS_TOKEN" in capsys.readouterr().err
+    assert store.get_state(conn, "update_sessions") is None and not tg.sent
+
+
+def _finished(proof):
+    return lambda lt: {"link_sessions": [{"finished_at": "y", "results": {"item_add_results": [{"public_token": "p"}]} if proof else {}}]}
+
+
+def test_a_page_closed_on_a_bank_that_still_syncs_proves_nothing(env, conn, tg, monkeypatch):
+    # an expiring connection: the bank is good and syncs either way, so a closed page must not silence the expiry warning
+    conn.execute("UPDATE items SET status='good', last_error=NULL WHERE item_id='item1'")
+    c = _alert(conn, "health:item1:consent:2026-11-01", "consent_expiring")
+    monkeypatch.setattr(sync, "sync_item", lambda *a, **k: pytest.fail("nothing to check: the bank never broke"))
+    link.start_update(conn, "item1", now=T0, to_chat=False)
+    monkeypatch.setattr(plaid_api, "link_token_get", _finished(False))
+    assert link.check_updates(conn, now=T0 + 60) == [] and store.get_state(conn, "update_sessions") is None and not tg.sent
+    assert conn.execute("SELECT resolved_at FROM alerts WHERE id=?", (c["id"],)).fetchone()[0] is None
+    monkeypatch.setattr(sync, "sync_item", lambda c_, item, token=None: {"item_id": item, "error": None})
+    link.start_update(conn, "item1", now=T0, to_chat=False)
+    monkeypatch.setattr(plaid_api, "link_token_get", _finished(True))            # logged in: the consent is renewed
+    link.check_updates(conn, now=T0 + 60)
+    assert conn.execute("SELECT resolution FROM alerts WHERE id=?", (c["id"],)).fetchone()[0] == "reconnected"
+    assert tg.sent[-1]["text"] == "Chase is reconnected."
+
+
+def test_a_closed_page_on_a_broken_bank_resolves_only_if_the_sync_works_and_never_the_consent_alert(env, conn, tg, monkeypatch):
+    a, c = _alert(conn), _alert(conn, "health:item1:consent:2026-11-01", "consent_expiring")
+    monkeypatch.setattr(sync, "sync_item", lambda c_, item, token=None: {"item_id": item, "error": None})
+    link.start_update(conn, "item1", now=T0, to_chat=False)
+    monkeypatch.setattr(plaid_api, "link_token_get", _finished(False))           # update-mode results can be thin: the sync decides
+    link.check_updates(conn, now=T0 + 60)
+    got = {r["id"]: r["resolution"] for r in conn.execute("SELECT id, resolution FROM alerts")}
+    assert (got[a["id"]], got[c["id"]]) == ("reconnected", None)
+
+
+def test_a_resolved_alert_frees_its_key_so_a_second_break_today_alerts_again(env, conn, tg, monkeypatch):
+    a = _alert(conn)
+    monkeypatch.setattr(sync, "sync_item", lambda c_, item, token=None: {"item_id": item, "error": None})
+    link.reconnect(conn, "item1")
+    assert conn.execute("SELECT key FROM alerts WHERE id=?", (a["id"],)).fetchone()[0] == f"health:item1:2026-10-04:reconnected:{a['id']}"
+    assert _alert(conn)["resolved_at"] is None                                    # the detector's INSERT OR IGNORE lands
+
+
+def test_a_sync_that_raises_keeps_the_session_for_the_next_tick(env, conn, tg, monkeypatch):
+    import sqlite3
+    link.start_update(conn, "item1", now=T0, to_chat=False)
+    monkeypatch.setattr(plaid_api, "link_token_get", _finished(True))
+    monkeypatch.setattr(sync, "sync_item", lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked")))
+    with pytest.raises(sqlite3.OperationalError):
+        link.check_updates(conn, now=T0 + 60)
+    assert store.get_state(conn, "update_sessions")
+
+
+def test_a_session_opened_while_the_tick_runs_survives_and_polling_needs_no_lock(env, conn, tg, monkeypatch):
+    link.start_update(conn, "item1", now=T0, to_chat=False)
+    held = run.lock()
+    try:
+        monkeypatch.setattr(plaid_api, "link_token_get", lambda lt: {"link_sessions": [{"started_at": "x"}]})
+        assert link.check_updates(conn, now=T0 + 60) == []                        # polled under a held lock: nothing over, nothing waits
+    finally:
+        held.close()
+    def sync_and_click(c_, item, token=None):                                     # the person clicks Reconnect again mid-sync
+        link.start_update(c_, "item1", now=T0 + link.UPDATE_REUSE_S, to_chat=False)
+        return {"item_id": item, "error": None}
+    monkeypatch.setattr(sync, "sync_item", sync_and_click)
+    monkeypatch.setattr(plaid_api, "link_token_get", lambda lt: _finished(True)(lt) if lt == "lt1" else {"link_sessions": []})
+    link.check_updates(conn, now=T0 + 60)
+    assert [x["link_token"] for x in json.loads(store.get_state(conn, "update_sessions"))] == ["lt2"]
+
+
+def test_reconnect_never_hands_back_a_session_that_is_already_over(env, conn, monkeypatch):
+    link.start_update(conn, "item1", now=T0, to_chat=False)
+    monkeypatch.setattr(plaid_api, "link_token_get", _finished(False))            # closed, and the tick has not run yet
+    assert link.start_update(conn, "item1", now=T0 + 5, to_chat=False)["url"] == "https://hosted.plaid.com/2"
+    def down(lt): raise PlaidError({"error_code": "INTERNAL_SERVER_ERROR"})
+    monkeypatch.setattr(plaid_api, "link_token_get", down)
+    assert link.start_update(conn, "item1", now=T0 + 10, to_chat=False)["reused"] is False   # unknown: a new one
+
+
+def test_the_page_and_notify_agree_on_which_statuses_need_a_login():
+    import re
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "web/public/app.js").read_text()
+    rx = re.compile(re.search(r"const RELOGIN = /(.+?)/;", src).group(1))
+    assert all(rx.search(s) for s in notify.RELOGIN) and not rx.search("INSTITUTION_DOWN") and not rx.search("good")

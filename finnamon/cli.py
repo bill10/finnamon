@@ -358,7 +358,7 @@ def cmd_link(a) -> None:
     _triage_read_only()
     conn = store.connect()
     if _from_claude():
-        if not (a.start or a.finish or (a.update and a.telegram)) or a.token is not None or a.public_token:   # a bare --token is the empty string
+        if not (a.start or a.finish or (a.update and a.telegram)) or a.token is not None or a.public_token or a.web:   # a bare --token is the empty string; --web is a person's click
             die("from a Claude session, `finnamon link --start` adds a bank and `link --update <item_id> --telegram` sends a re-login link to the chat; "
                 "--remove and the blocking form are for a person at a terminal")
         if a.owner and not conn.execute("SELECT 1 FROM owners WHERE owner=?", (a.owner,)).fetchone():
@@ -375,6 +375,8 @@ def cmd_link(a) -> None:
         except (PlaidError, runmod.Locked) as e:
             die(str(e))
         return
+    if a.web and not a.update:
+        die("--web goes with --update <item_id>")
     if a.update and a.web:   # the dashboard's Reconnect: a person's click, so the URL comes back to the page, not to the chat
         try:
             out(link.start_update(conn, a.update, to_chat=False))

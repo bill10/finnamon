@@ -36,9 +36,13 @@ def test_link_start_register_complete_announce(conn, tg, monkeypatch):
     synced = []
     monkeypatch.setattr(sync, "sync_item", lambda c, i, t=None: (synced.append((i, t)), {"item_id": i, "accounts": 1, "transactions": 2, "recurring": 0, "error": None})[1])
     monkeypatch.setattr(plaid_api, "public_token_exchange", lambda pt: pytest.fail("update mode must not exchange"))
+    conn.execute("INSERT INTO alerts (tier, kind, key, payload_json, as_of) VALUES ('rule','sync_health','health:item1:x','{}','2026-10-04')")
     r = link.complete(conn, "bill", "", update_item="item1")
     assert r["updated"] and synced == [("item1", None)]
     assert tuple(conn.execute("SELECT status, last_error FROM items WHERE item_id='item1'").fetchone()) == ("good", None)
+    # Value: protects=the blocking `link --update` resolves the bank's open health alerts 'reconnected' like the tick does;
+    # fails_when=complete() calls sync_item directly again; why_new=only check_updates asserted the resolution; seam=none
+    assert [tuple(r) for r in conn.execute("SELECT resolution, resolved_at IS NOT NULL FROM alerts WHERE key LIKE 'health:item1:%'")] == [("reconnected", 1)]
     # complete, new Item: exchange → register → first sync → mirror scan
     monkeypatch.setattr(plaid_api, "public_token_exchange", lambda pt: {"item_id": "item3", "access_token": "tok3"})
     monkeypatch.setattr(plaid_api, "item_get", lambda tok: {"item": {"institution_id": "ins_1", "institution_name": "Chase"}})

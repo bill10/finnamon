@@ -657,7 +657,7 @@ function renderAlerts(s) {
 const ALERT_DONE = { normal: 'Marked normal: alerts like it stay quiet.', dismiss: 'Dismissed: the next one still alerts.', undo: 'Undone: the alert is open again.' };
 // Reconnect: Plaid's re-login page for one bank, in a new tab. The tab opens on the click itself (one opened after an await
 // is a blocked popup to Safari) and goes to Plaid once the server has the link; the daemon syncs the bank within a minute of the login.
-const RELOGIN = /LOGIN|^PENDING_(EXPIRATION|DISCONNECT)$/;   // notify.RELOGIN, as the Accounts list reads items.status
+const RELOGIN = /^(ITEM_LOGIN_REQUIRED|PENDING_EXPIRATION|PENDING_DISCONNECT)$/;   // notify.RELOGIN exactly (tests/test_relogin.py holds the two together)
 async function reconnect(b) {
   const w = window.open('', '_blank');
   if (w) w.opener = null;
