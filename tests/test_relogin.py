@@ -323,3 +323,14 @@ def test_sync_item_says_when_its_error_is_plaids_outage(env, conn, monkeypatch):
 def test_a_session_with_a_non_numeric_time_reads_as_no_session(env, conn):
     store.set_state(conn, "update_sessions", json.dumps([{"item_id": "item1", "link_token": "lt", "url": "u", "started_at": "soon", "expires_at": 1}]))
     assert link.check_updates(conn) == [] and link.start_update(conn, "item1", now=T0, to_chat=False)["reused"] is False
+
+
+# Value: protects=a PENDING_EXPIRATION sync_health reads as a re-login, and a non-login error points at finnamon doctor with its error text;
+# fails_when=render checks only ITEM_LOGIN_REQUIRED again, or the error branch drops the doctor line or last_error; why_new=render of
+# these statuses was untested; seam=none
+def test_sync_health_text_for_pending_expiration_and_a_plain_error(env, conn):
+    assert "Chase needs a re-login" in notify.render(_alert(conn, "health:item1:pe", status="PENDING_EXPIRATION"))
+    conn.execute("INSERT INTO alerts (tier, kind, key, payload_json, as_of) VALUES ('rule','sync_health','health:item1:err',?,'2026-10-04')",
+                 (json.dumps({"item_id": "item1", "institution": "Chase", "status": "INSTITUTION_DOWN", "last_error": "bank is down."}),))
+    text = notify.render(conn.execute("SELECT * FROM alerts WHERE key='health:item1:err'").fetchone())
+    assert "Chase sync error:</b> INSTITUTION_DOWN. bank is down. Run <code>finnamon doctor</code>" in text and "re-login" not in text

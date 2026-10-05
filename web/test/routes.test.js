@@ -719,8 +719,11 @@ test('resolved alerts render apart, greyed, saying how; only an undoable one get
   const renderAlerts = new Function('$', 'esc', 'icon', 'when', `${src}; return renderAlerts;`)($, String, () => '', String);
   renderAlerts({ status: { items: [{}] }, alerts: [{ id: 7, kind: 'duplicate_charge', text: 'dup', sent_at: 't' }], resolved: [
     { id: 5, text: 'a', resolved_at: 'r', resolution: 'normal', suppression_id: 9 }, { id: 4, text: 'b', resolved_at: 'r', resolution: 'dismissed' },
-    { id: 3, text: 'c', resolved_at: 'r', resolution: null }] });
+    { id: 3, text: 'c', resolved_at: 'r', resolution: null }, { id: 2, text: 'd', resolved_at: 'r', resolution: 'recovered' },
+    { id: 1, text: 'e', resolved_at: 'r', resolution: 'unlinked' }] });
   const open = els['alerts-body'].innerHTML, done = els['alerts-resolved-body'].innerHTML;
+  // Value: protects=Finnamon's own closes say why (bank synced again / bank removed); fails_when=the recovered/unlinked labels are dropped; why_new=only normal/dismissed/null were rendered; seam=none
+  assert.ok(done.includes('Synced again · r') && done.includes('Bank removed · r'));
   assert.ok(open.includes('data-alert="7" data-act="normal"') && open.includes('data-alert="7" data-act="dismiss"'));
   assert.ok(!/onclick/i.test(open + done), 'no inline handlers: the CSP would refuse them');
   assert.ok(done.includes('It’s normal (rule 9)') && done.includes('Dismissed') && done.includes('Resolved · r'));

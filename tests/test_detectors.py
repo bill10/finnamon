@@ -621,3 +621,32 @@ def test_two_charges_at_a_new_merchant_on_one_day_are_one_first_merchant(conn):
         txn(conn, tid, "chk", "2026-09-17", 60, "BLUE BOTTLE", "Blue Bottle", "mch_bb", "FOOD_AND_DRINK", "FOOD_AND_DRINK_COFFEE")
     assert [a["transaction_id"] for a in alerts(conn)] == [] and len(run(conn, "first_merchant")) == 1
     assert len(run(conn, "new_category")) == 1
+
+
+# Value: protects=one bank's good sync closes only its own sync_health alert; fails_when=resolve_recovered drops the item_id match
+# (closes every open sync_health on any good sync); why_new=the existing close test has one bank; seam=none
+def test_sync_health_recovery_closes_only_the_bank_that_synced(conn):
+    seed(conn)
+    conn.execute("INSERT INTO items (item_id, institution, owner, status, first_synced_at, last_synced_at) "
+                 "SELECT 'item2', 'Ally', owner, 'good', first_synced_at, last_synced_at FROM items WHERE item_id='item1'")
+    conn.execute("UPDATE items SET last_synced_at='2026-09-18 12:00:00'")
+    assert len(detect.run(conn, AS_OF, only=["sync_health"])) == 2
+    conn.execute("UPDATE items SET last_synced_at='2026-09-19 07:00:00' WHERE item_id='item1'")   # item1 back; item2 still stale
+    detect.run(conn, "2026-09-19 08:00:00", only=["sync_health"])
+    got = {a["payload"]["item_id"]: a["resolution"] for a in alerts(conn, "sync_health")}
+    assert got == {"item1": "recovered", "item2": None}
+
+
+def test_mortgage_and_a_card_payment_with_history_raise_no_outlier(conn):
+    # Value: protects=candidates skip flow mortgage/card_payment even past amount_outlier's median; fails_when=the flow filter is dropped from amount_outlier; why_new=the card test has no 3-charge history; seam=none
+    seed(conn)
+    conn.execute("INSERT INTO accounts (account_id, item_id, name, type, subtype, mask, owner) VALUES ('mtg','item1','Home Loan','loan','mortgage','5555','bill')")
+    for i, d in enumerate(("2026-05-03", "2026-06-03", "2026-07-03", "2026-08-03")):
+        txn(conn, f"pay{i}", "chk", d, 100, "CHASE CREDIT CRD EPAY", None, None, "LOAN_PAYMENTS", "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT")
+    txn(conn, "pay", "chk", "2026-09-17", 2400, "CHASE CREDIT CRD EPAY", None, None, "LOAN_PAYMENTS", "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT")
+    txn(conn, "payin", "cc", "2026-09-17", -2400, "PAYMENT THANK YOU", None, None, "LOAN_PAYMENTS", "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT")
+    txn(conn, "mort", "chk", "2026-09-18", 3605.99, "LOAN SERVICER WEB PMT", None, None, "LOAN_PAYMENTS", "LOAN_PAYMENTS_MORTGAGE_PAYMENT")
+    assert [i for n in CANDIDATES for i in run(conn, n)] == []
+    txn(conn, "pay", "chk", "2026-09-17", 2400, "CHASE CREDIT CRD EPAY", None, None, "GENERAL_SERVICES", "GENERAL_SERVICES_OTHER_GENERAL_SERVICES")
+    conn.execute("DELETE FROM transactions WHERE transaction_id='payin'")
+    assert [a["kind"] for a in alerts(conn) if a["transaction_id"] == "pay"] == [] and run(conn, "amount_outlier")   # unpaired, it is an outlier again
