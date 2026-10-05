@@ -12,7 +12,8 @@ alerts. "Acme is normal" (`finnamon normal "Acme"`, no `--kind`) mutes Acme's ch
 changing or stopping; that takes `--kind anomaly:recurring_changed`. `finnamon normal --list` shows the rules with
 their ids, `finnamon normal --remove <id>` deletes one. "Fine this once" is `finnamon alerts --dismiss <id>`: resolved,
 no rule, the next one still alerts. `finnamon alerts --undo <id>` reopens either kind and removes only the rule that
-alert wrote.
+alert wrote. Each covers every alert on that alert's transaction: when two detectors fire on one charge, it is one alert
+(the other under `folded`), one message and one Dismiss.
 It can start adding a bank ("add my Chase account" → `finnamon link --start` gives you the Plaid link; you
 log in, the daemon finishes), and send a broken bank's re-login link to the chat (reply "fix Chase" to a re-login or
 expiring-connection alert → `finnamon link --update <item_id> --telegram`; when two logins share a bank the alert says
