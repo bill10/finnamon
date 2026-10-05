@@ -1733,7 +1733,7 @@ def cmd_category(a) -> None:
         _triage_read_only()
         out(budgets.category_clear(conn, a.merchant)); return
     if a.merchant is None:
-        die("usage: finnamon category <merchant> <category> | <merchant> --clear | --rules | --tx <transaction_id> <category> | list | resolve <text>")
+        die("usage: finnamon category <merchant> <category> | <merchant> --clear | --rules | --uncategorized | --tx <transaction_id> <category> [--every] | list [--json] | resolve <text>")
     if a.merchant == "list":
         if a.json:   # the dashboard's pickers: every category as people read it, and the merchants the household has seen
             out({"categories": [{"code": c, "label": taxonomy.label(c), "primary": p} for p, ds in taxonomy.DETAILED.items() for c in [p] + [f"{p}_{d}" for d in ds]],

@@ -169,9 +169,12 @@ RECURRING = ("(t.flow = 'mortgage' OR EXISTS (SELECT 1 FROM recurring r WHERE r.
              "AND (abs(abs(t.amount) - r.avg_amount) <= 0.25 * abs(r.avg_amount) OR abs(abs(t.amount) - r.last_amount) <= 0.25 * abs(r.last_amount))))")
 
 
-# Any active budget's selectors: the Overall line counts a charge two budgets share once.
+# Any active budget's selectors: the Overall line counts a charge two budgets share once. Built from MATCH's own text, so
+# a reworded MATCH must keep this scope clause (the assert says so at import, not as a silently double-counting Overall).
+assert "s.budget_id = :bid" in MATCH
 ANY_BUDGET = MATCH.replace("s.budget_id = :bid", "s.budget_id IN (SELECT id FROM budgets WHERE active = 1)")
-UNCATEGORIZED = "t.category IS NULL AND t.pending = 0 AND t.flow <> 'skipped'"
+UNCATEGORIZED = "category IS NULL AND pending = 0 AND flow <> 'skipped'"   # the Budgets card's count and charts' uncategorized table: one rule
+UNCATEGORIZED_SHOWN = 20   # merchants, and ids per merchant, in a reply; the count is always the whole
 
 
 def overall(conn: sqlite3.Connection, as_of: str | None = None) -> dict:
@@ -181,17 +184,21 @@ def overall(conn: sqlite3.Connection, as_of: str | None = None) -> dict:
     spent = conn.execute(f"SELECT COALESCE(SUM(amount),0) FROM tx_now t WHERE pending=0 AND date >= date(:as_of, 'start of month') AND date <= date(:as_of) "
                          f"AND {SPEND} AND {ANY_BUDGET}", {"as_of": as_of}).fetchone()[0]
     limit = conn.execute("SELECT COALESCE(SUM(monthly_limit),0) FROM budgets WHERE active=1").fetchone()[0]
-    n = conn.execute(f"SELECT count(*) FROM tx_now t WHERE {UNCATEGORIZED}").fetchone()[0]
+    n = conn.execute(f"SELECT count(*) FROM tx_now WHERE {UNCATEGORIZED}").fetchone()[0]
     return {"spent": round(float(spent), 2), "limit": round(float(limit), 2), "uncategorized": n}
 
 
 def uncategorized(conn: sqlite3.Connection, transaction_ids: list[str] | None = None) -> dict:
     """Transactions with no category, by merchant (one rule each covers them all) with their ids (for one charge at a time)."""
-    where = UNCATEGORIZED + (f" AND t.transaction_id IN ({','.join('?' * len(transaction_ids))})" if transaction_ids is not None else "")
-    rows = conn.execute(f"SELECT t.display, count(*) n, round(sum(t.amount), 2) total, group_concat(t.transaction_id) ids FROM tx_now t WHERE {where} "
-                        "GROUP BY t.canonical ORDER BY n DESC, t.display", transaction_ids or []).fetchall() if transaction_ids != [] else []
+    if transaction_ids == []:
+        return {"uncategorized": 0, "merchants": []}
+    # the ids as one JSON parameter: an import of years of rows never meets SQLite's limit on bound variables
+    where, args = (UNCATEGORIZED, ()) if transaction_ids is None else (UNCATEGORIZED + " AND transaction_id IN (SELECT value FROM json_each(?))", (json.dumps(transaction_ids),))
+    rows = conn.execute(f"SELECT display, count(*) n, round(sum(amount), 2) total, group_concat(transaction_id) ids FROM tx_now WHERE {where} "
+                        "GROUP BY canonical ORDER BY n DESC, display", args).fetchall()
     return {"uncategorized": sum(r["n"] for r in rows),
-            "merchants": [{"merchant": r["display"], "charges": r["n"], "total": r["total"], "transaction_ids": r["ids"].split(",")[:20]} for r in rows]}
+            "merchants": [{"merchant": r["display"], "charges": r["n"], "total": r["total"], "transaction_ids": r["ids"].split(",")[:UNCATEGORIZED_SHOWN]}
+                          for r in rows][:UNCATEGORIZED_SHOWN]}
 
 
 def month_to_date(conn: sqlite3.Connection, budget_id: int, as_of: str) -> tuple[float, float]:

@@ -299,7 +299,7 @@ def table_preset(name: str, arg: str | None = None, months: int = 12) -> dict:
         sql = TX_SELECT + f"WHERE flow NOT IN ('transfer', 'card_payment', 'skipped') AND abs(amount) >= {over} AND date >= date('now', '-{int(months)} months') ORDER BY date DESC"
     elif name == "uncategorized":   # an import's rows, mostly: no category, so no budget counts them
         title, cols = "Uncategorized transactions", [c for c in TX_COLUMNS if c["field"] != "category"]   # every row would say "uncategorized"
-        sql = TX_SELECT + "WHERE category IS NULL AND pending = 0 AND flow <> 'skipped' ORDER BY date DESC, transaction_id"
+        sql = TX_SELECT + f"WHERE {budgets.UNCATEGORIZED} ORDER BY date DESC, transaction_id"
     elif name == "recurring":
         title = "Recurring charges"
         cols = [{"field": "merchant", "label": "Merchant"}, {"field": "frequency", "label": "Every"}, {"field": "last_date", "label": "Last", "format": "date"},

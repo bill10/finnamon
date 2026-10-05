@@ -1,5 +1,6 @@
 """Plaid's personal-finance-category taxonomy plus a small synonym table. Deterministic name
-resolution: exact code → synonym → token match on Plaid's names → (ambiguous) list to choose from.
+resolution: exact code → EXACT phrase → a category's own label → synonym → a group name (refused, its members the
+candidates) → token match on Plaid's names → (ambiguous or none) candidates to choose from.
 No model here, on purpose: a wrong budget category silently miscounts for months."""
 from __future__ import annotations
 

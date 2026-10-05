@@ -377,7 +377,7 @@ function renderManage(s) {
       return v !== b.monthly_limit || picked ? ['/api/budget', { name: b.name, amount: v, ...(picked ? { categories: p.categories, merchants: p.merchants } : {}) }] : null;
     }).filter(Boolean),
     added: () => $('b-new-name').value.trim() ? ['/api/budget', { name: $('b-new-name').value.trim(), amount: amount($('b-new-amt').value) }] : null,
-    err: 'b-err', cancel: 'b-cancel', save: 'b-save', rerender: () => renderManage(summary), close: () => toggleManage(false), saved: () => { picks = {}; },
+    err: 'b-err', cancel: 'b-cancel', save: 'b-save', rerender: () => renderManage(summary), close: () => toggleManage(false),
   });
   m.querySelectorAll('[data-pick]').forEach(btn => btn.addEventListener('click', async () => {
     const n = btn.dataset.pick, b = summary.budgets.find(x => x.name === n);
@@ -410,8 +410,8 @@ function pickerHtml(name, p) {
 
 // The taxonomy and the merchants seen, for the pickers (finnamon category list --json); fetched when a picker first opens.
 let cats = null;
-async function categories(fresh = false) {
-  if (cats && !fresh) return cats;
+async function categories() {
+  if (cats) return cats;
   const r = await api('GET', '/api/categories');
   if (r.ok) cats = r;
   return cats;
@@ -447,7 +447,6 @@ function wireEditor(el, o) {
       if (!r.ok) { await loadSummary(); o.rerender(); $(o.err).textContent = r.error; return; }
       for (const k of ['guessed', 'warning']) if (r[k]) notes.push(`${r.name}: ${r[k]}.`);
     }
-    o.saved?.();
     await loadSummary(); o.close();
     if (notes.length) toast(notes.join(' '), { kind: 'warn' });
   });
@@ -573,7 +572,7 @@ function renderImport(s) {
     if (!r || !r.ok) { toast(''); $('i-err').textContent = out.error || 'The page lost the server; reload to see where things stand.'; return; }
     if (!out.rows) { toast(''); $('i-err').textContent = 'No rows could be read, so nothing was imported.'; return; }
     const done = `${plural(out.added ?? 0, 'new transaction')}${out.already ? `, ${out.already} already there` : ''}${out.skipped ? `, ${plural(out.skipped, 'row')} unreadable` : ''}${out.balance != null ? `, balance ${money(out.balance)}` : ''}`;
-    toggleImport(false); loadSummary();
+    toggleImport(false); loadSummary(); cats = null;   // the picker's merchants include the file's from now on
     if (!out.uncategorized) return toast(done);
     // a bank file has no categories: those rows count toward no budget until someone says what they are (never guessed here)
     toast(`${done}. ${out.uncategorized} ${out.uncategorized === 1 ? 'has' : 'have'} no category, so no budget counts ${out.uncategorized === 1 ? 'it' : 'them'}: they're under Charts now; tap one to categorize it, or every charge from its merchant.`, { kind: 'warn' });

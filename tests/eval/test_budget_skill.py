@@ -133,3 +133,23 @@ def test_one_charge_is_a_one_time_edit_and_always_is_the_merchant_rule(fixture_h
     run_claude("Actually, Costco is always groceries for us, every charge. Make that the rule; don't ask me anything.", env)
     assert [tuple(r) for r in conn.execute("SELECT canonical, pfc_detailed FROM category_override")] == [("mch_costco", "FOOD_AND_DRINK_GROCERIES")]
     assert [tuple(r) for r in conn.execute("SELECT transaction_id FROM tx_category_override")] == [("c8",)], "the rule leaves one-time edits alone"
+
+
+def test_a_budget_name_that_is_no_category_is_asked_about_not_guessed(fixture_home):
+    """The 10/4 QA: "subscriptions" used to land on ENTERTAINMENT without a word. budget set now refuses a name that is
+    no category; the assistant must ask what it should count (or name merchants it found), never write a budget that
+    counts some unrelated category."""
+    env = {"FINNAMON_HOME": str(fixture_home)}
+    out = run_claude("Set a subscriptions budget of 50 a month.", env)
+    conn = store.connect()
+    rows = [tuple(r) for r in conn.execute("SELECT b.name, s.kind, s.value FROM budgets b JOIN budget_selectors s ON s.budget_id=b.id WHERE b.active=1")]
+    assert not any(kind == "category" and value.startswith("ENTERTAINMENT") for _, kind, value in rows), rows
+    assert rows == [] or all(kind == "merchant" for _, kind, _ in rows), f"guessed a category: {rows}; result was: {out.get('result', '')[:500]}"
+
+
+def test_an_alias_is_listed_then_removed_by_its_name(fixture_home):
+    env = {"FINNAMON_HOME": str(fixture_home)}
+    conn = store.connect()
+    conn.execute("INSERT INTO merchant_alias (name, canonical) VALUES ('COSTCO WHSE', 'the big box store')")
+    out = run_claude("Undo the alias that renamed Costco to 'the big box store'. Don't ask me anything.", env)
+    assert conn.execute("SELECT count(*) FROM merchant_alias").fetchone()[0] == 0, f"alias still there; result was: {out.get('result', '')[:500]}"

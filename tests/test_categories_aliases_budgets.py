@@ -59,6 +59,8 @@ def test_overlapping_budgets_warn_and_overall_counts_each_charge_once(conn):
     assert o["spent"] == 160 and o["limit"] == 950 and o["uncategorized"] == 0   # Chipotle is in both, counted once
     assert sum(b["spent"] for b in budgets.budget_list(conn, AS_OF)) == 220   # what the old Overall added up
     # the same category before any charge is an overlap too
+    budgets.budget_remove(conn, "eating")   # a removed budget leaves Overall: its limit and its charges
+    assert budgets.overall(conn, AS_OF) == {"spent": 60, "limit": 400, "uncategorized": 0}
     budgets.budget_set(conn, "travel", 100)
     assert budgets.budget_set(conn, "trips", 100, ["TRAVEL_FLIGHTS"])["overlaps"] == [{"budget": "travel", "charges": 0}]
 
@@ -154,7 +156,7 @@ def test_new_reads_leave_the_board_alone_and_misuse_is_refused(home, conn, monke
     seed(conn)
     calls = []
     monkeypatch.setattr(charts, "refresh", lambda c=None: calls.append(1) or [])
-    for argv in (["budget", "overall"], ["alias", "--list"], ["category", "--uncategorized"], ["category", "list", "--json"]):
+    for argv in (["budget", "overall"], ["alias", "--list"], ["category", "--uncategorized"], ["category", "--rules"], ["category", "list", "--json"]):
         run_cli(capsys, *argv)
     assert calls == [], "reads do not refresh the board"
     for argv in (["category", "--tx", "t1", "--clear", "--every"], ["category", "costco", "groceries", "--every"],
@@ -170,3 +172,21 @@ def test_new_reads_leave_the_board_alone_and_misuse_is_refused(home, conn, monke
 def test_threshold_with_no_accounts_says_there_are_none(conn):
     with pytest.raises(ValueError, match="matches no account; there are no accounts yet"):
         budgets.threshold_set(conn, "Checking", 500)
+
+
+def test_a_shared_label_stays_ambiguous_and_is_named_by_its_code():
+    # Value: protects "Savings" never silently resolving to one of its two codes; a refusal names such a category so it can be typed back
+    from finnamon import taxonomy
+    code, cands = taxonomy.resolve("Savings")
+    assert code is None and {"TRANSFER_IN_SAVINGS", "TRANSFER_OUT_SAVINGS"} <= set(cands)
+    assert budgets._cat_name("TRANSFER_IN_SAVINGS") == "TRANSFER_IN_SAVINGS" and budgets._cat_name("FOOD_AND_DRINK_GROCERIES") == '"Groceries"'
+
+
+def test_a_big_import_reports_uncategorized_with_capped_lists(conn):
+    # Value: protects the summary of an import larger than SQLite's bound-variable limit, and the caps on what it lists
+    seed(conn)
+    acct = imports.add_account(conn, "Everyday", "HSBC", "checking")
+    csv = "Date,Description,Amount\n" + "".join(f"2026-0{1 + i % 9}-{1 + i % 28:02d},SHOP {i % 40},-{i + 1}.00\n" for i in range(1500))
+    r = imports.apply(conn, acct["account_id"], imports.parse(csv))
+    assert r["uncategorized"] == r["added"] == 1500 and len(r["uncategorized_merchants"]) == budgets.UNCATEGORIZED_SHOWN
+    assert all(len(m["transaction_ids"]) <= budgets.UNCATEGORIZED_SHOWN for m in r["uncategorized_merchants"])

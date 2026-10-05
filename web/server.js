@@ -599,11 +599,11 @@ export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon',
 
   app.get('/api/summary', async (_req, res) => {
     try {
-      const [status, accounts, budgets, networth, alerts, resolved, properties, history] = await Promise.all([
+      const [status, accounts, budgets, networth, alerts, resolved, properties, history, overall] = await Promise.all([
         call('status'), call('account', 'list'), call('budget'), call('networth'), call('alerts', '--sent', '--open'), call('alerts', '--sent', '--resolved', '--limit', '20'),
-        call('property', 'list'), call('networth', '--history', '--months', '12').catch(() => [])]);
+        call('property', 'list'), call('networth', '--history', '--months', '12').catch(() => []),
+        call('budget', 'overall').catch(() => null)]);   // a charge two budgets share, once; and how many rows have no category
       const owners = await call('owner', 'list').catch(() => []);   // the Link account picker asks whose bank it is when there are several
-      const overall = await call('budget', 'overall').catch(() => null);   // a charge two budgets share, once; and how many rows have no category
       res.json({ owners: Array.isArray(owners) ? owners : [], status, accounts, budgets, overall, networth, alerts, resolved, properties, inbound, health: health(status, inbound), delta: delta(history), history: Array.isArray(history) ? history : [] });
     } catch (e) { fail(res, e, 500); }
   });

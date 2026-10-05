@@ -235,7 +235,7 @@ def apply(conn: sqlite3.Connection, account_id: str, parsed: dict, flip: bool = 
     unc = budgets.uncategorized(conn, [x[0] for x in new])
     summary["uncategorized"] = unc["uncategorized"]
     if unc["uncategorized"]:
-        summary["uncategorized_merchants"] = unc["merchants"][:20]
+        summary["uncategorized_merchants"] = unc["merchants"]   # the first budgets.UNCATEGORIZED_SHOWN
         summary["next"] = (f"{unc['uncategorized']} of the new rows have no category, so they count toward no budget (and a transfer reads as spending). "
                            "Categorize them: finnamon category \"<merchant>\" <category> (a rule, every charge of that merchant; \"transfer\" for money moved "
                            "between your own accounts) or finnamon category --tx <transaction_id> <category> (one charge)")

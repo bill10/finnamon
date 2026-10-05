@@ -77,7 +77,8 @@ finnamon chart --id dining-monthly --sql "SELECT strftime('%Y-%m',date) ym, roun
 - Quick presets, each added or updated under its own name as id: `finnamon chart --spec <name> [arg]
   [--months N]` for budgets, spend_by_category, balance_history, merchant_history <merchant>,
   monthly_in_out, and the tables recent_transactions (last 30 days), large_transactions [amount, default
-  500] and recurring. Anything else is a spec.
+  500], recurring and uncategorized (rows with no category; every transaction table's rows open Change category on the
+  dashboard). Anything else is a spec.
 
 ### Tables on the dashboard
 
