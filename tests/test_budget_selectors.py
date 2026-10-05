@@ -36,6 +36,9 @@ def test_mortgage_budget_counts_the_checking_payment_once(conn):
     txn(conn, "loan2", "mtg", "2026-10-01", -3200, "PAYMENT RECEIVED", None, None, "LOAN_PAYMENTS", "LOAN_PAYMENTS_MORTGAGE_PAYMENT")
     assert budgets.budget_list(conn, "2026-10-05 12:00:00")[0]["spent"] == 3200
     assert pace_alerts(conn, "2026-10-05 12:00:00")[-1]["key"] == "budget:1:2026-10:over"
+    budgets.budget_set(conn, "savings", 100, "TRANSFER_OUT")                  # a transfer-category budget never gains the mortgage
+    assert [b["spent"] for b in budgets.budget_list(conn, "2026-10-05 12:00:00") if b["name"] == "savings"] == [0]
+    budgets.budget_remove(conn, "savings"); conn.execute("DELETE FROM alerts")
     # not fixed, no Plaid stream: the mortgage still counts once and is never projected (3200 * 31/10 would alert)
     budgets.budget_set(conn, "mortgage", 3300, fixed=False)
     b = budgets.budget_list(conn, "2026-10-10 12:00:00")[0]

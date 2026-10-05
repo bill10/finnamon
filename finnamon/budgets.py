@@ -64,7 +64,7 @@ def budget_set(conn: sqlite3.Connection, name: str, amount: float, categories: l
             conn.executemany("INSERT OR IGNORE INTO budget_selectors (budget_id, kind, value, label) VALUES (?,?,?,?)", [(bid, *s) for s in sel])
     out = next(b for b in _budgets(conn, "WHERE id=?", (bid,)))
     if merchants:
-        out["matches"] = {label: conn.execute(f"SELECT count(*) FROM tx_now t WHERE {SPEND} AND {MERCHANT}", {"v": v, "l": label}).fetchone()[0]
+        out["matches"] = {label: conn.execute(f"SELECT count(*) FROM tx_now t WHERE pending=0 AND {SPEND} AND {MERCHANT}", {"v": v, "l": label}).fetchone()[0]
                           for kind, v, label in sel if kind == "merchant"}
     return out
 
@@ -103,11 +103,11 @@ def budget_list(conn: sqlite3.Connection, as_of: str | None = None) -> list[dict
 # not money in. The mortgage counts, once: its checking-side payment is 'mortgage', the loan account's mirror 'skipped'.
 SPEND = "flow IN ('expense','refund','mortgage')"
 # KEEP IN STEP WITH detectors/rules/budget_pace.sql. A budget counts a transaction any of its selectors matches, once.
-# A payment paired with the mortgage loan is a mortgage whatever Plaid filed it under (often a transfer). A merchant is
+# A payment paired with the mortgage loan is a mortgage whatever Plaid filed it under (often a transfer), and only a mortgage. A merchant is
 # its canonical (canonical_for) or the name as typed, either one case-insensitively against canonical or `display`: an
 # alias added later (the raw bank name stays a candidate), or a charge Plaid sent without the entity id, still matches.
 MERCHANT = "(lower(:v) IN (lower(t.canonical), lower(t.display), lower(t.name)) OR lower(:l) IN (lower(t.canonical), lower(t.display), lower(t.name)))"
-MATCH = ("EXISTS (SELECT 1 FROM budget_selectors s WHERE s.budget_id = :bid AND ((s.kind = 'category' AND (s.value IN (t.category, t.category_primary) "
+MATCH = ("EXISTS (SELECT 1 FROM budget_selectors s WHERE s.budget_id = :bid AND ((s.kind = 'category' AND ((t.flow <> 'mortgage' AND s.value IN (t.category, t.category_primary)) "
          "OR (t.flow = 'mortgage' AND s.value IN ('LOAN_PAYMENTS_MORTGAGE_PAYMENT', 'LOAN_PAYMENTS')))) "
          "OR (s.kind = 'merchant' AND " + MERCHANT.replace(":v", "s.value").replace(":l", "COALESCE(s.label, s.value)") + ")))")
 # The mortgage (often filed as a transfer, with no stream to match), or a charge of one of Plaid's live recurring
