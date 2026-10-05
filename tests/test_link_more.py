@@ -120,7 +120,10 @@ def test_link_remove_unlinks_mirrors_and_drops_all_account_rows(home, conn, monk
     conn.execute("INSERT INTO settings (account_id, key, value) VALUES ('*','low_balance_threshold','500')")
     conn.execute("INSERT INTO suppressions (kind, canonical, account_id) VALUES ('x','Costco','chk')")
     conn.execute("INSERT INTO suppressions (kind, canonical, account_id) VALUES ('x','Netflix',NULL)")
+    txn(conn, "t1", "chk", "2026-09-05", 10, "COSTCO")
+    conn.execute("INSERT INTO tx_category_override (transaction_id, pfc_primary, pfc_detailed) VALUES ('t1','FOOD_AND_DRINK','FOOD_AND_DRINK_GROCERIES')")
     link.remove(conn, "item1")
+    assert conn.execute("SELECT count(*) FROM tx_category_override").fetchone()[0] == 0   # a re-import must not revive it
     assert conn.execute("SELECT mirror_of FROM accounts WHERE account_id='chk_j'").fetchone()[0] is None
     for table in ("balances", "transactions", "recurring", "holdings"):
         assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0, table

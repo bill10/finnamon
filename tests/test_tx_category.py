@@ -29,7 +29,7 @@ def test_one_transaction_moves_only_that_one_and_beats_the_merchant_rule_and_cle
     assert r["category"] == "FOOD_AND_DRINK_GROCERIES" and r["merchant"] == "Costco"
     assert cats(conn, "2099-01-01") == {"c1": "FOOD_AND_DRINK_GROCERIES", "c2": "GENERAL_MERCHANDISE_SUPERSTORES"}
 
-    budgets.category_set(conn, "Costco", "HOME_IMPROVEMENT_HARDWARE")              # the rule moves the rest, and future charges
+    assert budgets.category_set(conn, "Costco", "HOME_IMPROVEMENT_HARDWARE")["one_time_edits_kept"] == 1   # the rule moves the rest, and future charges
     txn(conn, "c3", "chk", "2026-09-18", 40, "COSTCO WHSE", "Costco", "mch_costco", "GENERAL_MERCHANDISE", "GENERAL_MERCHANDISE_SUPERSTORES")
     assert cats(conn, "2099-01-01") == {"c1": "FOOD_AND_DRINK_GROCERIES", "c2": "HOME_IMPROVEMENT_HARDWARE", "c3": "HOME_IMPROVEMENT_HARDWARE"}
 
