@@ -10,8 +10,7 @@ WITH c AS (
   SELECT transaction_id, account_id, canonical, name, amount, date, display, account_name, mask,
          CASE WHEN julianday(date) - julianday(lag(date) OVER w) <= (SELECT value FROM g WHERE key='dup_window_days') THEN 0 ELSE 1 END AS starts
   FROM tx
-  WHERE pending = 0
-    AND date >= date(:as_of, '-' || ((SELECT value FROM g WHERE key='lookback_days') + (SELECT value FROM g WHERE key='dup_window_days')) || ' days')
+  WHERE pending = 0   -- no lookback bound here: a run cut at the bound would change its key as its head ages out, and alert again
     AND date >= date(first_synced_at)
     AND amount >= (SELECT value FROM g WHERE key='dup_min_amount')
     AND COALESCE(category_primary, '') NOT IN ('TRANSFER_IN', 'TRANSFER_OUT', 'LOAN_PAYMENTS')
@@ -42,4 +41,5 @@ SELECT
               'date_a', first_date, 'date_b', date, 'count', n,
               'txn_a', first_id, 'txn_b', transaction_id, 'as_of', :as_of) AS payload
 FROM r
-WHERE from_last = 1 AND n >= 2;
+WHERE from_last = 1 AND n >= 2
+  AND date >= date(:as_of, '-' || ((SELECT value FROM g WHERE key='lookback_days') + (SELECT value FROM g WHERE key='dup_window_days')) || ' days');

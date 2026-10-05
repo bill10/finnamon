@@ -496,6 +496,17 @@ def test_recurring_price_accepted_then_raised_again_alerts(conn):
     assert len(run(conn, "recurring_price", "2026-11-16 08:00:00")) == 1   # above the accepted price: news again
 
 
+@pytest.mark.parametrize("stream_fields", ["entity_id", "merchant_name_only", "description_only"])
+def test_recurring_price_matches_a_stream_without_an_entity_id(conn, stream_fields):
+    # Value: protects=streams Plaid sends without merchant_entity_id still alert; fails_when=the stream match compares one COALESCE; why_new=fixture streams always had the id; seam=none
+    netflix(conn, [15.49, 15.49, 15.49, 17.99])
+    if stream_fields != "entity_id":
+        conn.execute("UPDATE recurring SET merchant_entity_id=NULL")
+    if stream_fields == "description_only":
+        conn.execute("UPDATE recurring SET merchant_name=NULL, description='NETFLIX.COM'")
+    assert len(run(conn, "recurring_price")) == 1
+
+
 @pytest.mark.parametrize("case", ["same_price", "variable_bill", "too_few_charges", "early_detection", "inactive", "old_charge", "normal_on_stream", "kindless_normal",
                                   "backfill", "second_plan_at_the_merchant"])
 def test_recurring_price_misses(conn, case):
@@ -683,3 +694,14 @@ def test_sync_health_an_error_that_returns_every_sync_is_one_alert(conn):
     conn.execute("UPDATE items SET last_synced_at='2026-09-19 18:00:00'")   # a page applied, then recurring failed again
     assert detect.run(conn, "2026-09-19 18:05:00", only=["sync_health"]) == []
     assert [a["resolved_at"] for a in alerts(conn, "sync_health")] == [None]
+
+
+
+def test_duplicate_charge_a_run_aging_out_of_the_lookback_does_not_alert_again(conn):
+    # Value: protects=one alert per run as days pass; fails_when=runs are formed only inside the lookback bound; why_new=every other dup test runs one as_of; seam=none
+    seed(conn)
+    for tid, d in (("a", "2026-09-09"), ("b", "2026-09-12"), ("c", "2026-09-15")):
+        txn(conn, tid, "chk", d, 52.18, "SHELL OIL", "Shell", "mch_shell")
+    assert len(run(conn, "duplicate_charge", "2026-09-19 12:00:00")) == 1
+    for day in range(20, 29):
+        assert run(conn, "duplicate_charge", f"2026-09-{day} 12:00:00") == []

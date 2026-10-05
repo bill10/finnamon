@@ -5,7 +5,7 @@
 -- the same account. One alert per charge (the key is that transaction).
 WITH hist AS (   -- one pass over the charges: each with the two before it, same merchant, same account
   SELECT transaction_id, account_id, account_name, mask, display, canonical, date, amount, first_synced_at,
-         COALESCE(merchant_entity_id, merchant_name, name) AS stream_key,
+         merchant_entity_id, lower(NULLIF(trim(merchant_name), '')) AS merchant, lower(NULLIF(trim(name), '')) AS raw,
          lag(amount, 1) OVER w AS prev1, lag(amount, 2) OVER w AS prev2, lag(date, 1) OVER w AS prev_date
   FROM tx WHERE pending = 0 AND amount > 0
   WINDOW w AS (PARTITION BY account_id, canonical, name ORDER BY date, transaction_id)   -- the raw name keeps two plans apart, as in duplicate_charge
@@ -14,7 +14,8 @@ last AS (
   SELECT r.stream_id, r.frequency, h.*
   FROM recurring r
   JOIN hist h ON h.account_id = r.account_id AND h.date = r.last_date AND h.amount = r.last_amount
-             AND h.stream_key = COALESCE(r.merchant_entity_id, r.merchant_name, r.description)   -- the stream's own merchant
+             AND CASE WHEN r.merchant_entity_id IS NOT NULL THEN h.merchant_entity_id = r.merchant_entity_id   -- the stream's own merchant, field by field:
+                      ELSE h.merchant = lower(NULLIF(trim(r.merchant_name), '')) OR h.raw = lower(NULLIF(trim(r.description), '')) END   -- a stream often has no entity id
   WHERE r.direction = 'outflow' AND r.status NOT IN ('EARLY_DETECTION', 'TOMBSTONED')
     AND COALESCE(r.is_active, 1) = 1
     AND r.first_seen_at <= :as_of
