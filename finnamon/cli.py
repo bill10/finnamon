@@ -225,11 +225,15 @@ def dashboard_url(host: str | None = None) -> str:
         die(f"cannot read the dashboard's key ({e}); fix the file's permissions or remove it and run `finnamon open` again")
 
 
+def _is_wsl() -> bool:
+    return "microsoft" in platform.uname().release.lower()
+
+
 def _browser_open(url: str) -> bool:
     """webbrowser.open, except that on WSL it finds no browser on the Linux side: there the Windows one opens the page
     (wslview from wslu, else explorer.exe, which exits 1 even when it worked, so the address is printed as well). A
     BROWSER the person set wins."""
-    if "microsoft" in platform.uname().release.lower() and not os.environ.get("BROWSER"):
+    if _is_wsl() and not os.environ.get("BROWSER"):
         if cmd := shutil.which("wslview") or shutil.which("explorer.exe"):
             webbrowser.register("wsl", None, webbrowser.GenericBrowser(cmd), preferred=True)
     return webbrowser.open(url)
@@ -1310,6 +1314,18 @@ def cmd_doctor(a) -> None:
         check(True, "Scheduler", "jobs installed")
     if platform.system() == "Linux" and not missing and (why := scheduler.linger_problem()):
         check(False, "Linger", why, f"sudo loginctl enable-linger {scheduler.login_user()}")
+
+    if _is_wsl():   # Windows-side facts (.wslconfig, the PC's sleep) are not readable from here: said as guidance, never as a pass
+        try:
+            init = Path("/proc/1/comm").read_text().strip()
+        except OSError:
+            init = ""
+        check(init == "systemd", "WSL systemd", "on" if init == "systemd" else f"PID 1 is {init or 'unknown'}, so no unit runs",
+              "printf '[boot]\\nsystemd=true\\n' | sudo tee -a /etc/wsl.conf, then `wsl --shutdown` in PowerShell (docs/INSTALL.md#windows-wsl2)")
+        check(None, "WSL keep-alive", "Windows stops this distro after its last terminal closes; nothing here can see that",
+              "Task Scheduler at log on: wsl.exe -d <distro> --exec sleep infinity; in %UserProfile%\\.wslconfig [wsl2] vmIdleTimeout=-1 (docs/INSTALL.md#windows-wsl2)")
+        check(None, "WSL dashboard", f"open http://localhost:{os.environ.get('PORT') or config.DASHBOARD_PORT} in the Windows browser (finnamon open does it)",
+              "if it does not load, the dashboard is not running (see Scheduler above) or .wslconfig turned localhostForwarding off")
 
     tp = config.web_token_path()
     try:

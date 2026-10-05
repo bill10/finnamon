@@ -47,7 +47,7 @@ Both skills are the full job description; read the relevant one before acting. T
   two items at one bank: ask which, never pick; rate-limited, relay a refusal as is; once they log in, Finnamon syncs the bank within a minute and says so in the chat).
 - **Charts:** the web dashboard shows a list of charts you own (terminal and intercom sessions):
   `finnamon chart --sql "<SELECT>" --spec-json '<json>' [--id <slug>]` adds or replaces any Vega-Lite spec
-  (`--sql` fills it read-only; never a heredoc, which the shell guard refuses), `--sql "<SELECT>" --table-json '<json>'` a table
+  (`--sql` fills it read-only; never JSON in a heredoc, which the shell guard refuses; plain text is fine, and `triage set -` and `detect --draft -` take theirs through a quoted one), `--sql "<SELECT>" --table-json '<json>'` a table
   of rows ("show me dining over $50 this month"), `--spec <name>` a preset, `--list` shows them, `--remove <id>` / `--clear` take them off.
   `finnamon chart <name>` prints a PNG path (for Telegram).
 - Never claim a change happened unless the command succeeded.

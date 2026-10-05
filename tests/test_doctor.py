@@ -150,3 +150,11 @@ def test_voice_is_worth_knowing_not_a_problem(home, units, fake_claude, capsys, 
     monkeypatch.setattr(voice, "status", lambda: (True, "/opt/homebrew/bin/whisper-cli, model x"))
     _, out = doctor(capsys)
     assert line(out, "Voice").startswith("✓ Voice:")
+
+
+def test_wsl_lines_only_on_wsl(home, units, fake_claude, capsys, monkeypatch):
+    monkeypatch.setattr(cli, "_is_wsl", lambda: False)
+    assert "WSL" not in doctor(capsys)[1]
+    monkeypatch.setattr(cli, "_is_wsl", lambda: True)
+    out = doctor(capsys)[1]
+    assert line(out, "WSL systemd")[0] in "✓✗" and "vmIdleTimeout" in out and "localhost" in out
