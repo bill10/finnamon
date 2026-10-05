@@ -470,12 +470,16 @@ function wireEditor(el, o) {
     if (notes.length) toast(notes.join(' '), { kind: 'warn' });
   });
 }
+// An inline editor's Save sits at its bottom right, wherever scrolling leaves it, which is where the fixed chat button
+// is: while one is open the button steps aside (body.editing), and Done, Cancel or Save brings it back.
+const editing = () => document.body.classList.toggle('editing', managing || propsOpen);
 function toggleManage(on) {
   managing = on; picks = {};
   $('budgets-manage').style.display = on ? 'block' : 'none';
   $('budgets-body').style.display = on ? 'none' : '';
   renderBudgets(summary);
   if (on) { renderManage(summary); $('b-new-name').focus(); }
+  editing();
 }
 $('budgets-toggle').addEventListener('click', () => { if (summary) toggleManage(!managing); });
 
@@ -498,7 +502,7 @@ function renderProps(s) {
     err: 'p-err', cancel: 'p-cancel', save: 'p-save', rerender: () => renderProps(summary), close: () => toggleProps(false),
   });
 }
-function toggleProps(on) { propsOpen = on; $('prop-pop').style.display = on ? '' : 'none'; if (on) { renderProps(summary); $('p-new-name').focus(); } }
+function toggleProps(on) { propsOpen = on; $('prop-pop').style.display = on ? '' : 'none'; if (on) { renderProps(summary); $('p-new-name').focus(); } editing(); }
 $('row-prop').addEventListener('click', () => { if (summary) toggleProps(!propsOpen); });
 $('row-prop').addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && summary) { e.preventDefault(); toggleProps(!propsOpen); } });
 

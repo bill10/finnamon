@@ -18,6 +18,9 @@
   --term-bg: #1B1B1B; --term-head: #383838; --term-line: #515151; --term-muted: #A4A4A4;
 }
 * { box-sizing: border-box; }
+/* the chat button is fixed over the page's bottom-right corner (56px + its 16-22px inset): keyboard focus and scrollIntoView
+   stop this far above the bottom, so a focused control never lands under it; while an inline editor is open the button is hidden */
+html { scroll-padding-bottom: 96px; }
 body { margin: 0; font: 16px/1.5 "Geist", -apple-system, system-ui, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
 .num { font-variant-numeric: tabular-nums; }
 svg.ic { width: 20px; height: 20px; fill: currentColor; vertical-align: middle; flex: none; }
@@ -349,6 +352,7 @@ details.mergebox p.muted { margin: 0 0 8px; font-size: 13px; }
 
 /* intercom: the household's Claude session, in the page's own surfaces */
 #intercom-btn { position: fixed; right: 22px; bottom: 22px; width: 56px; height: 56px; border-radius: 50%; border: none; background: var(--cinnamon); color: #fff; display: grid; place-items: center; box-shadow: 0 6px 16px rgba(27,27,27,.22); z-index: 30; }
+body.editing #intercom-btn { display: none; }   /* Manage budgets, Property: Save sits where the button would */
 #intercom-btn:hover:not(:disabled) { background: var(--cinnamon-hover); }
 #intercom-btn svg.ic { width: 28px; height: 28px; }
 #intercom-btn .dot { position: absolute; top: 6px; right: 6px; width: 12px; height: 12px; border-radius: 50%; background: transparent; border: 2px solid transparent; }
