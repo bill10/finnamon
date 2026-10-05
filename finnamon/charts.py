@@ -198,10 +198,11 @@ def spec(conn: sqlite3.Connection, name: str, arg: str | None = None, months: in
                                                       "y": {"field": "amount", "type": "quantitative", "title": "$"},
                                                       "tooltip": [{"field": "date", "type": "temporal"}, {"field": "merchant"}, {"field": "amount", "format": "$,.2f"}]}}
     rows = conn.execute(IN_OUT, (f"-{months} months",)).fetchall()
-    values = [{"month": r[0], "direction": d, "series": k, "amount": r[c] or 0}
+    labels = _month_labels(rows)
+    values = [{"month": r[0], "label": labels[r[0]], "direction": d, "series": k, "amount": r[c] or 0}
               for r in rows for d, k, c in (("in", "income", 1), ("out", "spending", 2), ("out", "mortgage", 3))]
     return {**base, "title": f"In and out by month, last {months} months", "data": {"values": values},
-            "mark": "bar", "encoding": {"x": {"field": "month", "type": "ordinal", "title": None, "axis": {"labelExpr": _month_label(rows)}},   # "May", not "2026-05"
+            "mark": "bar", "encoding": {"x": {"field": "label", "type": "ordinal", "title": None, "sort": [labels[r[0]] for r in rows]},   # "May", not "2026-05"
                                         "y": {"field": "amount", "type": "quantitative", "title": "$"},   # stacked: out = spending + mortgage
                                         "xOffset": {"field": "direction", "scale": {"domain": ["in", "out"]}},
                                         "color": {"field": "series", "scale": {"domain": ["mortgage", "income", "spending"]},   # theme colours 1, 2, 3
@@ -209,11 +210,14 @@ def spec(conn: sqlite3.Connection, name: str, arg: str | None = None, months: in
                                         "tooltip": [{"field": "month"}, {"field": "series"}, {"field": "amount", "format": "$,.0f"}]}}
 
 
-def _month_label(rows: list) -> str:
-    """Vega labelExpr turning "2026-05" into "May"; the year joins on January, and on the first month when the range spans years."""
-    names = "['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][toNumber(slice(datum.value,5,7))-1]"
-    cond = "slice(datum.value,5,7)=='01'" + (f"||datum.value=='{rows[0][0]}'" if len({r[0][:4] for r in rows}) > 1 else "")
-    return f"{names}+({cond} ? ' '+slice(datum.value,0,4) : '')"
+def _month_labels(rows: list) -> dict:
+    """"2026-05" as the axis shows it: "May", with the year on January and on the first month when the range spans years
+    (a chart is expression-free, so the label is data). More than a year of months would repeat a name: the year on all."""
+    spans = len({r[0][:4] for r in rows}) > 1
+    def one(ym: str) -> str:
+        name = datetime(2000, int(ym[5:7]), 1).strftime("%b")
+        return f"{name} {ym[:4]}" if len(rows) > 12 or ym[5:7] == "01" or (spans and ym == rows[0][0]) else name
+    return {r[0]: one(r[0]) for r in rows}
 
 
 def custom(text: str, id: str | None = None, sql: str | None = None) -> dict:
