@@ -226,7 +226,8 @@ def sync_item(conn: sqlite3.Connection, item_id: str, token: str | None = None) 
         except PlaidError as e:  # an investments-only failure is not the Item's health; balances still cover the accounts
             log.warning("holdings %s: %s", item_id, e)
     except PlaidError as e:
-        if e.code not in TRANSIENT_CODES and e.type not in TRANSIENT_TYPES and not e.code.startswith("HTTP_5"):  # an outage is not the Item's fault; sync_health's staleness clause covers a long one
+        result["transient"] = e.code in TRANSIENT_CODES or e.type in TRANSIENT_TYPES or e.code.startswith("HTTP_5")
+        if not result["transient"]:  # an outage is not the Item's fault; sync_health's staleness clause covers a long one
             conn.execute("UPDATE items SET status=?, last_error=? WHERE item_id=?", (e.code, e.message[:500], item_id))
         result["error"] = e.code
         log.warning("sync %s failed: %s", item_id, e)

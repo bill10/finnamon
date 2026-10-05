@@ -145,16 +145,17 @@ def _update_sessions(conn: sqlite3.Connection) -> list[dict]:
     """state.update_sessions: [{item_id, link_token, url, started_at, expires_at}, ...], epochs. Only we write it; a
     corrupt value reads as empty rather than wedging every re-login."""
     try:
-        return [x for x in json.loads(store.get_state(conn, "update_sessions") or "[]") if UPDATE_SESSION_KEYS <= x.keys()]
+        return [x for x in json.loads(store.get_state(conn, "update_sessions") or "[]")
+                if UPDATE_SESSION_KEYS <= x.keys() and float(x["started_at"]) + float(x["expires_at"]) > 0]   # numbers, or nothing
     except (ValueError, TypeError, AttributeError):
         return []
 
 
 def _set_update_sessions(conn: sqlite3.Connection, keep) -> None:
-    """Re-read, then filter: a session the page opened while the tick was polling is not lost.
-    ponytail: read-then-write without a lock; the window is one statement wide."""
-    kept = [x for x in _update_sessions(conn) if keep(x)]
-    store.set_state(conn, "update_sessions", json.dumps(kept) if kept else None)
+    """Re-read, then filter, in one write transaction: a session the page opened meanwhile is never lost."""
+    with store.tx(conn):
+        kept = [x for x in _update_sessions(conn) if keep(x)]
+        store.set_state(conn, "update_sessions", json.dumps(kept) if kept else None)
 
 
 def start_update(conn: sqlite3.Connection, item_id: str, now: float | None = None, to_chat: bool = True) -> dict:
@@ -180,9 +181,9 @@ def start_update(conn: sqlite3.Connection, item_id: str, now: float | None = Non
         except plaid_api.PlaidError:
             pass   # unknown: a new session is the safe answer
     s = start(row[1], item_id)
-    sessions = _update_sessions(conn) + [{"item_id": item_id, "link_token": s["link_token"], "url": s["url"],
-                                          "started_at": now, "expires_at": now + UPDATE_SESSION_TTL_S}]
-    store.set_state(conn, "update_sessions", json.dumps(sessions))
+    with store.tx(conn):   # the tick's cleanup re-reads under the same lock: neither write drops the other's session
+        store.set_state(conn, "update_sessions", json.dumps(_update_sessions(conn) + [{
+            "item_id": item_id, "link_token": s["link_token"], "url": s["url"], "started_at": now, "expires_at": now + UPDATE_SESSION_TTL_S}]))
     if not to_chat:
         return {"item_id": item_id, "institution": inst, "owner": row[1], "url": s["url"], "reused": False}
     send_url(conn, s["url"], f"Log back into {inst} ({row[1]}'s login)", UPDATE_LINK_VALID)
@@ -233,8 +234,11 @@ def check_updates(conn: sqlite3.Connection, now: float | None = None) -> list[di
                     gone.add(x["link_token"])   # unlinked meanwhile; or closed on a bank that syncs and has nothing open to clear
                     continue
                 r = {"item_id": x["item_id"], "institution": row[0] or x["item_id"], "sync": reconnect(conn, x["item_id"], renewed=proof)}
-                gone.add(x["link_token"])   # only now: a sync that raised (a locked database) is retried next tick
                 out.append(r)
+                if r["sync"].get("transient"):
+                    log.info("re-login of %s: the sync hit %s; retried next tick", x["item_id"], r["sync"]["error"])
+                    continue   # Plaid's outage, not the bank's answer: the session (and its proof) waits for the next tick
+                gone.add(x["link_token"])   # only now: a sync that raised (a locked database) is retried next tick too
                 if r["sync"]["error"]:
                     log.info("re-login session for %s ended; the bank still says %s", x["item_id"], r["sync"]["error"])
                     continue
@@ -261,18 +265,18 @@ def _broken_alert(conn: sqlite3.Connection, item_id: str) -> bool:
 
 
 def reconnect(conn: sqlite3.Connection, item_id: str, renewed: bool = True) -> dict:
-    """Sync one Item after a re-login; when that works, it is good again and its open health alerts are resolved. A
-    date-keyed sync_health alert is keyed apart, so the detector can raise a new one if the bank breaks again today; a
-    consent alert keeps its key (one per expiry date: a real renewal moves the date). Not renewed (no proof the login
-    happened): the consent alert stays open, since a bank whose connection is only expiring syncs either way."""
+    """Sync one Item after a re-login; when that works, it is good again and its open health alerts are resolved, each
+    keyed apart so it can be raised again: a bank that breaks again today alerts today, and a consent date the login did
+    not actually move warns again on the next sync (a repeated warning beats a connection that lapses in silence). Not
+    renewed (no proof the login happened): the consent alert stays open, since a bank whose connection is only
+    expiring syncs either way."""
     result = sync.sync_item(conn, item_id)
     if not result["error"]:
         conn.execute("UPDATE items SET status='good', last_error=NULL WHERE item_id=?", (item_id,))
         prefix, consent = f"health:{item_id}:", f"health:{item_id}:consent:"   # not LIKE: an _ in the id would match another bank's
-        conn.execute("UPDATE alerts SET resolved_at=?, resolution='reconnected', "
-                     "key=CASE WHEN substr(key, 1, ?) = ? THEN key ELSE key || ':reconnected:' || id END "
+        conn.execute("UPDATE alerts SET resolved_at=?, resolution='reconnected', key=key || ':reconnected:' || id "
                      "WHERE resolved_at IS NULL AND substr(key, 1, ?) = ? AND (? OR substr(key, 1, ?) <> ?)",
-                     (store.now_local(), len(consent), consent, len(prefix), prefix, renewed, len(consent), consent))
+                     (store.now_local(), len(prefix), prefix, renewed, len(consent), consent))
     return result
 
 

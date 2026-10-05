@@ -251,10 +251,10 @@ def test_a_sync_that_raises_keeps_the_session_for_the_next_tick(env, conn, tg, m
 
 def test_a_session_opened_while_the_tick_runs_survives_and_polling_needs_no_lock(env, conn, tg, monkeypatch):
     link.start_update(conn, "item1", now=T0, to_chat=False)
-    held = run.lock()
+    held, polled = run.lock(), []
     try:
-        monkeypatch.setattr(plaid_api, "link_token_get", lambda lt: {"link_sessions": [{"started_at": "x"}]})
-        assert link.check_updates(conn, now=T0 + 60) == []                        # polled under a held lock: nothing over, nothing waits
+        monkeypatch.setattr(plaid_api, "link_token_get", lambda lt: polled.append(lt) or {"link_sessions": [{"started_at": "x"}]})
+        assert link.check_updates(conn, now=T0 + 60) == [] and polled == ["lt1"]   # polled while a sync cycle holds the lock
     finally:
         held.close()
     def sync_and_click(c_, item, token=None):                                     # the person clicks Reconnect again mid-sync
@@ -292,9 +292,34 @@ def test_a_bank_a_cycle_already_fixed_still_gets_its_alert_resolved_and_the_mess
     monkeypatch.setattr(plaid_api, "link_token_get", _finished(False))            # thin results: no token
     link.check_updates(conn, now=T0 + 60)
     got = {r["id"]: (r["resolution"], r["key"]) for r in conn.execute("SELECT id, resolution, key FROM alerts")}
-    assert got[a["id"]][0] == "reconnected" and got[c["id"]] == (None, "health:item1:consent:2026-11-01")
+    assert got[a["id"]][0] == "reconnected" and got[c["id"]] == (None, "health:item1:consent:2026-11-01")   # no proof: the expiry warning stays
     assert tg.sent[-1]["text"] == "Chase is reconnected."
     link.start_update(conn, "item1", now=T0 + link.UPDATE_REUSE_S, to_chat=False)
     monkeypatch.setattr(plaid_api, "link_token_get", _finished(True))
-    link.check_updates(conn, now=T0 + link.UPDATE_REUSE_S + 60)                   # renewed: the consent alert resolves, its key kept
-    assert tuple(conn.execute("SELECT resolution, key FROM alerts WHERE id=?", (c["id"],)).fetchone()) == ("reconnected", "health:item1:consent:2026-11-01")
+    link.check_updates(conn, now=T0 + link.UPDATE_REUSE_S + 60)                   # renewed: resolved, and its key freed
+    assert tuple(conn.execute("SELECT resolution, key FROM alerts WHERE id=?", (c["id"],)).fetchone()) == ("reconnected", f"health:item1:consent:2026-11-01:reconnected:{c['id']}")
+    assert _alert(conn, "health:item1:consent:2026-11-01", "consent_expiring")["resolved_at"] is None   # a date the login did not move warns again
+
+
+def test_a_transient_plaid_error_after_the_login_keeps_the_session_and_its_proof(env, conn, tg, monkeypatch):
+    a = _alert(conn)
+    link.start_update(conn, "item1", now=T0, to_chat=False)
+    monkeypatch.setattr(plaid_api, "link_token_get", _finished(True))
+    monkeypatch.setattr(sync, "sync_item", lambda c_, item, token=None: {"item_id": item, "error": "INTERNAL_SERVER_ERROR", "transient": True})
+    link.check_updates(conn, now=T0 + 60)
+    assert store.get_state(conn, "update_sessions") and not tg.sent              # Plaid's outage, not the bank's answer
+    monkeypatch.setattr(sync, "sync_item", lambda c_, item, token=None: {"item_id": item, "error": None})
+    link.check_updates(conn, now=T0 + 120)
+    assert conn.execute("SELECT resolution FROM alerts WHERE id=?", (a["id"],)).fetchone()[0] == "reconnected"
+    assert tg.sent[-1]["text"] == "Chase is reconnected." and store.get_state(conn, "update_sessions") is None
+
+
+def test_sync_item_says_when_its_error_is_plaids_outage(env, conn, monkeypatch):
+    for code, transient in (("INTERNAL_SERVER_ERROR", True), ("ITEM_LOGIN_REQUIRED", False)):
+        monkeypatch.setattr(plaid_api, "accounts_get", lambda tok, code=code: (_ for _ in ()).throw(PlaidError({"error_code": code})))
+        assert sync.sync_item(conn, "item1")["transient"] is transient
+
+
+def test_a_session_with_a_non_numeric_time_reads_as_no_session(env, conn):
+    store.set_state(conn, "update_sessions", json.dumps([{"item_id": "item1", "link_token": "lt", "url": "u", "started_at": "soon", "expires_at": 1}]))
+    assert link.check_updates(conn) == [] and link.start_update(conn, "item1", now=T0, to_chat=False)["reused"] is False
