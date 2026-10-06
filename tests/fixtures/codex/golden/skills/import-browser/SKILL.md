@@ -3,11 +3,12 @@ name: import-browser
 description: Fetch a bank's CSV export through a visible browser the person logs into, then import it into Finnamon, locally or by upload to the Finnamon box (--to <url>). Started by `finnamon import --browser <bank> [--to <url>]`; also `$import-browser <bank>` by hand. For banks Plaid can't reach (HSBC US personal banking).
 ---
 
-# $import-browser <bank> [--to <url>] --cdp <address>
+# $import-browser <bank> [--to <url>] --cdp <address> --tab <id> [--attach]
 
-A visible Chrome window is **already open** at the bank's login page when you start -- Finnamon opened it, and
-`--cdp <address>` is where you attach to it. The person is sitting at this computer and does the login. You never see,
-type, or store a credential.
+A visible Chrome tab is **already open** at the bank's login page when you start -- Finnamon opened it, `--cdp <address>`
+is the browser you attach to, and `--tab <id>` is that one tab, the only one you may drive. Without `--attach` it is a
+window of Finnamon's own; with `--attach` it is one new tab in the Chrome the person browses in every day, next to their
+own tabs. The person is sitting at this computer and does the login. You never see, type, or store a credential.
 
 **Do not attach until they say they are logged in.** The bank's risk engine fails the login outright while a DevTools
 client is driving the window (HSBC US runs Transmit Security: the logon dies on `/security` with "Something went wrong
@@ -29,39 +30,50 @@ uploads the file to its dashboard, with the box's key from `FINNAMON_WEB_TOKEN` 
   that it belongs in the household's ordinary assistant session (the dashboard's intercom); finish the import.
 - **The commands you may run are exactly these, one per Bash call, no pipes or `&&`** (a guard hook blocks
   anything else, and a blocked command is a reason to tell the person, not to try a variant):
-  `agent-browser --session finnamon-import` followed by one of `connect <the --cdp address>`, `snapshot [-i] [-c]`, `get url|title`,
+  `agent-browser --session finnamon-import` followed by one of `connect <the --cdp address>`, `tab <the --tab id>`,
+  `tab close <the --tab id>` (with `--attach` only, at the end), `snapshot [-i] [-c]`, `get url|title`,
   `click @ref`, `select @ref <value>`, `scroll up|down <px>`, `scrollintoview @ref`, `press Enter|Tab|Escape|
   PageDown|PageUp|End|Home|ArrowDown|ArrowUp`, `back`, `reload`, `is visible|enabled @ref`, `session`, `close`;
   `sleep <seconds>`; `finnamon import ...`;
   `finnamon account list [--to <url>]`. Refs come from `snapshot`, never CSS selectors. There is no `eval`,
-  `fill`, `type`, `find`, `wait`, `tab`, `download`, `cookies`, `storage`, `upload`, and no launch option
+  `fill`, `type`, `find`, `wait`, `tab list`/`tab new`/any other tab, `download`, `cookies`, `storage`, `upload`, and no launch option
   (`--profile`, `--executable-path`, `--restore`, `--proxy`, `--cdp`) in this session: the launcher already set
   the browser and its profile before you started, and they are not yours to change. When the CSV export is a link or a
   button, `click` it: the browser saves the file to `~/Downloads` on its own, and you name the file by its usual pattern
   for the bank (step 4), never by reading the page for it. If the site needs anything typed after the login (a date
   range field), ask the person to type it in the window and say when it is done.
-- The window is real Google Chrome on a Chrome profile of Finnamon's own (`~/.finnamon/chrome/`, not the person's
-  everyday profile). That profile is what keeps the bank's "known device" state between runs so the person is not
-  asked for a code every month; it holds cookies, never a password. You never launch a browser and never `open` a URL:
-  the window exists before you do, and `connect` is the only way into it.
+- Without `--attach`, the window is real Google Chrome on a Chrome profile of Finnamon's own (`~/.finnamon/chrome/`, not
+  the person's everyday profile). That profile is what keeps the bank's "known device" state between runs so the person
+  is not asked for a code every month; it holds cookies, never a password. With `--attach`, the tab is in the person's
+  everyday profile (they started that Chrome with `--remote-debugging-port`): the build and the device the bank already
+  knows, at the price of a debugging port on the browser that holds every cookie they own. That is why you drive the one
+  tab and nothing else, and close it when you are done. You never launch a browser and never `open` a URL: the tab
+  exists before you do, and `connect` then `tab <the --tab id>` is the only way into it.
 
 ## Steps
 
 1. **Which account.** `finnamon account list` (with `--to`: `finnamon account list --to <url>`), keep rows with
    `source` = `manual` at this bank; `last_synced_at` is the last import. No manual account at this bank: say so,
    give the command (`finnamon account add "<bank> Checking" --institution <bank>`, or ask the assistant), stop.
-2. **Ask them to log in.** The window is already open at the bank. Say one line -- "A Chrome window is open at
-   <bank>; log in there and tell me when you're through" -- and then **stop and wait for their answer**. Run nothing.
+2. **Ask them to log in.** The tab is already open at the bank. Say one line -- "A Chrome window is open at
+   <bank>; log in there and tell me when you're through" (with `--attach`: "A new tab is open at <bank> in your Chrome;
+   log in there and tell me when you're through") -- and then **stop and wait for their answer**. Run nothing.
    Do not attach, do not poll, do not `sleep` in a loop: nothing you can do while they type helps, and a DevTools
    client attached during the login is what makes the bank refuse it.
 3. **Attach.** Once they say they are in: `agent-browser --session finnamon-import connect <the --cdp address>`, then
-   `get url` and `snapshot -i -c` to confirm the logged-in account overview (a "Log off" / "Sign out" control, account
+   at once `agent-browser --session finnamon-import tab <the --tab id>` (until that has run, the guard refuses everything
+   that reads or touches a page: after `connect` agent-browser may be on any tab, with `--attach` one of the person's own),
+   then `get url` and `snapshot -i -c` to confirm the logged-in account overview (a "Log off" / "Sign out" control, account
    names with balances). If `connect` fails, or the page is still the login form, say so plainly and stop -- do not
    retry in a loop and do not ask them to log in again more than once. When the bank refused the login outright
-   (HSBC US: `/security`, "Something went wrong ... reference: EAC") this may be HSBC's risk engine rejecting a new Chrome build. Ask them to compare the build the browser they use every day runs in memory with the one on disk: `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version` vs what `ps` shows in the Versions/ path for the running helpers (on Linux: `google-chrome --version`). If the builds differ, give them the fallback: log in to the bank in their everyday browser, download the CSV by hand, and run
-   `finnamon import "<account>" ~/Downloads/<file>.csv` (with `--to <url>` if this computer is not the Finnamon box).
-   Tell them not to restart that everyday browser until the error clears in a few days, and to retry Fetch by AI then.
-   That path needs no browser session at all and avoids the risk engine's rejection of the new build.
+   (HSBC US: `/security`, "Something went wrong ... reference: EAC") this is usually HSBC's risk engine rejecting a Chrome
+   build it has not seen yet, which happens for a few days after every Chrome update. Without `--attach`, run
+   `finnamon import --chrome-check <bank>` and, when its `message` is not null, say that message to the person as it is:
+   it names the two builds and the three ways out (the CSV from their everyday browser, relaunching Chrome with the debug
+   port and `--attach`, or retrying in a few days). When it is null (the builds match, or this computer cannot tell),
+   or with `--attach`, give them the first way out yourself: log in to the bank in their everyday browser, download the
+   CSV by hand, and run `finnamon import "<account>" ~/Downloads/<file>.csv` (with `--to <url>` if this computer is not the
+   Finnamon box), or retry in a few days.
 4. **Download the CSV** for each manual account at this bank. Navigate by reading the page (`snapshot -i`, refs)
    and clicking, never by guessing selectors. If the site offers no CSV for an account, say so and skip it.
    HSBC US, which is the bank this was built for, goes: the account tile on the dashboard -> its transaction list ->
@@ -76,8 +88,10 @@ uploads the file to its dashboard, with the box's key from `FINNAMON_WEB_TOKEN` 
 5. **Import.** `finnamon import --dry-run "<account>" <file>` (with `--to`: add `--to <url>`); in `sample`, money out
    must be positive (a purchase, a bill) and money in negative (payroll). Reversed: add `--flip`. Then the same
    command without `--dry-run`.
-6. Ask the person to log off and close the Chrome window themselves -- it is Finnamon's window, not the session's, and
-   leaving it open holds the profile so the next import cannot start. Report per account, one line each: new
+6. Without `--attach`: ask the person to log off and close the Chrome window themselves -- it is Finnamon's window, not
+   the session's, and leaving it open holds the profile so the next import cannot start. With `--attach`: ask them to
+   log off in the tab, then `agent-browser --session finnamon-import tab close <the --tab id>` (their browser and their
+   other tabs stay as they are; never close anything else). Report per account, one line each: new
    transactions, already there, date range, balance.
 
 What the detectors make of it: the first import is history, nothing in it is flagged; from the second import on,

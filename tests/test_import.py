@@ -11,6 +11,7 @@ import pytest
 from finnamon import assistant
 
 CDP = "http://127.0.0.1:5555"   # the address chrome_launch returns; the session may attach to this one and no other
+TAB = "8A2F0C"   # the target id of the bank's tab; the session may drive this one and no other
 
 from finnamon import cli, detect, imports, investments, notify, store, sync
 from tests.conftest import AS_OF, seed, txn
@@ -172,21 +173,23 @@ def test_import_browser_execs_claude_on_the_skill_with_a_permission_set_of_its_o
     monkeypatch.setattr("finnamon.claude_runner.binary", lambda: "/usr/bin/claude")
     monkeypatch.setattr("os.chdir", lambda p: calls.append(("cd", str(p))))
     monkeypatch.setattr("os.execve", lambda exe, argv, env: calls.append((exe, argv, env)))
-    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u: CDP)
+    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u: (CDP, TAB))
     monkeypatch.setenv("FINNAMON_CHROME", sys.executable)
     monkeypatch.setenv("FINNAMON_WEB_TOKEN", "the-box-key")   # another computer: the box's key, copied from `finnamon web token` there
     cli.main(["import", "--browser", "hsbc", "--to", "https://mac.tailnet.ts.net/"])
     exe, argv, env = calls[-1]
-    assert exe == "/usr/bin/claude" and argv[1] == f"/import-browser hsbc --to https://mac.tailnet.ts.net --cdp {CDP}" and env["FINNAMON_IMPORT_SESSION"] == "https://mac.tailnet.ts.net"
+    assert exe == "/usr/bin/claude" and argv[1] == f"/import-browser hsbc --to https://mac.tailnet.ts.net --cdp {CDP} --tab {TAB}" and env["FINNAMON_IMPORT_SESSION"] == "https://mac.tailnet.ts.net"
     assert env["FINNAMON_WEB_TOKEN"] == "the-box-key", "the key rides the environment into the sealed session, whose `finnamon import --to` sends it as a bearer"
-    assert env["FINNAMON_IMPORT_CDP"] == CDP and not any(k.startswith("AGENT_BROWSER_") for k in env), "the window is Finnamon's; agent-browser launches nothing"
+    assert env["FINNAMON_IMPORT_CDP"] == CDP and env["FINNAMON_IMPORT_TAB"] == TAB, "the window is Finnamon's, and its one tab is the session's"
+    assert {k: v for k, v in env.items() if k.startswith("AGENT_BROWSER_")} == {"AGENT_BROWSER_PIN_TAB": "1"}, "agent-browser launches nothing, and once bound never falls back to another tab"
     allowed = argv[argv.index("--allowedTools") + 1:argv.index("--disallowedTools")]
     disallowed = argv[argv.index("--disallowedTools") + 1:]
     assert "Bash(agent-browser --session finnamon-import connect *)" in allowed, "it may attach, but the address is the hook's to pin"
     assert not any(CDP in a for a in allowed), "an allow-list entry rides argv, which every local user reads out of ps; the address is a live bank session"
     assert not any("--headed" in a or " open " in a for a in allowed), "it never launches or opens a browser of its own"
     assert not any(a == "Bash(agent-browser *)" or "curl" in a for a in allowed), "no blanket browser verb, no curl at all"
-    assert not any(v in a for a in allowed for v in ("eval", "fill", " type", "cookies", "storage", "upload", "download", " find", " wait", " tab")), "typing, scripting, files and new pages prompt the person"
+    assert not any(v in a for a in allowed for v in ("eval", "fill", " type", "cookies", "storage", "upload", "download", " find", " wait")), "typing, scripting and files prompt the person"
+    assert "Bash(agent-browser --session finnamon-import tab *)" in allowed, "binding to the bank's tab; the hook refuses every other tab, list or new one"
     assert argv[2:4] == ["--setting-sources", "project"], "the person's own ~/.claude/settings.json (which may allow Bash outright) never reaches this session"
     # This session runs in the checkout too, and a second copy of the Telegram plugin's MCP server kills the household's.
     assert "--strict-mcp-config" in argv and "--mcp-config" not in argv, "no MCP server of its own: the skill drives agent-browser over Bash"
@@ -276,7 +279,7 @@ def test_import_browser_drives_real_chrome_on_a_profile_the_launcher_sets(home, 
     monkeypatch.setattr("finnamon.claude_runner.binary", lambda: "/usr/bin/claude")
     monkeypatch.setattr("os.chdir", lambda p: None)
     monkeypatch.setattr("os.execve", lambda exe, argv, env: calls.append((argv, env)))
-    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u: (launched.append((c, p, u)), CDP)[1])
+    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u: (launched.append((c, p, u)), (CDP, TAB))[1])
     monkeypatch.setenv("FINNAMON_CHROME", sys.executable)
     monkeypatch.setenv("AGENT_BROWSER_PROFILE", "Default")   # the person's own env never picks the profile either
     monkeypatch.setenv("AGENT_BROWSER_AUTO_CONNECT", "1")   # nor attaches the session to their everyday Chrome
@@ -286,7 +289,7 @@ def test_import_browser_drives_real_chrome_on_a_profile_the_launcher_sets(home, 
     profile = home / "chrome"
     assert launched[-1] == (sys.executable, profile, "https://www.us.hsbc.com/"), "real Chrome, Finnamon's profile, the bank's login page"
     assert env["FINNAMON_IMPORT_CDP"] == CDP
-    assert not any(k.startswith("AGENT_BROWSER_") for k in env), "auto-connect or a CDP url of the person's own would reach their everyday Chrome"
+    assert [k for k in env if k.startswith("AGENT_BROWSER_")] == ["AGENT_BROWSER_PIN_TAB"], "auto-connect or a CDP url of the person's own would reach their everyday Chrome"
     assert profile.is_dir() and profile.stat().st_mode & 0o777 == 0o700, "it holds the bank's live cookies"
     assert not any("--profile" in a or "--executable-path" in a or "--restore" in a for a in argv), "the model never sees or sets them"
     profile.chmod(0o755)
@@ -657,12 +660,18 @@ class _FakePopen:
         self.argv = argv
 
 
-def _urlopen_answering(*hosts: str):
-    """A urllib.request.urlopen that answers only for these hosts, so a test can pin which address family binds."""
-    def urlopen(url, timeout=None):
+def _urlopen_answering(*hosts: str, seen: list | None = None):
+    """A stub DevTools HTTP endpoint (/json/version, /json/list, PUT /json/new) that answers only for these hosts, so a
+    test can pin which address family binds. seen collects (method, url) of every request it answered."""
+    def urlopen(req, timeout=None):
+        url, method = getattr(req, "full_url", req), getattr(req, "get_method", lambda: "GET")()
         if not any(f"//{h}:" in url for h in hosts):
             raise OSError("connection refused")
-        return io.BytesIO(b'{"Browser": "Chrome/154"}')
+        if seen is not None:
+            seen.append((method, url))
+        body = ([{"id": "BG1", "type": "background_page"}, {"id": TAB, "type": "page", "url": "https://www.us.hsbc.com/"}] if url.endswith("/json/list")
+                else {"id": TAB, "type": "page"} if "/json/new?" in url and method == "PUT" else {"Browser": "Chrome/153.0.8010.53"})
+        return io.BytesIO(json.dumps(body).encode())
     return urlopen
 
 
@@ -681,14 +690,14 @@ def test_chrome_launch_returns_the_address_chrome_actually_bound(tmp_path, monke
     monkeypatch.setattr("time.sleep", lambda s: None)
 
     monkeypatch.setattr("urllib.request.urlopen", _urlopen_answering("127.0.0.1"))
-    assert cli.chrome_launch("/bin/chrome", profile, "https://www.us.hsbc.com/") == "http://127.0.0.1:54358"
+    assert cli.chrome_launch("/bin/chrome", profile, "https://www.us.hsbc.com/") == ("http://127.0.0.1:54358", TAB), "the window's address and its one page, never the background page"
     argv = started[-1]
     assert argv[0] == "/bin/chrome" and f"--user-data-dir={profile}" in argv and "https://www.us.hsbc.com/" in argv
     assert "--remote-debugging-port=0" in argv, "the kernel picks a free port; a fixed one collides with their own Chrome"
     assert not any("automation" in a or "--headless" in a for a in argv), "any automation switch is what the bank's risk engine reads"
 
     monkeypatch.setattr("urllib.request.urlopen", _urlopen_answering("[::1]"))   # only IPv6 answers
-    assert cli.chrome_launch("/bin/chrome", profile, "https://www.us.hsbc.com/") == "http://[::1]:54358"
+    assert cli.chrome_launch("/bin/chrome", profile, "https://www.us.hsbc.com/") == ("http://[::1]:54358", TAB)
 
 
 def test_chrome_launch_waits_out_a_half_written_port_file(tmp_path, monkeypatch):
@@ -708,7 +717,7 @@ def test_chrome_launch_waits_out_a_half_written_port_file(tmp_path, monkeypatch)
         elif len(ticks) == 3:
             port_file.write_text("41999\n")
     monkeypatch.setattr("time.sleep", sleep)
-    assert cli.chrome_launch("/bin/chrome", profile, "about:blank") == "http://127.0.0.1:41999"
+    assert cli.chrome_launch("/bin/chrome", profile, "about:blank") == ("http://127.0.0.1:41999", TAB)
     assert len(ticks) == 3, "it waited rather than dying on the first unreadable tick"
 
 
@@ -742,7 +751,7 @@ def test_import_browser_at_a_bank_with_no_known_login_opens_a_blank_window(home,
     monkeypatch.setattr("finnamon.claude_runner.binary", lambda: "/usr/bin/claude")
     monkeypatch.setattr("os.chdir", lambda p: None)
     monkeypatch.setattr("os.execve", lambda exe, argv, env: None)
-    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u: (launched.append(u), CDP)[1])
+    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u: (launched.append(u), (CDP, TAB))[1])
     monkeypatch.setenv("FINNAMON_CHROME", sys.executable)
     cli.main(["import", "--browser", "ally"])
     assert launched == ["about:blank"]
@@ -759,3 +768,152 @@ def test_account_remove_resolves_its_sent_alerts_as_unlinked(home, conn):
     link.remove_account(conn, chk)
     rows = {r[0]: tuple(r[1:]) for r in conn.execute("SELECT key, resolved_at IS NOT NULL, resolution, verdict, sent_at IS NOT NULL FROM alerts")}
     assert rows == {"k-sent": (1, "unlinked", None, 1), "k-new": (1, "unlinked", "suppress", 1)}
+
+
+def _launcher(monkeypatch, calls):
+    monkeypatch.setattr("finnamon.claude_runner.binary", lambda: "/usr/bin/claude")
+    monkeypatch.setattr("os.chdir", lambda p: None)
+    monkeypatch.setattr("os.execve", lambda exe, argv, env: calls.append((argv, env)))
+    monkeypatch.setenv("FINNAMON_CHROME", sys.executable)
+
+
+def test_import_browser_attach_opens_one_tab_in_the_persons_running_chrome(home, capsys, monkeypatch):
+    """--attach: no Chrome of Finnamon's own; one new tab in the browser on the debugging port (probed on both loopback
+    addresses), over plain HTTP so nothing attaches before the person logs in. The session gets that browser's address
+    and that tab's id, and nothing else. A non-loopback address is refused; no Chrome answering says how to start one."""
+    calls, seen = [], []
+    _launcher(monkeypatch, calls)
+    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda *a: pytest.fail("attach mode never launches a window"))
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen_answering("[::1]", seen=seen))   # only IPv6 answers
+    (home / cli.IMPORT_TAB_FILE).write_text("OLD")   # the last session's binding
+    cli.main(["import", "--browser", "hsbc", "--attach"])
+    argv, env = calls[-1]
+    assert env["FINNAMON_IMPORT_CDP"] == "http://[::1]:9222" and env["FINNAMON_IMPORT_TAB"] == TAB and env["AGENT_BROWSER_PIN_TAB"] == "1"
+    assert argv[1] == f"/import-browser hsbc --cdp http://[::1]:9222 --tab {TAB} --attach"
+    assert ("PUT", "http://[::1]:9222/json/new?https://www.us.hsbc.com/") in seen and sum(m == "PUT" for m, _ in seen) == 1, "one tab, at the bank's login page"
+    assert all("/devtools/" not in u for _, u in seen), "plain HTTP only: no websocket, so nothing is attached while they log in"
+    assert not (home / cli.IMPORT_TAB_FILE).exists(), "a new session binds its own tab, never inherits the last one's"
+    assert "Chrome/153.0.8010.53" in capsys.readouterr().err, "the person is told which browser got the tab"
+    cli.main(["import", "--browser", "hsbc", "--attach", "[::1]:9222"])
+    assert calls[-1][1]["FINNAMON_IMPORT_CDP"] == "http://[::1]:9222"
+    for bad in ("10.0.0.5:9222", "evil.example:9222", "[::1]:abc"):
+        with pytest.raises(SystemExit):
+            cli.main(["import", "--browser", "hsbc", f"--attach={bad}"])
+        assert "loopback" in capsys.readouterr().err
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen_answering())   # nothing listens
+    n = len(calls)
+    with pytest.raises(SystemExit):
+        cli.main(["import", "--browser", "hsbc", "--attach"])
+    err = capsys.readouterr().err
+    assert "--remote-debugging-port=9222" in err and "--user-data-dir" in err and len(calls) == n
+    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u: (CDP, TAB))   # the dashboard's auto: no port, Finnamon's own window
+    cli.main(["import", "--browser", "hsbc", "--attach=auto"])
+    assert calls[-1][1]["FINNAMON_IMPORT_CDP"] == CDP and "--attach" not in calls[-1][0][1]
+
+
+def _guard(cmd, monkeypatch):
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}})))
+    try:
+        cli.main(["hook", "browser-guard"])
+        return True
+    except SystemExit as e:
+        assert e.code == 2
+        return False
+
+
+def test_browser_guard_pins_the_session_to_the_banks_tab(home, capsys, monkeypatch):
+    """Right after `connect`, agent-browser drives whichever tab it picked; in --attach mode that is one of the person's own
+    (their mail, another bank). So nothing that reads or acts on a page runs until `tab <the bank's tab>` has, and that
+    only while the tab is open; no tab may be listed, opened or switched to but that one."""
+    monkeypatch.setenv("FINNAMON_IMPORT_SESSION", "local")
+    monkeypatch.setenv("FINNAMON_IMPORT_CDP", CDP)
+    monkeypatch.setenv("FINNAMON_IMPORT_TAB", TAB)
+    ab = "agent-browser --session finnamon-import"
+    assert _guard(f"{ab} connect {CDP}", monkeypatch)
+    for cmd in ("snapshot -i -c", "get url", "click @e1", "press Enter", "back"):
+        assert not _guard(f"{ab} {cmd}", monkeypatch), f"{cmd} before the session is bound to the bank's tab"
+    assert "tab <the --tab id>" in capsys.readouterr().err
+    for cmd in ("tab", "tab list", "tab new https://evil.example", "tab OTHER", "tab t1", "tab close OTHER", "tab close", f"tab {TAB} extra"):
+        assert not _guard(f"{ab} {cmd}", monkeypatch), cmd
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen_answering())   # the bank's tab is gone (or the browser): no binding
+    assert not _guard(f"{ab} tab {TAB}", monkeypatch) and "gone" in capsys.readouterr().err
+    assert not (home / cli.IMPORT_TAB_FILE).exists()
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen_answering("127.0.0.1"))
+    assert _guard(f"{ab} tab {TAB}", monkeypatch)
+    assert (home / cli.IMPORT_TAB_FILE).read_text() == TAB
+    for cmd in ("snapshot -i -c", "get url", "click @e1", f"tab close {TAB}", "close"):
+        assert _guard(f"{ab} {cmd}", monkeypatch), cmd
+    assert not _guard(f"{ab} tab list", monkeypatch), "bound or not, never another tab"
+    (home / cli.IMPORT_TAB_FILE).write_text("OTHER")   # a binding to some other session's tab is no binding
+    assert not _guard(f"{ab} snapshot", monkeypatch)
+    assert cli.browser_command_ok(["agent-browser", "--session", "finnamon-import", "snapshot"]) is None, "pure: no tab given, no pin"
+
+
+def _fake_chrome(monkeypatch, disk="Google Chrome 154.0.8037.98 \n", ps=""):
+    from tests.conftest import REAL_CHROME_BUILDS
+    import subprocess
+    monkeypatch.setattr(cli, "chrome_builds", REAL_CHROME_BUILDS)
+
+    def run(argv, **kw):
+        return subprocess.CompletedProcess(argv, 0, ps if argv[0] == "ps" else disk, "")
+    monkeypatch.setattr("subprocess.run", run)
+
+
+APP = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+FW = "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions"
+PS = (f"{APP}\n{FW}/153.0.8010.53/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper --type=gpu-process\n"
+      f"{FW}/153.0.8010.53/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer) --type=renderer\n"
+      "/Applications/Other.app/Contents/Frameworks/X.framework/Versions/9.9.9.9/Helpers/x\n")
+
+
+def test_chrome_builds_reads_the_build_on_disk_and_the_ones_running(monkeypatch):
+    _fake_chrome(monkeypatch, ps=PS)
+    assert cli.chrome_builds(APP) == ("154.0.8037.98", {"153.0.8010.53"}), "only this Chrome's helpers count, not another app's framework"
+    _fake_chrome(monkeypatch, ps=PS.replace("153.0.8010.53", "154.0.8037.98"))
+    assert cli.build_mismatch(APP, "hsbc") is None, "the windows already run the build on disk"
+    _fake_chrome(monkeypatch, ps="")
+    assert cli.build_mismatch(APP, "hsbc") is None, "no Chrome running: nothing to compare"
+    _fake_chrome(monkeypatch, ps=PS)
+    assert cli.build_mismatch("/usr/bin/google-chrome", "hsbc") is None, "no Versions/ path off macOS: never a claim it cannot check"
+    _fake_chrome(monkeypatch, disk="", ps=PS)
+    assert cli.build_mismatch(APP, "hsbc") is None
+
+
+def test_build_mismatch_says_what_happened_and_the_three_ways_out(monkeypatch):
+    _fake_chrome(monkeypatch, ps=PS)
+    msg = cli.build_mismatch(APP, "hsbc")
+    assert msg.startswith("Chrome updated to 154.0.8037.98; your open windows run 153.0.8010.53. HSBC rejects a build it hasn't seen. Options: ")
+    assert 'finnamon import "<account>" ~/Downloads/<file>.csv' in msg, "the CSV from the everyday browser, and how"
+    assert 'open -a "Google Chrome" --args --remote-debugging-port=9222' in msg and "finnamon import --browser hsbc --attach" in msg
+    assert msg.endswith("or retry in a few days.")
+    assert "HSBC's does" in cli.build_mismatch(APP, "Ally"), "another bank: the same facts, not a claim about that bank"
+
+
+def test_import_browser_says_so_before_opening_a_window_on_a_newer_build(home, capsys, monkeypatch):
+    calls = []
+    _launcher(monkeypatch, calls)
+    launched = []
+    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u: (launched.append(u), (CDP, TAB))[1])
+    monkeypatch.setattr(cli, "build_mismatch", lambda chrome, bank=None: "Chrome updated to 154; your open windows run 153.")
+    monkeypatch.setattr("builtins.input", lambda prompt="": "")
+    with pytest.raises(SystemExit):
+        cli.main(["import", "--browser", "hsbc"])
+    err = capsys.readouterr().err
+    assert "Chrome updated to 154; your open windows run 153." in err and "not opened" in err and not launched and not calls
+    monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+    cli.main(["import", "--browser", "hsbc"])
+    assert launched and calls, "the person may still try"
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen_answering("127.0.0.1"))
+    monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail("attach mode uses the running build; nothing to warn about"))
+    cli.main(["import", "--browser", "hsbc", "--attach"])
+    monkeypatch.setenv("FINNAMON_IMPORT_SESSION", "local")   # the sealed session's own check, for "reference: EAC"
+    cli.main(["import", "--chrome-check", "hsbc"])
+    assert json.loads(capsys.readouterr().out)["message"] == "Chrome updated to 154; your open windows run 153."
+
+
+def test_doctor_says_when_chrome_on_disk_is_newer_than_the_open_windows(home, capsys, monkeypatch):
+    monkeypatch.setenv("FINNAMON_CHROME", sys.executable)
+    monkeypatch.setattr(cli, "build_mismatch", lambda chrome, bank=None: "Chrome updated to 154; your open windows run 153.")
+    with pytest.raises(SystemExit):
+        cli.main(["doctor"])
+    assert "! Chrome (Fetch by AI): Chrome updated to 154; your open windows run 153." in capsys.readouterr().out

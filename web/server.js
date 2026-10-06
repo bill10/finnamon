@@ -389,10 +389,11 @@ export async function restartNotice({ inbound, intercom, send, now = Date.now() 
 // A browser import runs in its own Claude session (a person logs into the bank in the window it opens), never in the
 // household's: that one would carry the whole transcript into every later chat and, in channel mode, keep Telegram waiting.
 // The CLI owns that session's argv (`finnamon import --browser` execs claude on the skill with its allow list), so the
-// server spawns the CLI rather than keeping a second copy of the list here.
+// server spawns the CLI rather than keeping a second copy of the list here. --attach=auto: when the person's own Chrome
+// answers on 9222 the bank opens in one new tab of it (the build they already run), else in Finnamon's own window.
 export function importCommand(bank) {
   const [bin, ...pre] = config.finnamon;
-  return { cmd: bin, args: [...pre, 'import', '--browser', '--', bank] };
+  return { cmd: bin, args: [...pre, 'import', '--browser', '--attach=auto', '--', bank] };
 }
 
 // once: a session that ends when the process exits (the import), instead of one kept alive for the household (the intercom)
