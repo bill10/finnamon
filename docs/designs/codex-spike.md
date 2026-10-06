@@ -198,6 +198,24 @@ Yes, with a symlink, and that is all it needs.
   `timeout` is in seconds (`timeoutSec` 660; the default is 600).
 - **The refresh write-through stays a source-code argument** (finding 6): no throwaway ChatGPT login was available to force one.
 
+## Card 3 notes (Codex 0.157)
+
+- **The MCP server runs outside the sandbox and reaches the database:** live, under the generated config in a scratch
+  `FINNAMON_HOME`, `finnamon(argv=["finnamon", "status"])` exited 0 with the household's status, and `["finnamon", "sync"]`
+  came back refused from the deny list. A Bash `cat` and an `apply_patch` update of `secrets.toml` were both stopped by the
+  PreToolUse `secret-guard` ("Command blocked by PreToolUse hook"), before the profile's deny was reached.
+- **Config keys** (from `codex mcp get`): `enabled_tools`, `env_vars` (variables passed through from Codex's own environment;
+  an MCP server otherwise gets only a short default set), and `[mcp_servers.<name>.tools.<tool>] approval_mode`
+  (`auto`, `prompt`, `writes`, `approve`).
+- **`env_vars` reaches the server:** a live `codex exec` with `FINNAMON_TRIAGE=1` in Codex's own environment had the tool
+  refuse `alias --list` and `detect --draft` from triage's list. The tool's optional `stdin` argument carries what a
+  `-` argument reads (`triage set … -`, `detect --draft -`), since there is no shell to pipe a heredoc. `tool_timeout_sec`
+  sits above the tool's own 600 s, so Codex never retries a write that is still running.
+- **`--ignore-user-config` was not used for the live runs:** it skips `$CODEX_HOME/config.toml`, which is the generated
+  config under test. A scratch `CODEX_HOME` already keeps `~/.codex/config.toml` out.
+- **The household's AGENTS.md refuses a test prompt** that asks it to read `secrets.toml` (no tool call at all); the guard runs
+  were made from a scratch work directory under the same `CODEX_HOME`.
+
 ## What changes in cards 2–6
 
 - **Card 2 (bundle, `CODEX_HOME`, install/doctor):**
