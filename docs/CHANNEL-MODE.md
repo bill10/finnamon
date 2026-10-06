@@ -3,8 +3,8 @@
 | `finnamon channel …` | Reads the bot | Answers in | One conversation with the dashboard? | Needs |
 |---|---|---|---|---|
 | `session` (**recommended; the default for a new install** with a bot and the dashboard) | the daemon | the dashboard's intercom session | yes | the dashboard (`finnamon install` with Node) |
-| `on` (`channel`, an option) | Claude Code's Telegram plugin, in the dashboard's session | the same | yes | the plugin, Bun, the token copied to `~/.claude/channels/telegram/.env` |
-| `off` (`daemon`, the legacy mode) | the daemon | its own `claude -p --resume` session | no: the chat has its own thread | nothing more |
+| `on` (`channel`, an option) | Claude Code's Telegram plugin, in the dashboard's session | the same | yes | the plugin, Bun, the token copied to `~/.claude/channels/telegram/.env`; Claude Code as the assistant (refused on Codex) |
+| `off` (`daemon`, the legacy mode) | the daemon | its own `claude -p --resume` session (`codex exec resume` on Codex) | no: the chat has its own thread | nothing more |
 
 An existing install keeps the mode it has; `finnamon update` mentions `finnamon channel session` once if it is on `channel` or `daemon`.
 

@@ -61,7 +61,7 @@ over the demo data). Nothing touches Plaid, Telegram or a real household.
 
 - A **technical household**: you're comfortable in a terminal and with a config step or two.
 - **A computer that stays on: Mac, Linux, or Windows via WSL2** (a Mac mini, or a laptop that mostly sleeps at home). Linux needs systemd; on Windows, Finnamon runs in Ubuntu under WSL2 ([how](docs/INSTALL.md#windows-wsl2)).
-- **A Claude subscription** (Pro or Max) with Claude Code. Triage, chat and the dashboard's intercom all run `claude`.
+- **A Claude subscription** (Pro or Max) with Claude Code. Triage, chat and the dashboard's intercom all run `claude`, or OpenAI's `codex` once `finnamon settings set assistant codex` picks it (a Fetch by AI import still runs `claude`).
 - **Banks in the US or Canada**, for Plaid's free Trial plan. Banks Plaid can't reach can be imported from CSV.
 
 ## What it costs
@@ -69,7 +69,7 @@ over the demo data). Nothing touches Plaid, Telegram or a real household.
 | | Cost |
 |---|---|
 | Finnamon | Free |
-| Claude | Your existing Pro or Max subscription (or Console credit). **Required.** |
+| Claude | Your existing Pro or Max subscription (or Console credit). **Required.** With Codex as the assistant, your Codex login (shared with your own `codex`) carries triage, chat and the intercom instead. |
 | Plaid | Free on the Trial plan: 10 bank logins with real data, for US/Canada teams created on or after 2026-04-15. Per Plaid it includes the big OAuth banks (Chase, Bank of America, Wells Fargo). Older teams get Limited Production, without those banks. |
 | Telegram, Tailscale | Free |
 
@@ -81,6 +81,8 @@ Your data lives in one SQLite file on your own computer. Some of it still travel
 - **Anthropic, through Claude**: when the assistant triages an alert or answers a question, the merchant names, amounts
   and dates it reads go to Anthropic, under your Claude account's terms. **Turn off "Help improve Claude"** in
   Claude's privacy settings: with it on, Anthropic keeps that data for 5 years, with it off for 30 days.
+- **OpenAI, through Codex**, only when Codex is the assistant (`finnamon settings set assistant codex`): the same data goes
+  to OpenAI instead, under your ChatGPT or OpenAI account's terms and data controls.
 - **Telegram**: alerts and your chat with the bot pass through Telegram's servers. Bot chats are not end-to-end
   encrypted.
 - **Nothing goes to a Finnamon company or server.** There isn't one. No telemetry, no account.

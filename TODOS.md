@@ -97,6 +97,28 @@ drop the household's anomaly alerts; the other three were found reviewing the ca
 **Effort:** S
 **Priority:** P2
 
+### Codex dashboard session: edges left by the card-5 review
+
+**What:** (1) The `finnamon` permission profile extends `:workspace`, so sandboxed commands read the whole disk without
+asking; card 5 denies the usual key and login stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.config/gh`, `~/.kube`,
+Claude's credentials, `~/Library/Keychains`), but the complete fix is to deny the real `HOME` and grant back what tools
+need. Verify each grant with `codex sandbox -P finnamon`. (2) `settings set assistant codex` checks Codex
+with the terminal's PATH, while the web unit's PATH is the one written at install; switching should check (or rewrite)
+the unit, not only restart it. (3) Talk and the relay can both pass the idle check in the same instant and type over each
+other: one typing lock for both. (4) A line ending in an `@` or `$` token can leave Codex's completion popup open, so the
+Enter accepts it instead of submitting: type a trailing space first (Codex only). (5) `intercom.json` keeps one `prev`: two
+lost conversations in a row, or a switch of CLI, lose the older id (the rollout stays on disk). (6) `main()`'s
+`onStart`/`onExit` wiring of `learnId` has no unit test; the stub round trip copies it by hand. (7) `/new` or `/resume`
+typed in the Codex TUI changes its thread without `intercom.json` knowing.
+
+**Why:** Found reviewing the card-5 PR; (1) matters most, because a phone turn's reply can carry whatever a command read.
+
+**Context:** `finnamon/codex.py` `denied()`, `cli._codex_selectable`, `web/talk.js` `createTalk`/`createRelay`/`typeInto`,
+`web/server.js` `intercomSession`/`main`; docs/designs/codex-spike.md "Card 5 notes".
+
+**Effort:** M
+**Priority:** P1
+
 ### Dedupe the two enrolment paths in owners.py
 
 **What:** `_poll_direct` (CLI polls getUpdates itself) and the daemon-side `pending_owner` path both parse the same message shape. Fold into one `enroll_from_update` used by both.

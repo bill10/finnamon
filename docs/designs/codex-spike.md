@@ -265,6 +265,22 @@ Yes, with a symlink, and that is all it needs.
   - The session id comes from the newest rollout whose `session_meta.cwd` is the assistant directory, or from a hook's `session_id`.
   - `intercomSession` already holds `{id: null}` for a CLI that names its own session.
   - The Codex turn reader works off `event_msg` items. Done is `task_complete`; the reply is `last_agent_message`; progress is the `CommandExecution` items.
-  - Lift the `settings set assistant codex` refusal (`store.validate_setting`; card 4 already dropped `agent_runner.CODEX_PENDING`).
+  - Lift the `settings set assistant codex` refusal (`store.validate_setting`; card 4 already dropped `agent_runner.CODEX_PENDING`). Done in card 5: `cli._codex_selectable` checks `codex.problems()` and `config_problems()` instead.
   - **Mark the Codex session as an agent.** Inside the dashboard's Claude session, the human-only gates are held only by the `CLAUDECODE` that Claude sets on its own tool calls (`web/server.js` `env()` strips the Finnamon markers). A Codex PTY sets nothing, so every human-only verb, `settings set assistant` included, would be open to it. Set `FINNAMON_FROM_AGENT` on the session itself, through `shell_environment_policy.set` and the MCP server's `env`, before this card lands.
 - **Card 6:** unchanged.
+
+## Card 5 notes (Codex 0.157, live)
+
+- **The TUI runs through a shared background app-server by default** ("Installing daemon … app-server-daemon"); the
+  household session passes `--no-daemon` (and `resume --no-daemon <id>`), so it lives and dies with the dashboard's PTY.
+  Under a long `CODEX_HOME` the daemon's socket path is past `SUN_LEN` and the TUI exits.
+- **The rollout is written at the first line typed, not at start.** Its name carries the start time; `session_meta.source`
+  is `cli` (originator `codex-tui`) for the TUI and `exec` for `codex exec`.
+- **An approval prompt** reads "Would you like to run the following command? … › 1. Yes, proceed (y) … Press enter to
+  confirm or esc to cancel" (`tests/fixtures/codex/pty-approval.jsonl`). Esc on it interrupts the turn.
+- **While the PermissionRequest hook runs, the TUI shows "Running hook" and no dialog**; the dialog appears only if the
+  hook gives no decision. A phone turn's prompt is therefore answered from the phone (or denied after 10 minutes), and
+  the relay stops its clock on the rollout's open `custom_tool_call` meanwhile. A tap 150 s in, past a 120 s turn
+  timeout, still delivered the reply.
+- **`-c shell_environment_policy.set.FINNAMON_FROM_AGENT="1"` merges** into the generated table (tool commands saw it and
+  the real `HOME`), and the hook's env did not carry it, so `approval.ask` relays to the phone.
