@@ -1022,20 +1022,80 @@ def chrome_builds(chrome: str) -> tuple[str | None, set[str]]:
     return disk, running
 
 
+EAC_CAUSES = ("the error may come from that new build, from the debugging port Finnamon opens Chrome with, or from Finnamon's "
+              "own Chrome profile reading as a new device; finnamon import --browser {bank} --diagnose tells them apart")
+
+
 def build_mismatch(chrome: str, bank: str | None = None) -> str | None:
     """What to tell the person when Chrome on disk is newer than the windows they have open, or None. HSBC US's risk engine
-    (Transmit Security) fails the login on /security, "reference: EAC", for a few days after every Chrome update, and only
-    a freshly launched window runs the new build."""
+    (Transmit Security) fails the login on /security, "reference: EAC"; a build it has not seen is one suspect (only a
+    freshly launched window runs the new build), not a confirmed cause: nothing public says what EAC means, so the
+    message names the other two as well and points at --diagnose."""
     disk, running = chrome_builds(chrome)
     old = sorted(running - {disk}) if disk else []
     if not old:
         return None
-    hsbc = (bank or "").lower() == "hsbc"
-    return (f"Chrome updated to {disk}; your open windows run {', '.join(old)}. "
-            + ("HSBC rejects a build it hasn't seen. " if hsbc else "A bank's risk engine (HSBC's does) can reject a build it hasn't seen. ")
-            + "Options: import the CSV from your everyday browser (log in there, download the export, then "
+    who = "HSBC" if (bank or "").lower() == "hsbc" else "A bank's risk engine (HSBC's may)"
+    return (f"Chrome updated to {disk}; your open windows run {', '.join(old)}. {who} may reject a build it hasn't seen, but "
+            + EAC_CAUSES.format(bank=bank or "<bank>") + ". Options: import the CSV from your everyday browser (log in there, download the export, then "
             f'finnamon import "<account>" ~/Downloads/<file>.csv); relaunch Chrome with the debug port and use --attach '
             f"({ATTACH_HOW}; then finnamon import --browser {bank or '<bank>'} --attach); or retry in a few days.")
+
+
+DIAGNOSE_FILE = "chrome-diagnose.json"   # under FINNAMON_HOME: every --diagnose run's answers, newest last
+
+
+def _asked(prompt: str) -> bool:
+    try:
+        return input(prompt).strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
+
+
+def chrome_diagnose(chrome: str, profile: Path, bank: str) -> dict:
+    """Tell the causes of a refused login apart by observation: the person logs in by hand on Finnamon's profile twice,
+    first with no debugging port at all, then with the port open as Fetch by AI opens it. Nothing attaches either time.
+    Port-less fails too: not the port (the build, or the profile reading as a new device; the builds printed alongside
+    say which is likelier). Only the port run fails: the port. Both pass: neither, so it was the attaching or a passing
+    flag. Answers are kept in DIAGNOSE_FILE so a second run days later (after the build ages) can be compared."""
+    url = BANK_LOGIN.get(bank.lower(), "about:blank")
+    disk, running = chrome_builds(chrome)
+    print(f"Chrome on disk: {disk or 'unknown'}; your open windows run: {', '.join(sorted(running)) or 'none this computer can see'}.")
+    results = {}
+    for label, port in (("no_port", False), ("with_port", True)):
+        print(f"\n{'2' if port else '1'}/2: a window of Finnamon's own Chrome profile "
+              + ("WITH the debugging port open (as Fetch by AI opens it)" if port else "with NO debugging port")
+              + f", at {bank}. Nothing is attached to it. Log in yourself.")
+        if port:
+            chrome_launch(chrome, profile, url)
+        else:
+            try:
+                subprocess.Popen([chrome, f"--user-data-dir={profile}", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            except OSError as e:
+                die(f"could not start Chrome: {e}")
+        results[label] = _asked("Did the login reach your accounts (no \"Something went wrong ... reference: EAC\")? [y/N] ")
+        try:
+            input("Log off, quit that Chrome window (Cmd-Q / close it), then press Enter. ")
+        except EOFError:
+            pass
+    if results["no_port"] and not results["with_port"]:
+        verdict = "the debugging port: the login passes without it and fails with it. --attach opens a port too, so import the CSV from your everyday browser by hand."
+    elif not results["no_port"] and not results["with_port"]:
+        verdict = ("not the port: it fails without one too. It may be the new Chrome build (" + ("yours differs from the open windows'" if running - {disk} else "the builds match, so less likely")
+                   + ") or Finnamon's profile reading as a new device. --attach uses your everyday profile and its running build; or import the CSV by hand, or retry in a few days.")
+    elif results["no_port"] and results["with_port"]:
+        verdict = "neither the port nor the profile: both logins passed. Retry Fetch by AI; if it fails again, it is the attaching, so import the CSV by hand."
+    else:
+        verdict = "inconclusive (it failed without the port and passed with it): run --diagnose again."
+    rec = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "bank": bank, "on_disk": disk, "running": sorted(running), **results, "verdict": verdict}
+    f = config.home() / DIAGNOSE_FILE
+    try:
+        prev = json.loads(f.read_text())
+    except (OSError, ValueError):
+        prev = []
+    f.write_text(json.dumps([*prev, rec][-20:], indent=1))
+    print(f"\nLikely cause: {verdict}\n(recorded in {f})")
+    return rec
 
 
 def chrome_path() -> str | None:
@@ -1136,6 +1196,14 @@ def cmd_import(a) -> None:
             die("the browser import is its own Claude session; run `finnamon import --browser <bank>` in a terminal")
         if not a.account:
             die("usage: finnamon import --browser <bank> [--to <url>]")
+        if a.diagnose:   # no Claude, no session: a person, two logins, and what they saw
+            chrome = chrome_path()
+            if not chrome:
+                die("Google Chrome not found; install it, or set FINNAMON_CHROME to its executable")
+            profile = config.home() / "chrome"
+            profile.mkdir(mode=0o700, parents=True, exist_ok=True)
+            profile.chmod(0o700)
+            chrome_diagnose(chrome, profile, a.account); return
         exe = claude_runner.binary()
         if not exe:
             die("claude is not on PATH")
@@ -2371,7 +2439,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--flip", action="store_true", help="the file shows money out as positive (some card exports); default: negative, as banks do"); s.add_argument("--dry-run", action="store_true", help="parse and report, write nothing")
     s.add_argument("--browser", action="store_true", help="open a Claude session that drives a visible browser: you log in, it downloads and imports"); s.add_argument("--to", metavar="URL", help="on another computer: the Finnamon box's dashboard URL; the file (or the browser session's result) is uploaded there, with FINNAMON_WEB_TOKEN set to the box's `finnamon web token`")
     s.add_argument("--attach", nargs="?", const=ATTACH_PORT, metavar="HOST:PORT", help="with --browser: open one new tab in the Chrome you already run with --remote-debugging-port (default 9222, loopback only) instead of Finnamon's own window; auto: that if one answers, else Finnamon's")
-    s.add_argument("--chrome-check", action="store_true", help="say whether Chrome on disk is a newer build than the windows you have open (what HSBC's 'reference: EAC' usually means)"); s.set_defaults(fn=cmd_import)
+    s.add_argument("--diagnose", action="store_true", help="with --browser: log in by hand on Finnamon's Chrome profile twice, without and then with the debugging port, to tell what makes the bank refuse it (HSBC's 'reference: EAC')")
+    s.add_argument("--chrome-check", action="store_true", help="say whether Chrome on disk is a newer build than the windows you have open (one possible cause of HSBC's 'reference: EAC')"); s.set_defaults(fn=cmd_import)
     s = sp.add_parser("sync"); s.add_argument("--item"); s.set_defaults(fn=cmd_sync)
     s = sp.add_parser("detect"); s.add_argument("--as-of"); s.add_argument("--only", nargs="*"); s.add_argument("--sql", metavar="NAME", help="print the assembled query"); s.add_argument("--prelude", action="store_true", help="print _prelude.sql, the CTEs every detector selects from")
     s.add_argument("--review", action="store_true"); s.add_argument("--tier", choices=["rules", "candidates"], default="candidates")

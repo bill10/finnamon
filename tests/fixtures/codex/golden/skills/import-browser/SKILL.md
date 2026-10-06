@@ -66,14 +66,15 @@ uploads the file to its dashboard, with the box's key from `FINNAMON_WEB_TOKEN` 
    then `get url` and `snapshot -i -c` to confirm the logged-in account overview (a "Log off" / "Sign out" control, account
    names with balances). If `connect` fails, or the page is still the login form, say so plainly and stop -- do not
    retry in a loop and do not ask them to log in again more than once. When the bank refused the login outright
-   (HSBC US: `/security`, "Something went wrong ... reference: EAC") this is usually HSBC's risk engine rejecting a Chrome
-   build it has not seen yet, which happens for a few days after every Chrome update. Without `--attach`, run
-   `finnamon import --chrome-check <bank>` and, when its `message` is not null, say that message to the person as it is:
-   it names the two builds and the three ways out (the CSV from their everyday browser, relaunching Chrome with the debug
-   port and `--attach`, or retrying in a few days). When it is null (the builds match, or this computer cannot tell),
-   or with `--attach`, give them the first way out yourself: log in to the bank in their everyday browser, download the
-   CSV by hand, and run `finnamon import "<account>" ~/Downloads/<file>.csv` (with `--to <url>` if this computer is not the
-   Finnamon box), or retry in a few days.
+   (HSBC US: `/security`, "Something went wrong ... reference: EAC"), say plainly that nobody knows for sure what
+   EAC means and that there are three suspects: a Chrome build the bank has not seen yet (for a few days after every
+   Chrome update), the debugging port the window was opened with, or Finnamon's own Chrome profile reading as a new
+   device. Without `--attach`, run `finnamon import --chrome-check <bank>` and, when its `message` is not null, say that
+   message as it is: it names the two builds and the ways out. Either way give them the ways out: log in to the bank in
+   their everyday browser, download the CSV by hand, and run `finnamon import "<account>" ~/Downloads/<file>.csv` (with
+   `--to <url>` if this computer is not the Finnamon box); `finnamon import --browser <bank> --attach` with their everyday
+   Chrome (when this run was not already one); retry in a few days; and, to find out which suspect it is, run
+   `finnamon import --browser <bank> --diagnose` in a terminal (two logins by hand, without and with the port).
 4. **Download the CSV** for each manual account at this bank. Navigate by reading the page (`snapshot -i`, refs)
    and clicking, never by guessing selectors. If the site offers no CSV for an account, say so and skip it.
    HSBC US, which is the bank this was built for, goes: the account tile on the dashboard -> its transaction list ->

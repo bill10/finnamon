@@ -882,11 +882,13 @@ def test_chrome_builds_reads_the_build_on_disk_and_the_ones_running(monkeypatch)
 def test_build_mismatch_says_what_happened_and_the_three_ways_out(monkeypatch):
     _fake_chrome(monkeypatch, ps=PS)
     msg = cli.build_mismatch(APP, "hsbc")
-    assert msg.startswith("Chrome updated to 154.0.8037.98; your open windows run 153.0.8010.53. HSBC rejects a build it hasn't seen. Options: ")
+    assert msg.startswith("Chrome updated to 154.0.8037.98; your open windows run 153.0.8010.53. HSBC may reject a build it hasn't seen, but ")
+    assert "debugging port" in msg and "new device" in msg and "finnamon import --browser hsbc --diagnose" in msg, "a hypothesis, said as one, with the other two suspects"
+    assert "rejects" not in msg
     assert 'finnamon import "<account>" ~/Downloads/<file>.csv' in msg, "the CSV from the everyday browser, and how"
     assert 'open -a "Google Chrome" --args --remote-debugging-port=9222' in msg and "finnamon import --browser hsbc --attach" in msg
     assert msg.endswith("or retry in a few days.")
-    assert "HSBC's does" in cli.build_mismatch(APP, "Ally"), "another bank: the same facts, not a claim about that bank"
+    assert "HSBC's may" in cli.build_mismatch(APP, "Ally"), "another bank: the same facts, not a claim about that bank"
 
 
 def test_import_browser_says_so_before_opening_a_window_on_a_newer_build(home, capsys, monkeypatch):
@@ -917,3 +919,29 @@ def test_doctor_says_when_chrome_on_disk_is_newer_than_the_open_windows(home, ca
     with pytest.raises(SystemExit):
         cli.main(["doctor"])
     assert "! Chrome (Fetch by AI): Chrome updated to 154; your open windows run 153." in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("answers,verdict", [
+    (["y", "", "n", ""], "the debugging port"),
+    (["n", "", "n", ""], "not the port"),
+    (["y", "", "y", ""], "neither the port nor the profile"),
+    (["n", "", "y", ""], "inconclusive"),
+])
+def test_diagnose_isolates_the_cause_by_two_manual_logins(home, capsys, monkeypatch, answers, verdict):
+    """--diagnose: Finnamon's profile with no debugging port, then with one, the person logging in by hand both times and
+    nothing attached; their answers decide, and are recorded with the builds. No Claude session is started."""
+    started, launched = [], []
+    monkeypatch.setenv("FINNAMON_CHROME", sys.executable)
+    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: started.append(argv) or _FakePopen(argv))
+    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u: (launched.append(u), (CDP, TAB))[1])
+    monkeypatch.setattr("os.execve", lambda *a: pytest.fail("no Claude session"))
+    monkeypatch.setattr(cli, "chrome_builds", lambda chrome: ("154.0.8037.98", {"153.0.8010.53"}))
+    it = iter(answers)
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(it))
+    cli.main(["import", "--browser", "hsbc", "--diagnose"])
+    out = capsys.readouterr().out
+    assert len(started) == 1 and not any("remote-debugging" in a for a in started[0]) and "https://www.us.hsbc.com/" in started[0], "first window: no port at all"
+    assert launched == ["https://www.us.hsbc.com/"], "second window: the port, exactly as Fetch by AI opens it"
+    assert "154.0.8037.98" in out and "153.0.8010.53" in out and verdict in out
+    rec = json.loads((home / cli.DIAGNOSE_FILE).read_text())[-1]
+    assert rec["bank"] == "hsbc" and rec["on_disk"] == "154.0.8037.98" and verdict in rec["verdict"]
