@@ -359,12 +359,6 @@ def _setup_codex(conn) -> str:
         print(f"  ! Codex {'.'.join(map(str, v)) if v else '(version unknown)'} is older than {'.'.join(map(str, codex.MIN_VERSION))}: {codex.INSTALL_HINT}. Claude Code stays the assistant.")
         _check_claude_code()
         return "claude"
-    try:   # first, so a Codex that cannot be selected yet leaves no FINNAMON_HOME/codex behind: a Claude household stays as it was
-        store.validate_setting("assistant", "codex")
-    except ValueError as e:   # until the dashboard card lands (store.validate_setting)
-        print(f"  Claude Code stays the assistant for now: {e}")
-        _check_claude_code()
-        return "claude"
     res = codex.install(exe)
     if res["auth"] in ("linked", "relinked"):
         print(f"  ✓ sharing your Codex login: {codex.home() / 'auth.json'} → {codex.user_auth()}")
@@ -681,16 +675,30 @@ def cmd_channel(a) -> None:
         # The intercom's argv (--channels, the MCP seal, the web tools) is fixed when the dashboard starts it, and a session
         # still carrying the channel plugin keeps reading the bot under the daemon (409s, messages the relay never sees).
         if was != "daemon" or a.action == "session":
-            if not scheduler.installed("web"):
-                print("The dashboard isn't installed: finnamon install sets it up with this mode.")
-            else:
-                try:
-                    scheduler.restart(["web"])
-                    print("restarted the dashboard, so its intercom session runs in this mode")
-                except (RuntimeError, subprocess.CalledProcessError, OSError) as e:
-                    print(f"warning: could not restart the dashboard ({e}): finnamon update --no-pull", file=sys.stderr)
+            _restart_web("its intercom session runs in this mode")
     else:
         out({"inbound": store.get_state(conn, "inbound") or "daemon"})
+
+
+def _restart_web(why: str) -> None:
+    """The dashboard fixes its session's CLI and argv when it starts: a change to either restarts it."""
+    if not scheduler.installed("web"):
+        print(f"The dashboard isn't installed: once `finnamon install` sets it up, {why}.")
+        return
+    try:
+        scheduler.restart(["web"])
+        print(f"restarted the dashboard, so {why}")
+    except (RuntimeError, subprocess.CalledProcessError, OSError) as e:
+        print(f"warning: could not restart the dashboard ({e}): finnamon update --no-pull", file=sys.stderr)
+
+
+def _codex_selectable(conn) -> None:
+    """`settings set assistant codex`: only once init (or update) has set Codex up and it would start sealed."""
+    if store.get_state(conn, "inbound") == "channel":
+        die("channel mode is Claude Code's own Telegram plugin; switch the chat first: finnamon channel session")
+    probs = codex.problems() or codex.config_problems()
+    if probs:
+        die("Codex is not ready to run the household's assistant: " + "; ".join(probs) + " (`finnamon init` sets it up)")
 
 
 def _register_channel_plugin(conn, force: bool = False) -> None:
@@ -1428,6 +1436,9 @@ def cmd_doctor(a) -> None:
 
     r_ok, r_detail, r_fix = remote.doctor_line()   # every run, never silent: off is a line too
     check("optional" if r_ok is None else r_ok, "Remote access", r_detail, r_fix)   # off or unknown is not a problem
+    if conn is not None:
+        check(True, "Assistant", f"{store.assistant_kind(conn)} runs the household's chat, triage and dashboard session",
+              "finnamon settings set assistant claude|codex")
     probs = assistant.problems()
     check(not probs, "Assistant directory", (probs[0] + (f" (and {len(probs) - 1} more)" if len(probs) > 1 else "")) if probs
           else f"{assistant.dir()} installed and trusted", "finnamon install")
@@ -1724,6 +1735,13 @@ def _retire_intercom_session(yes: bool = False, dry_run: bool = False) -> bool:
     # Claude Code keeps a transcript under the directory the session ran in: the assistant directory since v0.8.0.0, the
     # checkout before it, so the one retirement across that release resumes from the checkout, not from here.
     where = f"in the directory that session ran in ({assistant.dir()}, or the checkout {scheduler.repo_dir()} for a session older than v0.8.0.0)"
+    if rec.get("kind") == "codex":   # a Codex thread (web/server.js records the CLI); its rollout is under Finnamon's CODEX_HOME
+        resume = f"cd {assistant.dir()} && CODEX_HOME={codex.home()} HOME={codex.seal_home()} codex resume --no-daemon"
+        if old:
+            print(f"the assistant starts a fresh conversation; the retired one is still on disk: {resume} {old}")
+        if prev:   # after a switch of CLI this may be a Claude session's id
+            print(f"  and the one before it: {prev}")
+        return True
     if old:
         print(f"the assistant starts a fresh conversation; the retired one is still on disk: claude --strict-mcp-config --resume {old}, {where}")
     if prev:
@@ -1744,8 +1762,8 @@ def _retire_intercom_file() -> None:
     if not isinstance(rec, dict):
         return
     keep = rec.get("id") or rec.get("prev")
-    if keep:
-        f.write_text(json.dumps({"prev": keep})); f.chmod(0o600)   # 0600 like the rest of ~/.finnamon
+    if keep:   # the CLI it belongs to stays too: server.js starts a fresh record when the CLI differs
+        f.write_text(json.dumps({"prev": keep, **({"kind": rec["kind"]} if rec.get("kind") else {})})); f.chmod(0o600)   # 0600 like the rest of ~/.finnamon
     else:
         f.unlink(missing_ok=True)
 
@@ -1850,11 +1868,16 @@ def cmd_settings(a) -> None:
             die(f"{'the assistant is chosen' if a.key in store.CHOICE_SETTINGS else 'operational settings are changed'} by a person at a terminal, not from an assistant session")
         if a.value is None and not a.account:
             die("a value is required (per-account overrides can be unset with --account <acct> and no value)")
+        switch = a.key == "assistant" and str(a.value).strip().lower() != store.assistant_kind(conn)
+        if a.key == "assistant" and str(a.value).strip().lower() == "codex":
+            _codex_selectable(conn)
         try:
             store.set_setting(conn, a.key, a.value, a.account or "*", ops=a.ops)
         except ValueError as e:
             die(str(e))
         print("ok")
+        if switch:   # the dashboard picks its CLI when it starts, and the daemon reads the setting per run
+            _restart_web("its intercom session runs on " + store.assistant_kind(conn))
     elif a.action == "get":
         out({"key": a.key, "value": store.setting(conn, a.key, a.account), "description": store.SETTING_HELP.get(a.key)})
     else:

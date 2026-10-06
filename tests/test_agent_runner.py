@@ -31,7 +31,7 @@ def test_assistant_setting(conn, monkeypatch, capsys):
     assert store.assistant_kind(conn) == "claude"
     with pytest.raises(SystemExit):
         cli.main(["settings", "set", "assistant", "codex"])
-    assert "Codex support is being built" in capsys.readouterr().err
+    assert "Codex is not ready" in capsys.readouterr().err, "selectable only once init has set Codex up (tests/test_codex.py)"
     for bad in (["settings", "set", "assistant", "gemini"], ["settings", "set", "assistant", "claude", "--account", "acct"]):
         with pytest.raises(SystemExit):
             cli.main(bad)
@@ -46,7 +46,7 @@ def test_assistant_setting(conn, monkeypatch, capsys):
 
 
 def test_a_codex_household_is_never_run_as_claude(conn, fake_claude, monkeypatch):
-    conn.execute("INSERT INTO settings(account_id, key, value) VALUES ('*', 'assistant', 'codex')")   # what card 5 will let `settings set` write
+    conn.execute("INSERT INTO settings(account_id, key, value) VALUES ('*', 'assistant', 'codex')")   # what `settings set` writes once Codex is set up
     monkeypatch.setenv("FINNAMON_CODEX_BIN", str(CODEX / "bin" / "codex"))
     assert agent_runner.kind() == "codex"
     probs = agent_runner.harness_problems()

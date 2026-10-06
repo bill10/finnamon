@@ -67,6 +67,7 @@ def test_set_up_household_is_all_good(home, units, fake_claude, tg, capsys, monk
         assert line(out, what).startswith("✓"), line(out, what)
     assert "1 linked" in out and "daemon running" in out and "(sandbox)" in out
     assert line(out, "Telegram inbound").startswith("✓ Telegram inbound: daemon")
+    assert line(out, "Assistant").startswith("✓ Assistant: claude runs"), "which CLI is the assistant, named"
     store.set_state(conn, "inbound", "session")
     assert line(doctor(capsys)[1], "Telegram inbound").startswith("✓ Telegram inbound: session")
     monkeypatch.setattr(scheduler, "web_args", lambda: [])   # session mode with no dashboard to type into

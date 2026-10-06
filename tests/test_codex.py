@@ -105,6 +105,20 @@ def test_config_problems_flag_what_would_unseal_the_session(home, stub):
     assert any("full access" in p for p in probs) and any("sandbox_mode" in p for p in probs)
 
 
+@pytest.mark.parametrize("edit, says", [
+    (lambda t: t.replace("hooks = true", "hooks = false"), "hooks are off"),
+    (lambda t: t + '\n[mcp_servers.extra]\ncommand = "x"\n', "other than finnamon"),
+    (lambda t: t.replace("[shell_environment_policy]", '[shell_environment_policy]\ninclude_only = ["PATH"]'), "FINNAMON_FROM_AGENT"),
+    (lambda t: t.replace(f'"{Path.home() / ".ssh"}" = "deny"', ""), ".ssh"),
+])
+def test_config_problems_catch_an_edit_the_command_line_does_not_pin(home, stub, edit, says):
+    # Value: protects=the harness check (daemon, triage, every dashboard (re)start) refusing a config.toml that drops a hook, adds an unsealed MCP server, strips the agent marker or a deny; fails_when=one of those checks is removed; why_new=only sandbox_mode/danger were tested; seam=none
+    codex.install()
+    cfg = home / "codex" / "config.toml"
+    cfg.write_text(edit(cfg.read_text()))
+    assert any(says in p for p in codex.config_problems()), codex.config_problems()
+
+
 # --- install: config, pinned trust, the shared login ------------------------------------------------------------------
 
 def test_install_pins_the_hooks_and_links_the_login(home, stub, user_login):
@@ -178,7 +192,7 @@ def test_update_rewrites_the_config_and_restarts(home, stub, capsys):
 # --- the harness check, channel, init, doctor -------------------------------------------------------------------------
 
 def test_harness_check_for_a_codex_household(conn, stub):
-    conn.execute("INSERT INTO settings(account_id, key, value) VALUES ('*', 'assistant', 'codex')")   # what card 5 lets `settings set` write
+    conn.execute("INSERT INTO settings(account_id, key, value) VALUES ('*', 'assistant', 'codex')")   # what `settings set` writes once Codex is set up
     assert any("config.toml" in p for p in agent_runner.harness_problems())
     codex.install()
     assert agent_runner.harness_problems() == [], "no Claude trust is asked of a Codex household"
@@ -201,21 +215,46 @@ def init(monkeypatch, answers, *argv):
     cli.main(["init", "--owner", "bill", *argv])
 
 
-def test_init_offers_codex_and_keeps_claude_until_card_5(home, tg, stub, user_login, fake_claude, monkeypatch, capsys):
-    monkeypatch.setenv("CLAUDE_FAKE_RESULT", json.dumps({"loggedIn": True, "email": "a@b"}))
-    init(monkeypatch, ["cid", "prod-sec", "", "123:token", "codex", "n"])
-    out = capsys.readouterr().out
-    assert "Claude Code stays the assistant for now" in out
-    assert store.assistant_kind(store.connect()) == "claude" and not (home / "codex").exists(), "a refused Codex leaves the Claude household as it was"
-
-
 def test_init_codex_path_selects_codex_and_forces_session(home, tg, stub, fake_claude, monkeypatch, capsys):
-    monkeypatch.setattr(store, "validate_setting", lambda k, v, ops=False: str(v))   # card 5 lifts the refusal
     init(monkeypatch, ["cid", "prod-sec", "", "123:token", "codex", "n"])
     out = capsys.readouterr().out
     assert "2 hook(s) trusted" in out and "logging in for Finnamon alone" in out and (home / "codex" / "auth.json").read_text() == '{"fake": true}', "no login to share: codex login under Finnamon's home"
+    assert "Codex runs the household's assistant" in out
     conn = store.connect()
     assert store.assistant_kind(conn) == "codex" and store.get_state(conn, "inbound") == "session"
+
+
+def test_settings_set_assistant_codex_only_once_it_would_start_sealed(conn, stub, monkeypatch, capsys):
+    restarted = []
+    monkeypatch.setattr(scheduler, "installed", lambda job: True)
+    monkeypatch.setattr(scheduler, "restart", lambda jobs: restarted.append(jobs))
+    with pytest.raises(SystemExit):
+        cli.main(["settings", "set", "assistant", "codex"])
+    assert "Codex is not ready" in capsys.readouterr().err and store.assistant_kind(conn) == "claude", "not set up here: refused"
+    codex.install()
+    store.set_state(conn, "inbound", "channel")
+    with pytest.raises(SystemExit):
+        cli.main(["settings", "set", "assistant", "codex"])
+    assert "finnamon channel session" in capsys.readouterr().err, "channel mode is Claude Code's plugin"
+    store.set_state(conn, "inbound", "session")
+    cfg = codex.home() / codex.CONFIG
+    good = cfg.read_text()
+    cfg.write_text(good.replace('web_search = "disabled"', 'web_search = "live"'))
+    with pytest.raises(SystemExit):
+        cli.main(["settings", "set", "assistant", "codex"])
+    assert "web search" in capsys.readouterr().err, "a config that would unseal it is refused too"
+    cfg.write_text(good)
+    cli.main(["settings", "set", "assistant", "codex"])
+    assert store.assistant_kind(conn) == "codex" and restarted == [["web"]], "the dashboard restarts onto the new CLI"
+    cli.main(["settings", "set", "assistant", "codex"])
+    assert restarted == [["web"]], "no change, no restart"
+    cli.main(["settings", "set", "assistant", "claude"])
+    assert store.assistant_kind(conn) == "claude" and len(restarted) == 2, "and back, with no check"
+    def down(jobs): raise RuntimeError("launchctl said no")
+    monkeypatch.setattr(scheduler, "restart", down)
+    cli.main(["settings", "set", "assistant", "CODEX"])
+    err = capsys.readouterr().err
+    assert store.assistant_kind(conn) == "codex" and "could not restart the dashboard" in err, "a failed restart warns; the setting stands"
 
 
 def test_init_with_no_codex_says_how_to_get_it(home, tg, fake_claude, monkeypatch, capsys):
