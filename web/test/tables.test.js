@@ -64,7 +64,7 @@ test('tableHtml: ended rows are hidden and greyed behind an "ended (N)" toggle; 
   const shut = tableHtml(t, 2026, false), open = tableHtml(t, 2026, true);
   assert.equal((shut.match(/<tr class="ended" hidden>/g) || []).length, 2);
   assert.ok(shut.includes('aria-expanded="false">ended (2)</button>') && !open.includes(' hidden>') && open.includes('aria-expanded="true">ended (2)'));
-  assert.equal((open.match(/<td>—<\/td>/g) || []).length, 2, 'an ended row has no next date: a dash');
+  assert.equal((open.match(/<td class="d">—<\/td>/g) || []).length, 2, 'an ended row has no next date: a dash');
   assert.ok(!tableHtml({ ...t, data: { values: [{ m: 'Netflix', ended: 0 }] } }, 2026, false).includes('ended ('), 'no ended rows, no toggle');
   assert.equal(tableCaption(t, false), '1 live');
   assert.equal(tableCaption(t, true), '1 live · 2 ended');
