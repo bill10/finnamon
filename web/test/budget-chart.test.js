@@ -30,18 +30,20 @@ test('budgetChoice: the spec\'s default until this browser picks one; the pick p
   assert.doesNotThrow(() => saveBudgetChoice(spec(), 'coffee', broken));
 });
 
-test('budgetSpec: swaps the filter and the title, leaves the data alone', () => {
+test('budgetSpec: swaps the filter and drops the title (the picker is the title), leaves the data alone', () => {
   const s = spec(), b = budgetSpec(s, 'coffee');
-  assert.equal(b.title, 'Budget trend: Coffee');
+  assert.equal(b.title, undefined);
   assert.deepEqual(b.transform, [{ filter: { field: 'budget', equal: 'coffee' } }]);
   assert.equal(s.transform[0].filter.equal, 'dining', 'the board entry is not mutated');
+  assert.equal(s.title, 'Budget trend: Dining');
 });
 
-test('budgetPicker: chips up to six with the current one pressed, a select beyond; over-limit ones say so', () => {
-  const chips = budgetPicker(spec(6), 'coffee');
-  assert.ok(chips.includes('data-budget="coffee" aria-pressed="true" class="active"') && chips.includes('data-budget="dining" aria-pressed="false"'));
-  assert.ok(chips.includes('over its limit') && !chips.includes('<select'));
-  const sel = budgetPicker(spec(7), 'kids');
-  assert.ok(sel.startsWith('<select') && sel.includes('<option value="kids" selected>') && sel.includes('dining (over)'));
+test('budgetPicker: one select in the title for any count, the current one selected; over-limit ones say so', () => {
+  for (const n of [2, 7]) {
+    const h = budgetPicker(spec(n), 'coffee');
+    assert.ok(h.startsWith('<div class="btitle"><span>Budget trend:</span>') && h.includes('<option value="coffee" selected>Coffee</option>'));
+    assert.ok(h.includes('Dining (over)') && !h.includes('class="over"') && !h.includes('chips') && !h.includes('data-budget="'));
+  }
+  assert.ok(budgetPicker(spec(), 'dining').includes('class="over"'), 'the chosen over-limit budget carries the dot');
   assert.ok(isBudgetTrend(spec()) && !isBudgetTrend({ usermeta: { finnamon: { chart: 'budgets', budgets: [] } } }));
 });
