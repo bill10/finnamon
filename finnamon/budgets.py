@@ -174,6 +174,11 @@ MATCH = ("EXISTS (SELECT 1 FROM budget_selectors s WHERE s.budget_id = :bid AND 
 # (the tolerance, four times here and in budget_pace.sql) of the stream's amount, so a one-off at a merchant that also
 # bills monthly stays variable. Not scoped to :as_of: a run takes as_of before its sync stamps a new stream's first_seen_at.
 # ponytail: merchant + amount, not Plaid's transaction_ids per stream (not stored); store them if this misfiles.
+# A stream that has ended, for the recurring table and `budget suggest`: Plaid says inactive, it is TOMBSTONED, or its last charge is older than
+# its own interval plus a grace (monthly 45 days, annual 400). An UNKNOWN or missing frequency gets the longest grace, so an irregular one is not hidden.
+# Alias `r`. The recurring_price / recurring_changed detectors keep their own rules.
+STREAM_ENDED = ("(COALESCE(r.is_active, 1) = 0 OR COALESCE(r.status, '') = 'TOMBSTONED' OR (r.last_date IS NOT NULL AND r.last_date < date('now', '-' || "
+                "CASE upper(COALESCE(r.frequency, '')) WHEN 'WEEKLY' THEN 21 WHEN 'BIWEEKLY' THEN 28 WHEN 'SEMI_MONTHLY' THEN 30 WHEN 'MONTHLY' THEN 45 ELSE 400 END || ' days')))")
 RECURRING = ("(t.flow = 'mortgage' OR EXISTS (SELECT 1 FROM recurring r WHERE r.direction = 'outflow' AND COALESCE(r.is_active, 1) = 1 "
              "AND COALESCE(r.status, '') NOT IN ('TOMBSTONED', 'EARLY_DETECTION') AND r.frequency IN ('MONTHLY', 'ANNUALLY') "
              "AND (r.merchant_entity_id = t.merchant_entity_id OR lower(r.merchant_name) = lower(t.merchant_name) OR (r.description = t.name AND r.account_id = t.account_id)) "
@@ -243,7 +248,7 @@ SUGGEST_CAT = "CASE WHEN flow = 'mortgage' THEN 'LOAN_PAYMENTS_MORTGAGE_PAYMENT'
 SUGGEST_PRIM = "CASE WHEN flow = 'mortgage' THEN 'LOAN_PAYMENTS' ELSE category_primary END"
 
 
-def suggest(conn: sqlite3.Connection, months: int = 6, as_of: str | None = None) -> dict:
+def suggest(conn: sqlite3.Connection, months: int = 6, as_of: str | None = None, include_ended: bool = False) -> dict:
     """The numbers Claude reasons over in Step 3: per-category monthly spend, spread, top merchants, fixed vs variable."""
     as_of = as_of or store.now_local()
     rows = conn.execute(
@@ -273,7 +278,8 @@ def suggest(conn: sqlite3.Connection, months: int = 6, as_of: str | None = None)
                     "top_merchants": [{"merchant": t[0], "total": t[1]} for t in top]})
     out.sort(key=lambda c: -c["median"])
     recurring = conn.execute("SELECT COALESCE(merchant_name, description) m, last_amount, frequency FROM recurring r JOIN accounts a ON a.account_id=r.account_id "
-                             "AND a.mirror_of IS NULL WHERE direction='outflow' AND status<>'EARLY_DETECTION' ORDER BY last_amount DESC").fetchall()
+                             "AND a.mirror_of IS NULL WHERE direction='outflow' AND status<>'EARLY_DETECTION'"
+                             + ("" if include_ended else f" AND NOT {STREAM_ENDED}") + " ORDER BY last_amount DESC").fetchall()
     low = conn.execute("SELECT a.name, a.mask, min(b.available) lo FROM balances b JOIN accounts a ON a.account_id=b.account_id "
                        "WHERE a.type='depository' AND a.mirror_of IS NULL AND b.as_of >= datetime(?, ?) GROUP BY a.account_id", (as_of, f"-{months} months")).fetchall()
     return {"months": months, "as_of": as_of, "categories": out,

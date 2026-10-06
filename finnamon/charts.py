@@ -380,12 +380,13 @@ def table_preset(name: str, arg: str | None = None, months: int = 12) -> dict:
         title, cols = "Uncategorized transactions", [c for c in TX_COLUMNS if c["field"] != "category"]   # every row would say "uncategorized"
         sql = TX_SELECT + f"WHERE {budgets.UNCATEGORIZED} ORDER BY date DESC, transaction_id"
     elif name == "recurring":
-        title = "Recurring charges"
+        title = "Recurring charges"   # ended streams: `ended` is no column; the page hides those rows behind "ended (N)"
         cols = [{"field": "merchant", "label": "Merchant"}, {"field": "frequency", "label": "Every"}, {"field": "last_date", "label": "Last", "format": "date"},
                 {"field": "next_date", "label": "Next", "format": "date"}, {"field": "amount", "label": "Amount", "format": "money"}]
         sql = ("SELECT COALESCE(NULLIF(trim(r.merchant_name), ''), r.description) merchant, replace(lower(r.frequency), '_', ' ') frequency, r.last_date, "
-               "r.predicted_next_date next_date, r.last_amount amount FROM recurring r JOIN accounts a ON a.account_id = r.account_id AND a.mirror_of IS NULL "
-               "WHERE r.direction = 'outflow' AND COALESCE(r.is_active, 1) = 1 AND r.status NOT IN ('EARLY_DETECTION', 'TOMBSTONED') ORDER BY r.last_amount DESC")
+               f"CASE WHEN {budgets.STREAM_ENDED} THEN NULL ELSE r.predicted_next_date END next_date, r.last_amount amount, "
+               f"{budgets.STREAM_ENDED} ended FROM recurring r JOIN accounts a ON a.account_id = r.account_id AND a.mirror_of IS NULL "
+               "WHERE r.direction = 'outflow' AND COALESCE(r.status, '') <> 'EARLY_DETECTION' ORDER BY ended, r.last_amount DESC")   # ended rows ride along: the page hides them behind a toggle
     else:
         raise ValueError(f"unknown table {name}; one of {', '.join(TABLES)}")
     t = custom_table(json.dumps({"title": title, "columns": cols}), preset_id(name, arg), sql)

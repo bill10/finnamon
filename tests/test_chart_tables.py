@@ -1,13 +1,18 @@
 """Table panels on the chart board: same read-only SQL as a chart's data.sql, same refresh, rows rendered by the page."""
 import json
+from datetime import date, timedelta
 
 import pytest
 
-from finnamon import charts, cli, config
+from finnamon import budgets, charts, cli, config
 from tests.conftest import seed, today, txn
 
 COLS = [{"field": "date", "label": "Date", "format": "date"}, {"field": "m", "label": "Merchant"}, {"field": "amount", "label": "Amount", "format": "money"}]
 SQL = "SELECT date, COALESCE(display, name) m, amount FROM tx_now WHERE amount > 50 ORDER BY date DESC"
+
+
+def ago(n):
+    return (date.today() - timedelta(days=n)).isoformat()
 
 
 def _table(id):
@@ -86,14 +91,14 @@ def test_table_presets(home, conn, capsys):
     txn(conn, "t2", "chk", today(), 900, "BEST BUY", "Best Buy")
     txn(conn, "old", "chk", "2020-01-01", 5000, "ANCIENT")
     conn.execute("INSERT INTO recurring (stream_id, account_id, direction, merchant_name, frequency, last_amount, last_date, predicted_next_date, status, is_active, first_seen_at) "
-                 "VALUES ('s1','chk','outflow','Netflix','MONTHLY',15.49,'2026-09-12','2026-10-12','MATURE',1,'2026-06-01'), "
+                 f"VALUES ('s1','chk','outflow','Netflix','MONTHLY',15.49,'{ago(20)}','{ago(-10)}','MATURE',1,'2026-06-01'), "
                  "('s2','chk','outflow','Gone','MONTHLY',9,'2026-01-12','2026-02-12','MATURE',0,'2026-06-01')")
     for name in charts.TABLES:
         cli.main(["chart", "--spec", name])
     recent, large, rec = (_table(i) for i in ("recent_transactions", "large_transactions", "recurring"))
     assert [r["merchant"] for r in recent["data"]["values"]] == ["Chipotle", "Best Buy"] and recent["usermeta"]["finnamon"]["chart"] == "recent_transactions"
     assert [r["merchant"] for r in large["data"]["values"]] == ["Best Buy"]
-    assert rec["data"]["values"] == [{"merchant": "Netflix", "frequency": "monthly", "last_date": "2026-09-12", "next_date": "2026-10-12", "amount": 15.49}]
+    assert [(r["merchant"], r["ended"]) for r in rec["data"]["values"]] == [("Netflix", 0), ("Gone", 1)]
     assert charts.spec(conn, "large_transactions", "50", 12)["table"]["total"] == 2
     with pytest.raises(ValueError):
         charts.spec(conn, "large_transactions", "lots")
@@ -106,3 +111,19 @@ def test_table_presets(home, conn, capsys):
 def test_a_chart_spec_cannot_pass_as_a_table(home):
     with pytest.raises(ValueError, match="table"):
         charts.custom(json.dumps({"title": "t", "table": {"columns": "x"}, "mark": "bar", "data": {"values": [{"a": 1}]}}))
+
+
+def test_recurring_table_marks_ended_streams_by_their_own_interval(home, conn):
+    seed(conn)
+    rows = [("live-m", "MONTHLY", ago(40), 1, "MATURE"), ("late-m", "MONTHLY", ago(50), 1, "MATURE"),
+            ("live-y", "ANNUALLY", ago(390), 1, "MATURE"), ("late-y", "ANNUALLY", ago(410), 1, "MATURE"),
+            ("inactive", "MONTHLY", ago(5), 0, "MATURE"), ("tomb", "MONTHLY", ago(5), 1, "TOMBSTONED"),
+            ("early", "MONTHLY", ago(5), 1, "EARLY_DETECTION")]
+    for n, f, last, act, st in rows:
+        conn.execute("INSERT INTO recurring (stream_id, account_id, direction, merchant_name, frequency, last_amount, last_date, status, is_active, first_seen_at) "
+                     "VALUES (?, 'chk', 'outflow', ?, ?, 10, ?, ?, ?, '2026-01-01')", (n, n, f, last, st, act))
+    got = {r["merchant"]: r["ended"] for r in charts.table_preset("recurring")["data"]["values"]}
+    assert got == {"live-m": 0, "late-m": 1, "live-y": 0, "late-y": 1, "inactive": 1, "tomb": 1}, "early detections stay out entirely"
+    live = {c["merchant"] for c in budgets.suggest(conn)["recurring"]}
+    assert live == {"live-m", "live-y"}
+    assert {c["merchant"] for c in budgets.suggest(conn, include_ended=True)["recurring"]} == set(got)

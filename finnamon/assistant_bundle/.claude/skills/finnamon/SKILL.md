@@ -77,7 +77,7 @@ finnamon chart --id dining-monthly --sql "SELECT strftime('%Y-%m',date) ym, roun
 - Quick presets, each added or updated under its own name as id: `finnamon chart --spec <name> [arg]
   [--months N]` for budgets, spend_by_category, balance_history, merchant_history <merchant>,
   monthly_in_out, and the tables recent_transactions (last 30 days), large_transactions [amount, default
-  500], recurring and uncategorized (rows with no category; every transaction table's rows open Change category on the
+  500], recurring (live streams; ended ones, inactive or past their own interval, sit greyed behind an "ended (N)" toggle) and uncategorized (rows with no category; every transaction table's rows open Change category on the
   dashboard). Anything else is a spec.
 
 ### Tables on the dashboard
@@ -165,7 +165,7 @@ to you as a reply. For how to run it (what it needs, what comes next), read `fin
 ## Setting up budgets ("set up my budgets")
 
 1. `finnamon budget suggest` gives per-category monthly spend for the last 6 months (median, min,
-   max, top merchants), recurring streams, lowest balances, existing budgets.
+   max, top merchants), live recurring streams (`--include-ended` adds the ended ones), lowest balances, existing budgets.
 2. Propose 4 to 7 budgets in a short table: name, proposed limit (round up a little from the
    median), the range, one note. A budget can group categories ("Dining" = restaurants + fast food
    + coffee) and merchants (`--merchant`, for a bill Plaid files oddly), so propose groups where the
@@ -204,7 +204,7 @@ candidate already has, so pick another. Tell the person it is not live until the
   **amount: positive = money out, negative = money in.** `name` is the raw bank string; `merchant_name` is Plaid's clean one (may be NULL).
 - `accounts(account_id, item_id, name, mask, type, subtype, owner, mirror_of)`. Always add `AND mirror_of IS NULL` to avoid double-counting joint accounts (`tx_now` already has).
 - `items(item_id, institution, owner, status, source, first_synced_at, last_synced_at)` (`source`: `plaid` or `manual`); `balances(account_id, as_of, current, available)`. Imported rows have `transaction_id` starting `import:`, no `merchant_name`, and a category only when the same `name` already had one on a Plaid account (`finnamon category` fixes the rest).
-- `recurring(stream_id, account_id, direction, merchant_name, frequency, avg_amount, last_amount, last_date, predicted_next_date, status)`.
+- `recurring(stream_id, account_id, direction, merchant_name, frequency, avg_amount, last_amount, last_date, predicted_next_date, status, is_active)`. A stream is live when `COALESCE(is_active,1)=1`, status is not `TOMBSTONED` and `last_date` is within its interval plus a grace (monthly 45 days, annual 400); say so when asked for "subscriptions" and leave ended ones out unless asked.
 - `properties(name, value, updated_at)` (stated assets, counted into net worth); `budgets(id, name, category, monthly_limit, active, fixed)` (`category` is the first only) and `budget_selectors(budget_id, kind, value, label)` (kind `category`: a pfc code; `merchant`: `tx_now.canonical`); a budget counts `flow IN ('expense','refund','mortgage')` rows any selector matches; `category_override(canonical, pfc_primary, pfc_detailed)` (the merchant rule); `tx_category_override(transaction_id, pfc_primary, pfc_detailed)` (one-time edits, ahead of the rule); `merchant_alias(name, canonical)` (a `name` holding `%` is a LIKE pattern); `suppressions(kind, canonical, account_id, max_amount, note, stream_id)` (kind NULL = every kind except `anomaly:recurring_changed`, which needs its own kind; `stream_id` scopes one to a single subscription); `settings(account_id, key, value)`.
 - `alerts(id, tier, kind, key, transaction_id, payload_json, verdict, confidence, reason, sent_at, telegram_message_id, resolved_at, resolution, suppression_id)` (resolution: `normal`, rule `suppression_id`, `dismissed`, or `reconnected` (Finnamon resolved it once the bank logged back in; nothing to undo)); `roundup_items(telegram_message_id, n, alert_id)`; `feedback`.
 - Categories are Plaid's: `finnamon category list` prints the taxonomy.

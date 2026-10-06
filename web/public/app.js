@@ -919,9 +919,14 @@ function tableNote(t, shown) {
   const of = (t.more ? 'over ' : '') + Number(t.total || 0).toLocaleString('en-US');
   return shown < t.total || t.more ? `showing ${shown} of ${of}` : `${shown} row${shown === 1 ? '' : 's'}`;
 }
+function tableCaption(s, open) {   // a table with ended rows counts the live ones: "7 live", and "7 live · 3 ended" while they are shown
+  const rows = (Array.isArray(s.data?.values) ? s.data.values : []), e = rows.filter(r => r?.ended).length;
+  return e ? `${rows.length - e} live` + (open ? ` · ${e} ended` : '') : tableNote(s.table, rows.length);
+}
 const isTable = (s) => Array.isArray(s.table?.columns);
 const PEN = '<svg class="ic" aria-hidden="true"><use href="#i-regular-pencil-simple"/></svg>';
-function tableHtml(s, year) {   // a hand-edited entry of the wrong shape draws nothing rather than throwing out every panel
+const endedOpen = new Set();   // table ids whose ended rows are shown; kept across redraws
+function tableHtml(s, year, open, id) {   // a hand-edited entry of the wrong shape draws nothing rather than throwing out every panel
   const obj = (x) => x && typeof x === 'object';
   const cols = s.table.columns.filter(obj), rows = (Array.isArray(s.data?.values) ? s.data.values : []).filter(obj);
   const head = cols.map(c => `<th scope="col"${c.align === 'right' ? ' class="r"' : ''}>${esc(c.label)}</th>`).join('');
@@ -929,13 +934,15 @@ function tableHtml(s, year) {   // a hand-edited entry of the wrong shape draws 
   // category cell is its button for the keyboard
   const tx = (r) => typeof r.transaction_id === 'string' && r.transaction_id;
   const at = cols.some(c => c.field === 'category') ? 'category' : 'merchant';   // the cell that is the row's button
-  const body = rows.map(r => (tx(r) ? `<tr class="tx" data-tx="${esc(r.transaction_id)}">` : '<tr>') + cols.map(c => {
-    const x = tableCell(r[c.field], c.format, year), cls = [c.align === 'right' && 'r', x.out && 'out', tx(r) && c.field === 'category' && x.text === 'uncategorized' && 'none'].filter(Boolean).join(' ');
+  const nEnded = rows.filter(r => r.ended).length;   // a row with `ended` is a stream that stopped (the recurring table): greyed, behind a toggle
+  const body = rows.map(r => (tx(r) ? `<tr class="tx" data-tx="${esc(r.transaction_id)}">` : r.ended ? `<tr class="ended"${open ? '' : ' hidden'}>` : '<tr>') + cols.map(c => {
+    const x = r.ended && c.format === 'date' && (r[c.field] == null || r[c.field] === '') ? { text: '—' } : tableCell(r[c.field], c.format, year), cls = [c.align === 'right' && 'r', c.format === 'date' && 'd', x.out && 'out', tx(r) && c.field === 'category' && x.text === 'uncategorized' && 'none'].filter(Boolean).join(' ');
     const text = tx(r) && c.field === at ? `<button class="recat" data-recat="${esc(r.transaction_id)}" aria-label="Change category${at === 'category' ? '' : ' of'}: ${esc(x.text)}">${esc(x.text)}${PEN}</button>` : esc(x.text);
     return `<td${cls ? ` class="${cls}"` : ''}${c.format === 'text' ? ` title="${esc(x.text)}"` : ''}>${text}</td>`;
   }).join('') + '</tr>').join('');
   return `<div class="tbl-title">${esc(s.title)}</div><div class="tbl-wrap" tabindex="0" role="region" aria-label="${esc(s.title)}">`
-    + `<table class="tbl num"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+    + `<table class="tbl num"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`
+    + (nEnded ? `<button class="ended-toggle" data-ended-toggle="${esc(id)}" aria-expanded="${open ? 'true' : 'false'}">ended (${nEnded})</button>` : '');
 }
 // ---- end table panels
 
@@ -971,7 +978,7 @@ async function drawChart() {
   panel.classList.toggle('board', board.length > 0);
   if (!board.length) { panel.innerHTML = EMPTY_BOARD; return; }
   panel.innerHTML = board.map(s => `<figure class="panel"><button class="x" data-remove="${esc(chartId(s))}" aria-label="Remove this ${isTable(s) ? 'table' : 'chart'}" title="Remove">${icon('x')}</button>`
-    + (isTable(s) ? `<div class="vis">${tableHtml(s)}</div><figcaption class="asof">${tableNote(s.table, (Array.isArray(s.data?.values) ? s.data.values : []).length)} · ${asOf(s)}</figcaption>`
+    + (isTable(s) ? `<div class="vis">${tableHtml(s, undefined, endedOpen.has(chartId(s)), chartId(s))}</div><figcaption class="asof"><span data-note>${tableCaption(s, endedOpen.has(chartId(s)))}</span> · ${asOf(s)}</figcaption>`
       : (isBudgetTrend(s) ? budgetPicker(s, budgetChoice(s)) : '') + `<div class="vis"></div><figcaption class="asof">${asOf(s)}</figcaption>`) + '</figure>').join('');
   const cells = panel.querySelectorAll('.vis');
   // usermeta.embedOptions would win over chartOpts() (actions, sourceHeader, patch: script on this origin): the CLI drops it, and so does the page
@@ -1004,6 +1011,13 @@ document.querySelectorAll('[data-chart]').forEach(b => b.addEventListener('click
 }));
 $('chart-panel').addEventListener('change', (e) => { if (e.target.matches('[data-budget-select]')) { saveBudgetChoice(board.find(isBudgetTrend), e.target.value); drawChart(); } });
 $('chart-panel').addEventListener('click', (e) => {
+  const tg = e.target.closest('[data-ended-toggle]');
+  if (tg) {
+    const on = tg.getAttribute('aria-expanded') !== 'true', id = tg.dataset.endedToggle;
+    on ? endedOpen.add(id) : endedOpen.delete(id);
+    tg.setAttribute('aria-expanded', String(on)); tg.closest('figure').querySelector('[data-note]').textContent = tableCaption(board.find(x => chartId(x) === id), on); tg.closest('figure').querySelectorAll('tr.ended').forEach(r => { r.hidden = !on; });
+    return;
+  }
   const x = e.target.closest('[data-remove]');
   if (x) return chartRequest('DELETE', `/api/chart/${encodeURIComponent(x.dataset.remove)}`);
   const t = e.target.closest('tr.tx');
