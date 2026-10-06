@@ -227,7 +227,7 @@ def test_list_shows_the_board_and_a_garbled_file_is_an_empty_one(home, conn, cap
     seed(conn)
     cli.main(["chart", "--spec", "budgets"]); capsys.readouterr()
     cli.main(["chart", "--list"])
-    assert json.loads(capsys.readouterr().out) == [{"id": "budgets", "title": "Budgets, month to date"}]
+    assert json.loads(capsys.readouterr().out) == [{"id": "budgets", "title": "Budget trend, last 6 months"}]
 
 
 def test_a_legacy_single_spec_file_is_a_board_of_one(home, conn):
@@ -236,7 +236,7 @@ def test_a_legacy_single_spec_file_is_a_board_of_one(home, conn):
     assert [e["usermeta"]["finnamon"]["id"] for e in charts.board()] == ["budgets"]
     seed(conn)
     charts.write_spec(conn, "budgets")   # the upgraded file's first write replaces it in place rather than doubling it
-    assert len(charts.board()) == 1 and charts.board()[0]["title"].startswith("Budgets")
+    assert len(charts.board()) == 1 and charts.board()[0]["title"].startswith("Budget trend")
     (config.charts_dir() / charts.CURRENT_SPEC).write_text(json.dumps({"mark": "bar", "usermeta": {"finnamon": {"chart": "merchant_history", "arg": "Costco"}}}))
     assert charts.board()[0]["usermeta"]["finnamon"]["id"] == "merchant_history-costco", "the id the same preset gets today, so it replaces rather than doubles"
 

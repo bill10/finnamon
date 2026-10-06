@@ -134,7 +134,7 @@ def build():
 
     @mcp.tool()
     def render_chart(name: str, arg: str = "") -> str:
-        """Render a chart (budgets, spend_by_category, balance_history, merchant_history <merchant>, monthly_in_out); returns the PNG path."""
+        """Render a chart (budgets = 6-month budget trend, spend_by_category, balance_history, merchant_history <merchant>, monthly_in_out); returns the PNG path."""
         return str(charts.render(store.connect(), name, arg or None))
 
     @mcp.tool()

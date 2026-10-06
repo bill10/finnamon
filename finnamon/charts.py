@@ -61,16 +61,18 @@ def render(conn: sqlite3.Connection, name: str, arg: str | None = None, months: 
     dollars = StrMethodFormatter("${x:,.0f}")
     fig, ax = plt.subplots(figsize=(8, 4.5), dpi=150)
     if name == "budgets":
-        rows = budgets.budget_list(conn)
-        ax.xaxis.set_major_formatter(dollars)
-        names = [r["name"] for r in rows]
-        ax.barh(names, [r["monthly_limit"] for r in rows], color="#e6e6e6", label="limit")
-        ax.barh(names, [r["spent"] for r in rows], color="#4a7ebb", label="spent")
-        for i, r in enumerate(rows):
-            if r["pace"]:
-                ax.plot([r["pace"], r["pace"]], [i - 0.4, i + 0.4], color="#d9534f", lw=2)
-        ax.set_title("Budgets: month to date (red = pace)")
-        ax.invert_yaxis(); ax.legend()
+        series = _budget_trend(conn)
+        ax.yaxis.set_major_formatter(dollars)
+        n = len(series)
+        for j, (b, pts) in enumerate(series):
+            x = [i + (j - (n - 1) / 2) * 0.8 / n for i in range(len(pts))]
+            ax.bar(x, [p["spent"] for p in pts], width=0.8 / n, label=b["name"], color=f"C{j % 10}")
+            ax.bar(x[-1:], [pts[-1]["spent"]], width=0.8 / n, fill=False, hatch="//", edgecolor="white")   # this month is partial
+            ax.hlines(b["monthly_limit"], [x[0] - 0.4 / n], [x[-1] + 0.4 / n], color=f"C{j % 10}", ls="--", lw=1)
+        if series:
+            first = series[0][1]
+            ax.set_xticks(range(len(first))); ax.set_xticklabels([p["label"] for p in first], fontsize=8); ax.legend(fontsize=7)
+        ax.set_title("Budget trend, last 6 months (dashes = limit, hatched = month to date)")
     elif name == "spend_by_category":
         rows = conn.execute(SPEND_BY_CATEGORY, (f"-{months} months",)).fetchall()
         ax.barh([_cat(r[0]) for r in rows], [r[1] for r in rows], color="#4a7ebb"); ax.invert_yaxis(); ax.xaxis.set_major_formatter(dollars)
@@ -168,13 +170,18 @@ def spec(conn: sqlite3.Connection, name: str, arg: str | None = None, months: in
             "usermeta": {"finnamon": {"id": preset_id(name, arg), "chart": name, "arg": arg,   # the page lights the matching chip
                                       "source": {"preset": name, "arg": arg, "months": months}, "as_of": _now()}}}   # what refresh() redraws it from
     if name == "budgets":
-        rows = budgets.budget_list(conn)
-        values = [{"budget": r["name"], "kind": k, "amount": r[c]} for r in rows for k, c in (("limit", "monthly_limit"), ("spent", "spent"))]
-        return {**base, "title": "Budgets, month to date", "data": {"values": values},
-                "mark": "bar", "encoding": {"y": {"field": "budget", "type": "nominal", "title": None},
-                                            "x": {"field": "amount", "type": "quantitative", "title": "$", "stack": None},
-                                            "color": {"field": "kind", "scale": {"domain": ["limit", "spent"]}, "title": None},
-                                            "tooltip": [{"field": "budget"}, {"field": "kind"}, {"field": "amount", "format": "$,.0f"}]}}
+        series = _budget_trend(conn)
+        values = [{"budget": b["name"], "month": p["label"], "spent": p["spent"], "limit": b["monthly_limit"], "period": p["period"]} for b, pts in series for p in pts]
+        names = [b["name"] for b, _ in series]
+        enc = {"x": {"field": "month", "type": "ordinal", "title": None, "sort": [p["label"] for p in series[0][1]] if series else []},
+               "xOffset": {"field": "budget"},
+               "color": {"field": "budget", "title": None, "scale": {"domain": [""] + names}, "legend": {"values": names}}}   # the "" entry takes the theme's pale first colour, which vanishes on the page
+        tip = [{"field": "budget"}, {"field": "month"}, {"field": "period"}, {"field": "spent", "format": "$,.0f"}, {"field": "limit", "format": "$,.0f"}]
+        return {**base, "title": "Budget trend, last 6 months", "data": {"values": values}, "encoding": enc,   # a bar per budget and month, a tick for its limit; the latest month is paler
+                "layer": [{"mark": "bar", "encoding": {"y": {"field": "spent", "type": "quantitative", "title": "$"}, "tooltip": tip,
+                                                       "opacity": {"field": "period", "type": "nominal", "scale": {"domain": ["full month", "month to date"], "range": [1, 0.5]}, "legend": None}}},
+                          {"mark": {"type": "tick", "color": "white", "thickness": 7}, "encoding": {"color": {"value": "white"}, "y": {"field": "limit", "type": "quantitative"}}},   # halo, then the mark, over the bars: an over-limit bar visibly crosses it
+                          {"mark": {"type": "tick", "color": "#111", "thickness": 4}, "encoding": {"color": {"value": "#111"}, "y": {"field": "limit", "type": "quantitative"}}}]}
     if name == "spend_by_category":
         rows = conn.execute(SPEND_BY_CATEGORY, (f"-{months} months",)).fetchall()
         return {**base, "title": f"Spend by category, last {months} months", "data": {"values": [{"category": _cat(r[0]), "amount": r[1]} for r in rows]},
@@ -208,6 +215,19 @@ def spec(conn: sqlite3.Connection, name: str, arg: str | None = None, months: in
                                         "color": {"field": "series", "scale": {"domain": ["mortgage", "income", "spending"]},   # theme colours 1, 2, 3
                                                   "legend": {"values": ["income", "spending", "mortgage"]}, "title": None},
                                         "tooltip": [{"field": "month"}, {"field": "series"}, {"field": "amount", "format": "$,.0f"}]}}
+
+
+def _budget_trend(conn: sqlite3.Connection, months: int = 6) -> list[tuple[dict, list[dict]]]:
+    """[(budget, [{label, spent, period}])]: each active budget's last `months` months, the current one month to date."""
+    as_of = store.now_local()
+    out = []
+    for b in budgets.budget_list(conn, as_of):
+        pts = budgets.monthly_spent(conn, b["id"], months, as_of)
+        labels = _month_labels(pts)
+        last = len(pts) - 1
+        out.append((b, [{"label": labels[ym] + (" (so far)" if i == last else ""), "spent": v, "period": "month to date" if i == last else "full month"}
+                        for i, (ym, v) in enumerate(pts)]))
+    return out
 
 
 def _month_labels(rows: list) -> dict:
