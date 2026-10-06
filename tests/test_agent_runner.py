@@ -45,15 +45,13 @@ def test_assistant_setting(conn, monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["agent"] == "claude"
 
 
-def test_a_codex_household_is_refused_not_run_as_claude(conn, fake_claude, monkeypatch):
+def test_a_codex_household_is_never_run_as_claude(conn, fake_claude, monkeypatch):
     conn.execute("INSERT INTO settings(account_id, key, value) VALUES ('*', 'assistant', 'codex')")   # what card 5 will let `settings set` write
     monkeypatch.setenv("FINNAMON_CODEX_BIN", str(CODEX / "bin" / "codex"))
     assert agent_runner.kind() == "codex"
     probs = agent_runner.harness_problems()
-    assert probs[-1] == agent_runner.CODEX_PENDING, "the daemon and triage refuse to start"
-    assert any("config.toml" in p for p in probs), "and say what Codex itself is missing: init has not set it up here"
-    with pytest.raises(NotImplementedError):
-        agent_runner.run("hi")
+    assert any("config.toml" in p for p in probs), "the daemon and triage refuse to start, saying what Codex is missing: init has not set it up here"
+    assert agent_runner.run("hi").session_id == "01a10e2d-9a37-76c0-9e68-b563e3f90b15", "run() goes to codex, never claude"
     conn.execute("UPDATE settings SET value='gemini' WHERE key='assistant'")
     assert agent_runner.kind() == "claude", "a word this release does not know is Claude, the default"
 

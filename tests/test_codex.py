@@ -181,7 +181,7 @@ def test_harness_check_for_a_codex_household(conn, stub):
     conn.execute("INSERT INTO settings(account_id, key, value) VALUES ('*', 'assistant', 'codex')")   # what card 5 lets `settings set` write
     assert any("config.toml" in p for p in agent_runner.harness_problems())
     codex.install()
-    assert agent_runner.harness_problems() == [agent_runner.CODEX_PENDING], "no Claude trust is asked of a Codex household"
+    assert agent_runner.harness_problems() == [], "no Claude trust is asked of a Codex household"
 
 
 def test_channel_mode_is_refused_for_codex(conn):

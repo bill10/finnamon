@@ -75,6 +75,28 @@
 **Effort:** S
 **Priority:** P3
 
+### Codex headless runs: edges left by the card-4 review
+
+**What:** (1) A triage run that fails as `busy` (Codex usage limit or capacity) still counts an attempt, so three in a row
+suppress the groups as `triage_unavailable`; skip the bump for `busy` and raise a health line instead. (2) The daemon's one
+Codex thread resets only on `session lost` or repeated timeouts; a thread that can never succeed again (context exhausted,
+a rollout cut short by a timeout's SIGKILL) fails every chat as `error`: retry once fresh after N such failures. (3) Check
+whether the `finnamon serve` MCP child shares codex's process group; if not, a timeout or `terminate_all()` leaves an
+in-flight `finnamon` call running up to its own 600 s. (4) The triage deny list refuses `finnamon normal --list`, which the
+triage skill asks for (both CLIs). (5) `codex.env()` passes the daemon's whole environment: drop
+`OPENAI_*`/`CODEX_API_KEY`/proxy variables so a key or base URL in the service's environment cannot redirect the
+household's runs. (6) Serialise Codex runs (triage and chat share one login with the person's own `codex`). (7) Prune
+`FINNAMON_HOME/codex/sessions`: rollouts hold bank memos and grow with every turn.
+
+**Why:** The Codex login is shared with the person's own `codex`, so a week of their coding can exhaust it and silently
+drop the household's anomaly alerts; the other three were found reviewing the card-4 PR, none seen live.
+
+**Context:** `triage.run_if_needed` / `_bump_attempts`, `daemon.converse`, `agent_runner.run` (killpg), `mcp_server.TIMEOUT_S`,
+`agent_runner.TRIAGE_DISALLOWED`; docs/designs/codex-spike.md "Card 4 notes".
+
+**Effort:** S
+**Priority:** P2
+
 ### Dedupe the two enrolment paths in owners.py
 
 **What:** `_poll_direct` (CLI polls getUpdates itself) and the daemon-side `pending_owner` path both parse the same message shape. Fold into one `enroll_from_update` used by both.

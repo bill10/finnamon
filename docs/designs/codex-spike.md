@@ -216,6 +216,31 @@ Yes, with a symlink, and that is all it needs.
 - **The household's AGENTS.md refuses a test prompt** that asks it to read `secrets.toml` (no tool call at all); the guard runs
   were made from a scratch work directory under the same `CODEX_HOME`.
 
+## Card 4 notes (Codex 0.157)
+
+- **Live, under a scratch `FINNAMON_HOME` sharing the login:** `triage.run_if_needed` on a Codex household ran
+  `codex exec --json … -- '$triage'`; the skill called the `finnamon` tool (`alerts --untriaged`, three `query`s) and wrote
+  its verdict with `triage set t1 promote high -` and the sentence in `stdin`. One `exec resume <thread id>` continued the
+  same thread. Both recorded: `tests/fixtures/codex/exec-triage.jsonl`, `exec-resume.jsonl`. About 90k input tokens each,
+  mostly cached.
+- **`exec resume` has no `-C`**; the process's cwd is the assistant directory. A gone thread fails before any model call:
+  `thread/resume failed: no rollout found for thread id …` on stderr, exit 1 (`exec-resume-gone.stderr`), filed as
+  "session lost" so the daemon starts a fresh thread.
+- **Read-only:** `-c permissions.finnamon.extends=":read-only"` keeps the profile's denies and makes even `$TMPDIR` and
+  `/tmp` unwritable (`codex sandbox -P finnamon` checked it). `-s read-only` would be the legacy `sandbox_mode`, never used.
+- **The triage deny list blocks `finnamon normal --list`**, which the skill asks for (`normal *` is on it); the run said so
+  in its verdict. The same holds on Claude (`TRIAGE_DISALLOWED`); left for a follow-up.
+- **The lock also pins `default_permissions` and `features.apps=false`** (a config.toml selecting another profile would
+  otherwise win), and the harness check runs `config_problems()`. A bad `-c` value fails before any model call with
+  `Error loading config.toml: …` (filed as "bad config"); the real lock parsed and reached the thread lookup.
+- **`exec resume` honours the lock:** live, a fresh `exec` and its `exec resume` were each asked to
+  `touch "$TMPDIR/…"` through the shell; both were refused ("Operation not permitted") and no file appeared, so a resumed
+  thread does not fall back to the config's `:workspace` profile.
+- **A project `.codex/` in the assistant directory is a harness problem** (`config_problems`): Codex would layer it over
+  the sealed config for a trusted project, past the command-line lock.
+- **The login is not a harness problem:** the daemon refuses to start on one, and a lapsed shared login must not stop syncing.
+- **Not recorded live:** a failed turn. `exec-failed.jsonl` is written by hand from the spike's capacity wording.
+
 ## What changes in cards 2–6
 
 - **Card 2 (bundle, `CODEX_HOME`, install/doctor):**
@@ -240,6 +265,6 @@ Yes, with a symlink, and that is all it needs.
   - The session id comes from the newest rollout whose `session_meta.cwd` is the assistant directory, or from a hook's `session_id`.
   - `intercomSession` already holds `{id: null}` for a CLI that names its own session.
   - The Codex turn reader works off `event_msg` items. Done is `task_complete`; the reply is `last_agent_message`; progress is the `CommandExecution` items.
-  - Lift the `settings set assistant codex` refusal (`store.validate_setting`) and `agent_runner.CODEX_PENDING`.
+  - Lift the `settings set assistant codex` refusal (`store.validate_setting`; card 4 already dropped `agent_runner.CODEX_PENDING`).
   - **Mark the Codex session as an agent.** Inside the dashboard's Claude session, the human-only gates are held only by the `CLAUDECODE` that Claude sets on its own tool calls (`web/server.js` `env()` strips the Finnamon markers). A Codex PTY sets nothing, so every human-only verb, `settings set assistant` included, would be open to it. Set `FINNAMON_FROM_AGENT` on the session itself, through `shell_environment_policy.set` and the MCP server's `env`, before this card lands.
 - **Card 6:** unchanged.

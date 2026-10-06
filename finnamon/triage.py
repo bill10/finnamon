@@ -1,4 +1,4 @@
-"""Anomaly triage: a Claude Code skill (/triage) does the judging; this module runs it and checks
+"""Anomaly triage: the assistant's triage skill (/triage, $triage on Codex) does the judging; this module runs it and checks
 that every untriaged group got a verdict. Three consecutive failures → suppress the group with
 reason 'triage_unavailable' and raise a health:triage alert so the failure is loud.
 
@@ -57,7 +57,8 @@ def run_if_needed(conn: sqlite3.Connection, timeout: int = 300) -> dict:
         res = claude_runner.Result(False, "", None, error="harness: " + "; ".join(problems))
     else:
         # --disallowedTools is prefix-matched and argparse accepts options anywhere, so the CLI also refuses writes under FINNAMON_TRIAGE
-        res = claude_runner.run("/triage", timeout=timeout, disallowed=claude_runner.TRIAGE_DISALLOWED, env_extra={"FINNAMON_TRIAGE": "1"})
+        skill = "$triage" if claude_runner.kind() == "codex" else "/triage"   # how each CLI invokes a skill by name
+        res = claude_runner.run(skill, timeout=timeout, disallowed=claude_runner.TRIAGE_DISALLOWED, env_extra={"FINNAMON_TRIAGE": "1"})
     after = groups(conn)
     if not res.ok:
         log.warning("triage run failed: %s", res.error)

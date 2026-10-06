@@ -330,6 +330,8 @@ def config_problems() -> list[str]:
         out.append(f"the {PROFILE} permission profile is not the default")
     if cfg.get("web_search") != "disabled" or (cfg.get("features") or {}).get("apps") is not False:
         out.append("web search or the ChatGPT-apps server is on")
+    if (assistant.dir() / ".codex").exists():   # a trusted project's own layer, which the command-line lock does not cover
+        out.append(f"{assistant.dir() / '.codex'} exists: a project config there would apply over the sealed one")
     if ((cfg.get("projects") or {}).get(str(assistant.dir())) or {}).get("trust_level") != "trusted":
         out.append(f"{assistant.dir()} is not a trusted project, so Codex ignores its config")
     return out

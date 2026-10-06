@@ -80,6 +80,8 @@ def test_every_unattended_run_disallows_the_web(fake_claude, tmp_path, conn, tg,
     seed(conn)
     monkeypatch.setattr(triage, "groups", lambda c: [{"group": "g"}])   # something to judge, so the real /triage spawn happens
     assert triage.run_if_needed(conn)["ran"]
+    # Value: protects=a Claude household's triage still invokes the skill as /triage; fails_when=the $triage/Codex form leaks into Claude runs; why_new=only direct run("/triage") calls were checked, not what triage.py passes; seam=none
+    assert argv()[:2] == ["-p", "/triage"], "Claude runs the skill as /triage ($triage is Codex's form)"
     t = tail(argv())
     assert set(claude_runner.TRIAGE_DISALLOWED) <= set(t), "the triage write ban is still there"
     assert t[-2:] == ["WebSearch", "WebFetch"], "and the web ban is appended to it"
