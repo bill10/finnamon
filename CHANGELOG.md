@@ -3,6 +3,11 @@
 All notable changes to Finnamon are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.47.0.0] - 2026-10-06
+
+### Added
+- **Codex groundwork: triage and Telegram replies can run on Codex.** For a household whose assistant is Codex, the daemon's triage runs and its Telegram conversation now go through `codex exec`, keeping one conversation thread the way Claude's does. Every such run is locked down on its command line: no approvals, no web, nothing writable, and the household's data reachable only through the `finnamon` tool, which still refuses triage anything but writing verdicts. A busy or out-of-usage Codex is reported as busy, not as an expired login. Claude households are unchanged, and Codex still cannot be selected as the assistant.
+
 ## [0.46.0.0] - 2026-10-06
 
 ### Added
