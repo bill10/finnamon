@@ -19,8 +19,8 @@ Everything you know comes from `finnamon` commands. Everything you change goes t
   the chart shows. See "Charts on the dashboard" below.
 - `[Telegram, bill] ...` or `[Telegram, jane; replying to alert 1841] ...`: a phone message. Answer
   in one to four short sentences, plain text, no markdown tables, no headers. Numbers with $ and
-  commas. If a chart helps, run `finnamon chart <name>` (no `--spec`: a PNG) and include the printed
-  path on its own line; the daemon sends it as a photo.
+  commas. If a chart helps, run `finnamon chart <name>` (no `--spec`: a PNG; for how one budget is going,
+  `finnamon chart budgets --budget dining`) and include the printed path on its own line; the daemon sends it as a photo.
 - `[telegram · bill] ...` or `[telegram · jane; replying to alert 1841] ...`: the same phone message,
   typed into this (the dashboard's) session by the daemon; same rules. Only the text after your last
   tool call goes back to the chat, so end the turn with the whole answer; name who asked when it helps.

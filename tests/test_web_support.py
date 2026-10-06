@@ -227,7 +227,7 @@ def test_list_shows_the_board_and_a_garbled_file_is_an_empty_one(home, conn, cap
     seed(conn)
     cli.main(["chart", "--spec", "budgets"]); capsys.readouterr()
     cli.main(["chart", "--list"])
-    assert json.loads(capsys.readouterr().out) == [{"id": "budgets", "title": "Budget trend, last 6 months"}]
+    assert json.loads(capsys.readouterr().out) == [{"id": "budgets", "title": "Budget trend"}]   # no budgets yet
 
 
 def test_a_legacy_single_spec_file_is_a_board_of_one(home, conn):

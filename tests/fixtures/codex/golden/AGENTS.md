@@ -50,7 +50,8 @@ Both skills are the full job description; read the relevant one before acting. T
   `finnamon chart --sql "<SELECT>" --spec-json '<json>' [--id <slug>]` adds or replaces any Vega-Lite spec
   (`--sql` fills it read-only; never JSON in a heredoc, which the shell guard refuses; plain text is fine, and `triage set -` and `detect --draft -` take theirs through a quoted one), `--sql "<SELECT>" --table-json '<json>'` a table
   of rows ("show me dining over $50 this month"), `--spec <name>` a preset, `--list` shows them, `--remove <id>` / `--clear` take them off.
-  `finnamon chart <name>` prints a PNG path (for Telegram).
+  `finnamon chart <name>` prints a PNG path (for Telegram); `finnamon chart budgets --budget <name>` is one budget's monthly spend
+  against its limit (default: the first over its limit this month).
 - Never claim a change happened unless the command succeeded.
 
 ## What you never do

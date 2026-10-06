@@ -1,4 +1,6 @@
 """Charts (needs matplotlib) and holdings / net worth with Plaid faked."""
+import sqlite3
+
 import pytest
 
 from finnamon import budgets, store, charts, config, investments, plaid_api
@@ -152,9 +154,10 @@ def test_colour_legends_never_take_plot_width(home, conn):   # #97
     import re
     app = (pathlib.Path(__file__).parent.parent / "web/public/app.js").read_text()
     assert re.search(r"legend: \{ orient: 'top', direction: 'horizontal'", app), "the page's Vega config sets the default legend: a row above the plot"
+    budgets.budget_set(conn, "groceries", 600, "FOOD_AND_DRINK_GROCERIES")
     for name in ("budgets", "balance_history", "monthly_in_out"):
         sp = charts.spec(conn, name)
-        legend = (sp.get("encoding") or sp["layer"][0]["encoding"])["color"].get("legend", {})
+        legend = (sp["layer"][0]["encoding"] if "layer" in sp else sp["encoding"])["color"].get("legend", {})
         assert "orient" not in legend, f"{name} leaves orient to the theme default (a spec that sets its own still wins)"
     assert charts.spec(conn, "monthly_in_out")["encoding"]["color"]["legend"]["values"] == ["income", "spending", "mortgage"], "#92 order kept"
 
@@ -185,19 +188,79 @@ def test_in_out_axis_says_month_names():
     assert list(charts._month_labels([("2025-11",), ("2025-12",), ("2026-01",)]).values()) == ["Nov 2025", "Dec", "Jan 2026"]
     assert list(charts._month_labels([("2026-02",), ("2026-03",)]).values()) == ["Feb", "Mar"]
 
+def test_budgets_chart_is_one_budget_by_month_by_the_cards_rules(conn):
+    seed(conn)
+    budgets.budget_set(conn, "groceries", 600, "FOOD_AND_DRINK_GROCERIES")
+    budgets.budget_set(conn, "dining", 50, "FOOD_AND_DRINK_RESTAURANT")
+    now = store.now_local()
+    month = lambda back, day=0: conn.execute("SELECT date(?, 'start of month', ?, ?)", (now, f"-{back} months", f"+{day} days")).fetchone()[0]
+    txn(conn, "t0", "chk", month(0), 50, "WF", "Whole Foods", "mch_wf")
+    txn(conn, "t1", "chk", month(2, 4), 120, "WF", "Whole Foods", "mch_wf")
+    txn(conn, "t2", "chk", month(13), 999, "WF", "Whole Foods", "mch_wf")   # outside the window
+    txn(conn, "d0", "cc", month(0), 80, "Nopa", "Nopa", "mch_nopa", "FOOD_AND_DRINK", "FOOD_AND_DRINK_RESTAURANT")   # dining is over this month
+    sp = charts.spec(conn, "budgets")
+    fm = sp["usermeta"]["finnamon"]
+    assert sp["title"] == "Budget trend: Dining" and fm["chart"] == "budgets" and fm["id"] == "budgets", "the default is the first budget over its limit"
+    assert fm["budget"] == "dining" and fm["budgets"] == [{"name": "dining", "over": True}, {"name": "groceries", "over": False}]
+    assert sp["transform"] == [{"filter": {"field": "budget", "equal": "dining"}}], "every budget's rows ride along; the page swaps the filter"
+    vals = [v for v in sp["data"]["values"] if v["budget"] == "groceries"]
+    assert len(vals) == 12 and {v["limit"] for v in vals} == {600} and sum(v["spent"] for v in vals) == 170
+    assert vals[-1]["period"] == "month to date" and vals[-1]["spent"] == 50 and vals[-1]["month"].endswith("(so far)")
+    assert vals[-3]["spent"] == 120 and all(v["period"] == "full month" for v in vals[:-1])
+    assert [v["status"] for v in sp["data"]["values"] if v["budget"] == "dining"][-1] == "over limit" and {v["status"] for v in vals} == {"within limit"}
+    assert [q[1] for q in budgets.monthly_spent(conn, 1, 6, now)][-1] == budgets.month_to_date(conn, 1, now)[0]
+    assert charts.spec(conn, "budgets", "Groceries")["title"] == "Budget trend: Groceries"
+    assert charts.spec(conn, "budgets", "rent")["title"] == "Budget trend: Dining", "a saved board's removed budget falls back, so refresh keeps working"
+    with pytest.raises(ValueError, match="no budget named rent; one of dining, groceries"):
+        charts.check_budget(conn, "rent")
+    assert len(charts.spec(conn, "budgets", months=0)["data"]["values"]) == 2, "--months 0 is one month, not a traceback"
 
-def test_budgets_chart_is_a_six_month_trend_by_the_cards_rules(conn):
+
+def test_budget_trend_starts_at_the_households_first_transaction(conn):
+    seed(conn)
+    budgets.budget_set(conn, "groceries", 600, "FOOD_AND_DRINK_GROCERIES")
+    txn(conn, "t0", "chk", conn.execute("SELECT date(?, 'start of month', '-2 months')", (store.now_local(),)).fetchone()[0], 50, "WF", "Whole Foods", "mch_wf")
+    assert len(charts.spec(conn, "budgets")["data"]["values"]) == 3, "months before any data would read as nothing spent"
+
+
+def test_the_limit_line_follows_the_limit_in_effect_each_month(conn):
     seed(conn)
     budgets.budget_set(conn, "groceries", 600, "FOOD_AND_DRINK_GROCERIES")
     now = store.now_local()
-    first = conn.execute("SELECT date(?, 'start of month')", (now,)).fetchone()[0]
-    txn(conn, "t0", "chk", first, 50, "WF", "Whole Foods", "mch_wf")
-    txn(conn, "t1", "chk", conn.execute("SELECT date(?, 'start of month', '-2 months', '+4 days')", (now,)).fetchone()[0], 120, "WF", "Whole Foods", "mch_wf")
-    txn(conn, "t2", "chk", conn.execute("SELECT date(?, 'start of month', '-7 months')", (now,)).fetchone()[0], 999, "WF", "Whole Foods", "mch_wf")   # outside the window
-    sp = charts.spec(conn, "budgets")
-    assert sp["title"] == "Budget trend, last 6 months" and sp["usermeta"]["finnamon"]["chart"] == "budgets"
-    vals = sp["data"]["values"]
-    assert len(vals) == 6 and {v["limit"] for v in vals} == {600} and sum(v["spent"] for v in vals) == 170
-    assert vals[-1]["period"] == "month to date" and vals[-1]["spent"] == 50 and vals[-1]["month"].endswith("(so far)")
-    assert vals[3]["spent"] == 120 and all(v["period"] == "full month" for v in vals[:-1])
-    assert [q[1] for q in budgets.monthly_spent(conn, 1, 6, now)][-1] == budgets.month_to_date(conn, 1, now)[0]
+    month = lambda back, day: conn.execute("SELECT date(?, 'start of month', ?, ?)", (now, f"-{back} months", f"+{day} days")).fetchone()[0]
+    conn.execute("UPDATE budget_limit_history SET effective_from=?", (month(4, 10),))
+    budgets.budget_set(conn, "groceries", 800)   # raised...
+    budgets.budget_set(conn, "groceries", 800)   # ...once: the same limit again records nothing
+    conn.execute("UPDATE budget_limit_history SET effective_from=? WHERE monthly_limit=800", (month(1, 15),))   # in the middle of last month
+    assert conn.execute("SELECT count(*) FROM budget_limit_history").fetchone()[0] == 2
+    assert [q[2] for q in budgets.monthly_spent(conn, 1, 6, now)] == [600, 600, 600, 600, 800, 800], "before the first limit, that first one; a month takes the limit at its end"
+    assert conn.execute("SELECT monthly_limit FROM budgets").fetchone()[0] == 800, "budgets.monthly_limit stays the current one"
+
+
+def test_limit_history_migration_backfills_from_created_at():
+    db = sqlite3.connect(":memory:")
+    m = store.MIGRATIONS / "014_budget_limit_history.sql"
+    for f in sorted(store.MIGRATIONS.glob("*.sql")):
+        if f.name < m.name:
+            for stmt in store._split(f.read_text()):
+                db.execute(stmt)
+    db.execute("INSERT INTO budgets (name, category, monthly_limit, created_at) VALUES ('groceries', 'FOOD_AND_DRINK_GROCERIES', 600, '2025-03-02 09:00:00')")
+    for stmt in store._split(m.read_text()):
+        db.execute(stmt)
+    assert db.execute("SELECT budget_id, monthly_limit, effective_from FROM budget_limit_history").fetchall() == [(1, 600, "2025-03-02 09:00:00")]
+    db.execute("UPDATE budgets SET monthly_limit=700"); db.execute("UPDATE budgets SET active=0")
+    db.execute("INSERT INTO budgets (name, category, monthly_limit) VALUES ('dining', 'FOOD_AND_DRINK_RESTAURANT', 300)")
+    assert db.execute("SELECT budget_id, monthly_limit FROM budget_limit_history ORDER BY rowid").fetchall() == [(1, 600), (1, 700), (2, 300)]
+
+
+def test_budgets_png_takes_a_budget(home, conn, capsys):
+    from finnamon import cli
+    seed(conn)
+    budgets.budget_set(conn, "groceries", 600, "FOOD_AND_DRINK_GROCERIES")
+    budgets.budget_set(conn, "dining", 300, "FOOD_AND_DRINK_RESTAURANT")
+    txn(conn, "t0", "chk", store.now_local()[:10], 50, "WF", "Whole Foods", "mch_wf")
+    cli.main(["chart", "budgets", "--budget", "groceries"])
+    assert capsys.readouterr().out.strip().endswith(".png")
+    with pytest.raises(SystemExit):
+        cli.main(["chart", "budgets", "--budget", "rent"])
+    assert "no budget named rent" in capsys.readouterr().err

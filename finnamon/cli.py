@@ -2449,10 +2449,15 @@ def cmd_chart(a) -> None:
             print(charts.put(charts.custom_table(sys.stdin.read() if a.table_json == "-" else a.table_json, a.id, a.sql)))
         elif not a.name:
             die("which chart? a name, --spec-json, --table-json, --list, --remove <id> or --clear")
-        elif a.spec:
-            print(charts.write_spec(store.connect(), a.name, a.arg, a.months))
         else:
-            print(charts.render(store.connect(), a.name, a.arg, a.months))
+            if a.budget:   # a board's saved name that is gone falls back to the default; one typed here is refused
+                if a.name != "budgets":
+                    die("--budget goes with the budgets chart")
+                charts.check_budget(store.connect(), a.budget)
+            if a.spec:
+                print(charts.write_spec(store.connect(), a.name, a.budget or a.arg, a.months))
+            else:
+                print(charts.render(store.connect(), a.name, a.budget or a.arg, a.months))
     except (ValueError, RuntimeError) as e:
         die(str(e))
 
@@ -2662,6 +2667,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("confidence", nargs="?", choices=["high", "low"]); s.add_argument("reason", nargs="?", help="- : the sentence on stdin"); s.add_argument("--since", type=int, default=30); s.set_defaults(fn=cmd_triage)
     s = sp.add_parser("query"); s.add_argument("sql"); s.add_argument("--limit", type=int, default=200); s.set_defaults(fn=cmd_query)
     s = sp.add_parser("chart", help="a preset as a PNG (or --spec: onto the dashboard). Presets: " + ", ".join(charts.CHARTS) + "; tables (dashboard only): " + ", ".join(charts.TABLES) + ". Others: --spec-json, --table-json"); s.add_argument("name", nargs="?", help="a preset: " + ", ".join(charts.CHARTS + charts.TABLES)); s.add_argument("arg", nargs="?", help="the merchant, for merchant_history"); s.add_argument("--months", type=int, default=12)
+    s.add_argument("--budget", metavar="NAME", help="budgets: the budget to show (default: the first over its limit this month, else the first)")
     s.add_argument("--spec", action="store_true", help="add or update this preset on the web dashboard instead of writing a PNG")
     s.add_argument("--spec-json", metavar="SPEC", help="add or update a whole Vega-Lite spec, given inline or as - for stdin; data.sql runs read-only into data.values")
     s.add_argument("--table-json", metavar="SPEC", help='add or update a table panel: {"title", "columns": [{field, label, format: text|money|date|number, align}]}, rows from --sql')
