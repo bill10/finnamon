@@ -1022,15 +1022,16 @@ def chrome_builds(chrome: str) -> tuple[str | None, set[str]]:
     return disk, running
 
 
-EAC_CAUSES = ("the error may come from that new build, from the debugging port Finnamon opens Chrome with, or from Finnamon's "
-              "own Chrome profile reading as a new device; finnamon import --browser {bank} --diagnose tells them apart")
+EAC_CAUSES = ("the likelier cause of a refused login is the debugging port Finnamon opens its window with (a fresh Chrome "
+              "on the new build and a brand-new profile, with no port, has logged in to HSBC fine), and Finnamon's profile "
+              "reading as a new device is a third suspect; finnamon import --browser {bank} --diagnose tells them apart")
 
 
 def build_mismatch(chrome: str, bank: str | None = None) -> str | None:
     """What to tell the person when Chrome on disk is newer than the windows they have open, or None. HSBC US's risk engine
-    (Transmit Security) fails the login on /security, "reference: EAC"; a build it has not seen is one suspect (only a
-    freshly launched window runs the new build), not a confirmed cause: nothing public says what EAC means, so the
-    message names the other two as well and points at --diagnose."""
+    (Transmit Security) fails the login on /security, "reference: EAC"; nothing public says what EAC means. A build it has
+    not seen is the weakest suspect (2026-10-05: a throwaway profile on the new build with no port logged in fine), the
+    open debugging port the strongest, so the message says both and points at --diagnose."""
     disk, running = chrome_builds(chrome)
     old = sorted(running - {disk}) if disk else []
     if not old:
@@ -1220,13 +1221,7 @@ def cmd_import(a) -> None:
         url = BANK_LOGIN.get(a.account.lower(), "about:blank")
         attached = chrome_attach(ATTACH_PORT if a.attach == "auto" else a.attach, url, required=a.attach != "auto") if a.attach else None
         if not attached and chrome and (msg := build_mismatch(chrome, a.account)):   # Finnamon's window is a fresh launch, so it runs the build on disk
-            print(msg, file=sys.stderr)
-            try:
-                ans = input("Open Finnamon's Chrome anyway? [y/N] ")
-            except EOFError:
-                ans = "y"   # nobody at a terminal to answer; the message above is what they will read
-            if ans.strip().lower() not in ("y", "yes"):
-                die("not opened")
+            print(f"note: {msg}", file=sys.stderr)   # a note, not a stop: the build is the weakest suspect
         cdp, tab = attached or chrome_launch(chrome, profile, url)
         (config.home() / IMPORT_TAB_FILE).unlink(missing_ok=True)   # bound again by this session's own `tab <id>`, never by the last one's
         prompt = f"/import-browser {a.account}" + (f" --to {to}" if to else "") + f" --cdp {cdp} --tab {tab}" + (" --attach" if attached else "")

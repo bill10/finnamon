@@ -883,7 +883,7 @@ def test_build_mismatch_says_what_happened_and_the_three_ways_out(monkeypatch):
     _fake_chrome(monkeypatch, ps=PS)
     msg = cli.build_mismatch(APP, "hsbc")
     assert msg.startswith("Chrome updated to 154.0.8037.98; your open windows run 153.0.8010.53. HSBC may reject a build it hasn't seen, but ")
-    assert "debugging port" in msg and "new device" in msg and "finnamon import --browser hsbc --diagnose" in msg, "a hypothesis, said as one, with the other two suspects"
+    assert "likelier cause of a refused login is the debugging port" in msg and "new device" in msg and "finnamon import --browser hsbc --diagnose" in msg, "a hypothesis, said as one, with the other two suspects"
     assert "rejects" not in msg
     assert 'finnamon import "<account>" ~/Downloads/<file>.csv' in msg, "the CSV from the everyday browser, and how"
     assert 'open -a "Google Chrome" --args --remote-debugging-port=9222' in msg and "finnamon import --browser hsbc --attach" in msg
@@ -892,22 +892,18 @@ def test_build_mismatch_says_what_happened_and_the_three_ways_out(monkeypatch):
 
 
 def test_import_browser_says_so_before_opening_a_window_on_a_newer_build(home, capsys, monkeypatch):
+    """A note, never a stop: the build is the weakest of the three suspects, so the window still opens."""
     calls = []
     _launcher(monkeypatch, calls)
     launched = []
     monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u: (launched.append(u), (CDP, TAB))[1])
     monkeypatch.setattr(cli, "build_mismatch", lambda chrome, bank=None: "Chrome updated to 154; your open windows run 153.")
-    monkeypatch.setattr("builtins.input", lambda prompt="": "")
-    with pytest.raises(SystemExit):
-        cli.main(["import", "--browser", "hsbc"])
-    err = capsys.readouterr().err
-    assert "Chrome updated to 154; your open windows run 153." in err and "not opened" in err and not launched and not calls
-    monkeypatch.setattr("builtins.input", lambda prompt="": "y")
+    monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail("nothing to answer"))
     cli.main(["import", "--browser", "hsbc"])
-    assert launched and calls, "the person may still try"
+    assert "note: Chrome updated to 154; your open windows run 153." in capsys.readouterr().err and launched and calls
     monkeypatch.setattr("urllib.request.urlopen", _urlopen_answering("127.0.0.1"))
-    monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail("attach mode uses the running build; nothing to warn about"))
     cli.main(["import", "--browser", "hsbc", "--attach"])
+    assert "Chrome updated" not in capsys.readouterr().err, "attach mode uses the running build; nothing to note"
     monkeypatch.setenv("FINNAMON_IMPORT_SESSION", "local")   # the sealed session's own check, for "reference: EAC"
     cli.main(["import", "--chrome-check", "hsbc"])
     assert json.loads(capsys.readouterr().out)["message"] == "Chrome updated to 154; your open windows run 153."

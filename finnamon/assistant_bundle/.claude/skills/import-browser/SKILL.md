@@ -67,9 +67,9 @@ uploads the file to its dashboard, with the box's key from `FINNAMON_WEB_TOKEN` 
    names with balances). If `connect` fails, or the page is still the login form, say so plainly and stop -- do not
    retry in a loop and do not ask them to log in again more than once. When the bank refused the login outright
    (HSBC US: `/security`, "Something went wrong ... reference: EAC"), say plainly that nobody knows for sure what
-   EAC means and that there are three suspects: a Chrome build the bank has not seen yet (for a few days after every
-   Chrome update), the debugging port the window was opened with, or Finnamon's own Chrome profile reading as a new
-   device. Without `--attach`, run `finnamon import --chrome-check <bank>` and, when its `message` is not null, say that
+   EAC means and that there are three suspects, likeliest first: the debugging port the window was opened with (a fresh
+   Chrome on a new profile and a new build, with no port, has logged in fine), Finnamon's own Chrome profile reading as a
+   new device, or a Chrome build the bank has not seen yet (for a few days after every Chrome update). Without `--attach`, run `finnamon import --chrome-check <bank>` and, when its `message` is not null, say that
    message as it is: it names the two builds and the ways out. Either way give them the ways out: log in to the bank in
    their everyday browser, download the CSV by hand, and run `finnamon import "<account>" ~/Downloads/<file>.csv` (with
    `--to <url>` if this computer is not the Finnamon box); `finnamon import --browser <bank> --attach` with their everyday
