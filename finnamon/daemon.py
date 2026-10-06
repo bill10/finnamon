@@ -411,10 +411,13 @@ class Daemon:
             self.consecutive_timeouts = 0
         if not res.ok:
             conn.execute("INSERT INTO feedback (alert_id, owner, text, parsed_action) VALUES (?,?,?,?)",
-                         (alert_id, msg["owner"], msg["text"], f"claude_error:{kind}"))
+                         (alert_id, msg["owner"], msg["text"], f"claude_error:{kind}"))   # the key for either CLI
+            codex = claude_runner.kind() == "codex"
             hint = ("it may have partially completed; check <code>finnamon alerts</code> and <code>finnamon normal --list</code> in a terminal on the Finnamon box" if kind == "timeout"
+                    else "it is busy or out of usage for now; try again later" if kind == "busy"
+                    else "run <code>finnamon doctor</code> on the Finnamon box" if codex
                     else f"run <code>claude --strict-mcp-config</code> in <code>{esc(str(assistant.dir()))}</code> on the Finnamon box to check the login")
-            telegram.send_message(chat, f"🩺 Claude is unavailable ({esc(kind)}); {hint}.")
+            telegram.send_message(chat, f"🩺 {'Codex' if codex else 'Claude'} is unavailable ({esc(kind)}); {hint}.")
             return
         if res.session_id:
             store.set_state(conn, "session", res.session_id)

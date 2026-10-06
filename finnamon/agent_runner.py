@@ -1,5 +1,5 @@
-"""The one place Finnamon invokes the household's assistant CLI headless: `claude -p` today, `codex exec` once the Codex
-cards land. The `assistant` setting (store.assistant_kind) picks which; run(), classify_error(), harness_problems() and
+"""The one place Finnamon invokes the household's assistant CLI headless: `claude -p`, or `codex exec --json` for a Codex
+household. The `assistant` setting (store.assistant_kind) picks which; run(), classify_error(), harness_problems() and
 terminate_all() dispatch on it, and the per-CLI parts are the _claude_*/_codex_* functions below. cwd = the assistant
 directory (FINNAMON_HOME/assistant, where `finnamon install` writes the bundle: finnamon/assistant.py), hard timeout with
 kill. Used by triage (fresh session per run) and the daemon's conversation thread (`--resume` the household session).
@@ -25,9 +25,6 @@ from . import assistant, codex, config, store
 
 log = logging.getLogger("finnamon.claude")
 
-CODEX_PENDING = "Codex support is being built"   # what every Codex branch says until the dashboard card (5 of 6) lands
-
-
 @dataclass
 class Result:
     ok: bool
@@ -35,17 +32,19 @@ class Result:
     session_id: str | None
     error: str | None = None
     returncode: int | None = None
+    usage: dict | None = None   # Codex: turn.completed's token counts, kept for a later doctor/usage line
 
 
 def kind() -> str:
-    """claude | codex, from the `assistant` setting. A database that cannot be read is a Claude household: that was
-    every household before the setting existed. Read-only and without store.connect()'s migrate: this runs on every
-    triage run and every Telegram turn."""
+    """claude | codex, from the `assistant` setting. A database that cannot be read is a Claude household (every household
+    before the setting existed) unless init set Codex up here: a busy database must not send a Codex household's turn to an
+    unchecked claude, nor wipe its thread. Read-only and without store.connect()'s migrate: this runs on every triage run
+    and every Telegram turn."""
     try:
-        with closing(sqlite3.connect(f"{config.db_path().as_uri()}?mode=ro", uri=True)) as conn:
+        with closing(sqlite3.connect(f"{config.db_path().as_uri()}?mode=ro", uri=True, timeout=10)) as conn:
             return store.assistant_kind(conn)
     except sqlite3.Error:
-        return "claude"
+        return "codex" if codex.configured() else "claude"
 
 
 def binary(which: str | None = None) -> str | None:
@@ -60,10 +59,13 @@ def cwd() -> Path:
 
 
 def harness_problems() -> list[str]:
-    """The permission boundary and the skills only exist if `claude -p` runs in a directory that has them.
-    An assistant directory nothing has written yet has none: refuse to run headless rather than run unguarded."""
-    if kind() == "codex":   # never run a Codex household under Claude's checks: the bundle, plus Codex's own home and pinned hooks
-        return assistant.problems(claude_trust=False) + codex.problems() + [CODEX_PENDING]
+    """The permission boundary and the skills only exist if the headless CLI (`claude -p`, `codex exec`) runs in a
+    directory that has them. An assistant directory nothing has written yet has none: refuse to run headless rather than
+    run unguarded. A lapsed login is not a seal problem (the daemon refuses to start on these, which would stop syncing
+    too): a run fails with "login expired" and doctor says how to log in."""
+    if kind() == "codex":   # never run a Codex household under Claude's checks: the bundle, Codex's own home, its pinned hooks and a config that keeps the seal
+        probs = assistant.problems(claude_trust=False) + codex.problems()
+        return probs + codex.config_problems() if not probs else probs
     return assistant.problems()
 
 
@@ -89,7 +91,7 @@ _LIVE_LOCK = threading.Lock()
 
 
 def terminate_all() -> int:
-    """Kill every claude child still running. Returns how many groups were signalled."""
+    """Kill every assistant child (claude or codex) still running. Returns how many groups were signalled."""
     with _LIVE_LOCK:
         pgids = list(_LIVE)
         _LIVE.clear()
@@ -109,7 +111,8 @@ def run(prompt: str, resume: str | None = None, timeout: int = 120, env_extra: d
     build, parse = (_codex_cmd, _codex_result) if which == "codex" else (_claude_cmd, _claude_result)
     cmd = build(exe, prompt, resume, disallowed)
     # FINNAMON_FROM_AGENT: the CLI's human-only gates (cli._from_agent). The variable is the marker, not its value.
-    env = {**os.environ, "CLAUDECODE": "", "FINNAMON_FROM_AGENT": "1", **(env_extra or {})}
+    # Codex: its sealed CODEX_HOME and empty HOME (codex.env()); FINNAMON_TRIAGE reaches the finnamon tool through env_vars.
+    env = {**(codex.env() if which == "codex" else os.environ), "CLAUDECODE": "", "FINNAMON_FROM_AGENT": "1", **(env_extra or {})}
     try:
         # Own process group so a timeout kills the Bash tool's grandchildren (a slow `finnamon query`) too.
         proc = subprocess.Popen(cmd, cwd=cwd(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
@@ -137,7 +140,12 @@ def run(prompt: str, resume: str | None = None, timeout: int = 120, env_extra: d
         return Result(False, "", None, error=f"timeout after {timeout}s")
     with _LIVE_LOCK:
         _LIVE.discard(proc.pid)
-    if proc.returncode != 0:
+    if which == "codex":   # the JSONL decides: a completed turn is the reply whatever the exit, a failed one says why
+        res = parse(out)
+        if res.ok or res.error != CODEX_INCOMPLETE or proc.returncode == 0:
+            res.returncode = proc.returncode or None
+            return res
+    if proc.returncode != 0:   # no turn on stdout: stderr says why (a gone thread, a bad config, no login)
         err = (err or out or "").strip()[-400:]
         return Result(False, "", None, error=err or f"exit {proc.returncode}", returncode=proc.returncode)
     return parse(out)
@@ -176,14 +184,33 @@ def _claude_result(stdout: str) -> Result:
     return Result(True, text, body.get("session_id"))
 
 
+# Every Codex run is unattended, so its lock is on the command line, over whatever config.toml says: no approvals (nobody
+# to ask), no web, no ChatGPT-apps server, and the finnamon profile as the default, on a read-only base (`:read-only`: nothing writable, not even /tmp; the
+# denies still hold, and the finnamon tool runs outside the sandbox). --ignore-rules: no execpolicy allow rule from
+# anywhere skips a check. Not --ignore-user-config: it skips CODEX_HOME/config.toml, which is the generated config with
+# the profile, the hooks and the tool (spike, card 3 notes); the sealed CODEX_HOME already keeps ~/.codex/config.toml out.
+CODEX_LOCK = ["-c", 'approval_policy="never"', "-c", 'web_search="disabled"', "-c", "features.apps=false",
+              "-c", f'default_permissions="{codex.PROFILE}"', "-c", f'permissions.{codex.PROFILE}.extends=":read-only"']
+
+
 def _codex_cmd(exe: str, prompt: str, resume: str | None, disallowed) -> list[str]:
-    raise NotImplementedError(CODEX_PENDING)   # card 4: `codex exec --json` / `exec resume <id>` (docs/designs/codex-spike.md)
+    # `disallowed` has no Codex form: the triage write ban is the finnamon tool's own (FINNAMON_TRIAGE, mcp_server.py).
+    # `--` before the positionals: a chat message starting with "-" is a prompt, not a flag.
+    common = ["--json", "--skip-git-repo-check", "--ignore-rules", *CODEX_LOCK]
+    if resume:   # `exec resume` has no -C; run() starts it in the assistant directory
+        return [exe, "exec", "resume", *common, "--", resume, prompt]
+    return [exe, "exec", *common, "-C", str(cwd()), "--", prompt]
+
+
+CODEX_INCOMPLETE = "the Codex turn did not complete"
 
 
 def _codex_result(stdout: str) -> Result:
     """`codex exec --json` prints one event per line (tests/fixtures/codex/exec.jsonl): thread.started carries the session
-    id, the last agent_message item is the reply, and turn.failed or error is a failure."""
-    sid, text, error = None, "", None
+    id, the last agent_message item is the reply, and turn.failed is a failure; an error event counts only if the turn
+    never completed after it (a stream that reconnected is not a failed turn). No turn.completed at all is not a success:
+    an empty stream would otherwise read as a turn with nothing to say, and the household's message would vanish."""
+    sid, text, error, usage, done = None, "", None, None, False
     for line in stdout.splitlines():
         try:
             ev = json.loads(line)
@@ -196,18 +223,28 @@ def _codex_result(stdout: str) -> Result:
             text = ev["item"].get("text") or ""
         elif t in ("turn.failed", "error"):
             error = str((ev.get("error") or {}).get("message") or ev.get("message") or t)[-400:]
-    return Result(False, text, sid, error=error) if error else Result(True, text, sid)
+        elif t == "turn.completed":
+            usage, error, done = ev.get("usage"), None, True
+    error = error or (None if done else CODEX_INCOMPLETE)
+    return Result(not error, text, sid, error=error, usage=usage)
 
 
 def classify_error(err: str | None) -> str:
-    # ponytail: Claude's wording only; card 4 adds Codex's (login, usage limit) once its real errors are recorded
+    """Claude's wording and Codex's. "busy" (a usage limit, a model at capacity) passes on its own and must never read
+    as "login expired": Codex's usage-limit text mentions plans and tokens."""
     e = (err or "").lower()
     if "timeout" in e:
         return "timeout"
     if "not on path" in e:
         return "not installed"
-    if any(w in e for w in ("login", "auth", "unauthorized", "token", "credential")):
-        return "login expired"
-    if "session" in e and ("not found" in e or "no conversation" in e):
+    if ("session" in e and ("not found" in e or "no conversation" in e)) or "no rollout found" in e:   # Codex: `exec resume` of a gone thread
         return "session lost"
+    if "context window" in e or "context_length_exceeded" in e:   # a thread too long to continue: the daemon starts a fresh one
+        return "session lost"
+    if any(w in e for w in ("at capacity", "usage limit", "rate limit", "too many requests", "overloaded")):
+        return "busy"
+    if any(w in e for w in ("config.toml", "error loading config", "invalid configuration", "unknown variant", "unknown field")):
+        return "bad config"
+    if any(w in e for w in ("login", "logged in", "log in", "sign in", "auth", "unauthorized", "token", "credential")):
+        return "login expired"
     return "error"
