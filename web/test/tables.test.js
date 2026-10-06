@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 const src = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const escLine = src.split('\n').find(l => l.startsWith('function esc('));
 const block = src.slice(src.indexOf('const MONTHS ='), src.indexOf('// ---- end table panels'));
-const { shortDate, tableCell, tableNote, tableHtml } = new Function(`${escLine}\n${block}; return { shortDate, tableCell, tableNote, tableHtml };`)();
+const { shortDate, tableCell, tableNote, tableHtml, liveNote } = new Function(`${escLine}\n${block}; return { shortDate, tableCell, tableNote, tableHtml, liveNote };`)();
 
 test('shortDate: this year drops the year, another keeps it, anything else passes through', () => {
   assert.equal(shortDate('2026-09-08', 2026), 'Sep 8');
@@ -56,4 +56,14 @@ test('tableHtml: a row with its transaction_id opens the category picker; an esc
 test('tableHtml: with no category column the merchant cell is the row\'s button', () => {
   const html = tableHtml({ title: 't', table: { columns: [{ field: 'merchant', label: 'Merchant', format: 'text' }] }, data: { values: [{ merchant: 'HSBC', transaction_id: 'x1' }] } }, 2026);
   assert.ok(html.includes('<button class="recat" data-recat="x1" aria-label="Change category of: HSBC">HSBC<svg'));
+});
+
+test('tableHtml: ended rows are hidden and greyed behind an "ended (N)" toggle; open shows them', () => {
+  const t = { title: 'Recurring', usermeta: { finnamon: { id: 'recurring' } }, table: { total: 3, columns: [{ field: 'm', label: 'Merchant', format: 'text', align: 'left' }] },
+    data: { values: [{ m: 'Netflix', ended: 0 }, { m: 'Gone', ended: 1 }, { m: 'Old', ended: 1 }] } };
+  const shut = tableHtml(t, 2026, false), open = tableHtml(t, 2026, true);
+  assert.equal((shut.match(/<tr class="ended" hidden>/g) || []).length, 2);
+  assert.ok(shut.includes('aria-expanded="false">ended (2)</button>') && !open.includes(' hidden>') && open.includes('aria-expanded="true">ended (2)'));
+  assert.ok(!tableHtml({ ...t, data: { values: [{ m: 'Netflix', ended: 0 }] } }, 2026, false).includes('ended ('), 'no ended rows, no toggle');
+  assert.deepEqual(liveNote(t), [{ ...t.table, total: 1 }, 1]);
 });
