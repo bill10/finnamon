@@ -153,7 +153,8 @@ def test_colour_legends_never_take_plot_width(home, conn):   # #97
     app = (pathlib.Path(__file__).parent.parent / "web/public/app.js").read_text()
     assert re.search(r"legend: \{ orient: 'top', direction: 'horizontal'", app), "the page's Vega config sets the default legend: a row above the plot"
     for name in ("budgets", "balance_history", "monthly_in_out"):
-        legend = charts.spec(conn, name)["encoding"]["color"].get("legend", {})
+        sp = charts.spec(conn, name)
+        legend = (sp.get("encoding") or sp["layer"][0]["encoding"])["color"].get("legend", {})
         assert "orient" not in legend, f"{name} leaves orient to the theme default (a spec that sets its own still wins)"
     assert charts.spec(conn, "monthly_in_out")["encoding"]["color"]["legend"]["values"] == ["income", "spending", "mortgage"], "#92 order kept"
 
@@ -183,3 +184,20 @@ def test_net_worth_history_points_carry_what_an_account_added_this_month_contrib
 def test_in_out_axis_says_month_names():
     assert list(charts._month_labels([("2025-11",), ("2025-12",), ("2026-01",)]).values()) == ["Nov 2025", "Dec", "Jan 2026"]
     assert list(charts._month_labels([("2026-02",), ("2026-03",)]).values()) == ["Feb", "Mar"]
+
+
+def test_budgets_chart_is_a_six_month_trend_by_the_cards_rules(conn):
+    seed(conn)
+    budgets.budget_set(conn, "groceries", 600, "FOOD_AND_DRINK_GROCERIES")
+    now = store.now_local()
+    first = conn.execute("SELECT date(?, 'start of month')", (now,)).fetchone()[0]
+    txn(conn, "t0", "chk", first, 50, "WF", "Whole Foods", "mch_wf")
+    txn(conn, "t1", "chk", conn.execute("SELECT date(?, 'start of month', '-2 months', '+4 days')", (now,)).fetchone()[0], 120, "WF", "Whole Foods", "mch_wf")
+    txn(conn, "t2", "chk", conn.execute("SELECT date(?, 'start of month', '-7 months')", (now,)).fetchone()[0], 999, "WF", "Whole Foods", "mch_wf")   # outside the window
+    sp = charts.spec(conn, "budgets")
+    assert sp["title"] == "Budget trend, last 6 months" and sp["usermeta"]["finnamon"]["chart"] == "budgets"
+    vals = sp["data"]["values"]
+    assert len(vals) == 6 and {v["limit"] for v in vals} == {600} and sum(v["spent"] for v in vals) == 170
+    assert vals[-1]["period"] == "month to date" and vals[-1]["spent"] == 50 and vals[-1]["month"].endswith("(so far)")
+    assert vals[3]["spent"] == 120 and all(v["period"] == "full month" for v in vals[:-1])
+    assert [q[1] for q in budgets.monthly_spent(conn, 1, 6, now)][-1] == budgets.month_to_date(conn, 1, now)[0]

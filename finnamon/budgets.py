@@ -222,6 +222,17 @@ def month_to_date(conn: sqlite3.Connection, budget_id: int, as_of: str) -> tuple
     return float(r[0] or 0), float(r[1] or 0)
 
 
+def monthly_spent(conn: sqlite3.Connection, budget_id: int, months: int, as_of: str) -> list[tuple[str, float]]:
+    """[("2026-05", spent), ...] for the `months` calendar months ending with as_of's, oldest first, each by month_to_date's rules;
+    the last is month to date, so it is partial."""
+    rows = dict(conn.execute(
+        f"SELECT strftime('%Y-%m', date), SUM(amount) FROM tx_now t WHERE pending=0 AND date >= date(:as_of, 'start of month', :back) AND date <= date(:as_of) "
+        f"AND {SPEND} AND {MATCH} GROUP BY 1", {"as_of": as_of, "bid": budget_id, "back": f"-{months - 1} months"}).fetchall())
+    yms = [r[0] for r in conn.execute("WITH RECURSIVE m(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM m WHERE i < :n) SELECT strftime('%Y-%m', date(:as_of, 'start of month', '-'||(:n - i)||' months')) FROM m",
+                                      {"as_of": as_of, "n": months - 1}).fetchall()]
+    return [(ym, round(float(rows.get(ym) or 0), 2)) for ym in yms]
+
+
 # A payment paired with the mortgage loan is the mortgage in suggest, as MATCH counts it, whatever Plaid filed it under.
 SUGGEST_CAT = "CASE WHEN flow = 'mortgage' THEN 'LOAN_PAYMENTS_MORTGAGE_PAYMENT' ELSE category END"
 SUGGEST_PRIM = "CASE WHEN flow = 'mortgage' THEN 'LOAN_PAYMENTS' ELSE category_primary END"
