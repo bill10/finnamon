@@ -172,13 +172,16 @@ def spec(conn: sqlite3.Connection, name: str, arg: str | None = None, months: in
     if name == "budgets":
         series = _budget_trend(conn)
         values = [{"budget": b["name"], "month": p["label"], "spent": p["spent"], "limit": b["monthly_limit"], "period": p["period"]} for b, pts in series for p in pts]
+        names = [b["name"] for b, _ in series]
         enc = {"x": {"field": "month", "type": "ordinal", "title": None, "sort": [p["label"] for p in series[0][1]] if series else []},
-               "xOffset": {"field": "budget"}, "color": {"field": "budget", "title": None}}
+               "xOffset": {"field": "budget"},
+               "color": {"field": "budget", "title": None, "scale": {"domain": [""] + names}, "legend": {"values": names}}}   # the "" entry takes the theme's pale first colour, which vanishes on the page
         tip = [{"field": "budget"}, {"field": "month"}, {"field": "period"}, {"field": "spent", "format": "$,.0f"}, {"field": "limit", "format": "$,.0f"}]
         return {**base, "title": "Budget trend, last 6 months", "data": {"values": values}, "encoding": enc,   # a bar per budget and month, a tick for its limit; the latest month is paler
                 "layer": [{"mark": "bar", "encoding": {"y": {"field": "spent", "type": "quantitative", "title": "$"}, "tooltip": tip,
                                                        "opacity": {"field": "period", "type": "nominal", "scale": {"domain": ["full month", "month to date"], "range": [1, 0.5]}, "legend": None}}},
-                          {"mark": {"type": "tick", "color": "gray", "thickness": 2}, "encoding": {"y": {"field": "limit", "type": "quantitative"}}}]}
+                          {"mark": {"type": "tick", "color": "white", "thickness": 5}, "encoding": {"color": {"value": "white"}, "y": {"field": "limit", "type": "quantitative"}}},   # halo, then the mark, over the bars: an over-limit bar visibly crosses it
+                          {"mark": {"type": "tick", "color": "#222", "thickness": 2.5}, "encoding": {"color": {"value": "#222"}, "y": {"field": "limit", "type": "quantitative"}}}]}
     if name == "spend_by_category":
         rows = conn.execute(SPEND_BY_CATEGORY, (f"-{months} months",)).fetchall()
         return {**base, "title": f"Spend by category, last {months} months", "data": {"values": [{"category": _cat(r[0]), "amount": r[1]} for r in rows]},
