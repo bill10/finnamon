@@ -939,6 +939,31 @@ function tableHtml(s, year) {   // a hand-edited entry of the wrong shape draws 
 }
 // ---- end table panels
 
+// ---- budget trend: the budgets chart carries every budget's months and shows one, picked here and remembered per browser.
+// Pure, so web/test/budget-chart.test.js lifts this block.
+const BUDGET_KEY = 'finnamon.budgetChart';
+const budgetNames = (s) => (s.usermeta?.finnamon?.budgets || []).map(b => b.name);
+const isBudgetTrend = (s) => s.usermeta?.finnamon?.chart === 'budgets' && budgetNames(s).length > 0;
+// the one this browser last picked, while it is still a budget; else the spec's (the one asked for with --budget, else the first
+// over its limit, else the first). A pick remembers the spec's arg it was made over: a newer ask ("show me dining") wins over it.
+const budgetChoice = (s, st = globalThis.localStorage) => {
+  const fm = s.usermeta.finnamon;
+  let v = null; try { v = JSON.parse(st.getItem(BUDGET_KEY)); } catch {}
+  return v && budgetNames(s).includes(v.name) && (v.arg ?? null) === (fm.arg ?? null) ? v.name : fm.budget;
+};
+const saveBudgetChoice = (s, name, st = globalThis.localStorage) => { try { st.setItem(BUDGET_KEY, JSON.stringify({ name, arg: s.usermeta.finnamon.arg ?? null })); } catch { /* private mode: the pick lasts until a reload */ } };
+const budgetTitle = (n) => `Budget trend: ${n.charAt(0).toUpperCase()}${n.slice(1)}`;
+const budgetSpec = (s, name) => ({ ...s, title: budgetTitle(name), transform: [{ filter: { field: 'budget', equal: name } }] });
+function budgetPicker(s, name) {   // chips for a few budgets, a select beyond; an over-limit one carries a dot and says so
+  const bs = s.usermeta.finnamon.budgets;
+  if (bs.length > 6) return `<select class="bsel" data-budget-select aria-label="Budget to show">` +
+    bs.map(b => `<option value="${esc(b.name)}"${b.name === name ? ' selected' : ''}>${esc(b.name)}${b.over ? ' (over)' : ''}</option>`).join('') + '</select>';
+  return '<div class="chips bsel" role="group" aria-label="Budget to show">' + bs.map(b =>
+    `<button type="button" data-budget="${esc(b.name)}" aria-pressed="${b.name === name}"${b.name === name ? ' class="active"' : ''}>` +
+    `${esc(b.name)}${b.over ? '<span class="over" aria-hidden="true"></span><span class="sr-only">, over its limit</span>' : ''}</button>`).join('') + '</div>';
+}
+// ---- end budget trend
+
 let views = [], drawn = 0;
 async function drawChart() {
   const gen = ++drawn;
@@ -948,11 +973,11 @@ async function drawChart() {
   if (!board.length) { panel.innerHTML = EMPTY_BOARD; return; }
   panel.innerHTML = board.map(s => `<figure class="panel"><button class="x" data-remove="${esc(chartId(s))}" aria-label="Remove this ${isTable(s) ? 'table' : 'chart'}" title="Remove">${icon('x')}</button>`
     + (isTable(s) ? `<div class="vis">${tableHtml(s)}</div><figcaption class="asof">${tableNote(s.table, (Array.isArray(s.data?.values) ? s.data.values : []).length)} · ${asOf(s)}</figcaption>`
-      : `<div class="vis"></div><figcaption class="asof">${asOf(s)}</figcaption>`) + '</figure>').join('');
+      : (isBudgetTrend(s) ? budgetPicker(s, budgetChoice(s)) : '') + `<div class="vis"></div><figcaption class="asof">${asOf(s)}</figcaption>`) + '</figure>').join('');
   const cells = panel.querySelectorAll('.vis');
   // usermeta.embedOptions would win over chartOpts() (actions, sourceHeader, patch: script on this origin): the CLI drops it, and so does the page
   const noRows = (s) => Array.isArray(s.data?.values) && !s.data.values.length;   // axes with nothing on them read as broken
-  const made = await Promise.all(board.map((s, i) => isTable(s) ? null : noRows(s) ? (cells[i].innerHTML = '<div class="muted nodata">No data yet. This fills in once the accounts have the transactions for it.</div>', null) : vegaEmbed(cells[i], { ...s, usermeta: { finnamon: s.usermeta?.finnamon } }, chartOpts()).then(r => r.view,
+  const made = await Promise.all(board.map((s, i) => isTable(s) ? null : noRows(s) ? (cells[i].innerHTML = '<div class="muted nodata">No data yet. This fills in once the accounts have the transactions for it.</div>', null) : vegaEmbed(cells[i], { ...(isBudgetTrend(s) ? budgetSpec(s, budgetChoice(s)) : s), usermeta: { finnamon: s.usermeta?.finnamon } }, chartOpts()).then(r => r.view,
     e => { cells[i].innerHTML = `<div class="muted">This chart did not draw: ${esc(e.message)}</div>`; return null; })));
   if (gen === drawn) views = made.filter(Boolean);
   else made.forEach(v => v?.finalize());   // a newer draw replaced these cells while they embedded
@@ -978,9 +1003,12 @@ document.querySelectorAll('[data-chart]').forEach(b => b.addEventListener('click
   const on = board.find(s => s.usermeta?.finnamon?.chart === b.dataset.chart);
   chartRequest(...(on ? ['DELETE', `/api/chart/${encodeURIComponent(chartId(on))}`] : ['POST', '/api/chart', { name: b.dataset.chart }]));
 }));
+$('chart-panel').addEventListener('change', (e) => { if (e.target.matches('[data-budget-select]')) { saveBudgetChoice(board.find(isBudgetTrend), e.target.value); drawChart(); } });
 $('chart-panel').addEventListener('click', (e) => {
   const x = e.target.closest('[data-remove]');
   if (x) return chartRequest('DELETE', `/api/chart/${encodeURIComponent(x.dataset.remove)}`);
+  const pick = e.target.closest('[data-budget]');
+  if (pick) { saveBudgetChoice(board.find(isBudgetTrend), pick.dataset.budget); return drawChart(); }
   const t = e.target.closest('tr.tx');
   if (t) recategorize(t.dataset.tx);
 });

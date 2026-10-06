@@ -172,6 +172,11 @@ def seed(conn, today: date | None = None, months: int = 6) -> None:
 
     for name, cat, limit in BUDGETS:
         budgets.budget_set(conn, name, limit, cat)
+    # limits as of the first month, and dining raised from $300 two months ago: the budget trend's limit line has a step
+    conn.execute("UPDATE budget_limit_history SET effective_from=?", (f"{start} 06:00:00",))
+    conn.execute("UPDATE budget_limit_history SET monthly_limit=300 WHERE budget_id=(SELECT id FROM budgets WHERE name='dining')")
+    conn.execute("INSERT INTO budget_limit_history (budget_id, monthly_limit, effective_from) SELECT id, monthly_limit, ? FROM budgets WHERE name='dining'",
+                 (f"{today.replace(day=1) - timedelta(days=45):%Y-%m-01} 06:00:00",))
     properties.set_value(conn, "House", 685000)
     properties.set_value(conn, "Car", 21500)
     store.set_setting(conn, "low_balance_threshold", 2500, account_id="demo-chk")
