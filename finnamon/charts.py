@@ -180,8 +180,8 @@ def spec(conn: sqlite3.Connection, name: str, arg: str | None = None, months: in
         return {**base, "title": "Budget trend, last 6 months", "data": {"values": values}, "encoding": enc,   # a bar per budget and month, a tick for its limit; the latest month is paler
                 "layer": [{"mark": "bar", "encoding": {"y": {"field": "spent", "type": "quantitative", "title": "$"}, "tooltip": tip,
                                                        "opacity": {"field": "period", "type": "nominal", "scale": {"domain": ["full month", "month to date"], "range": [1, 0.5]}, "legend": None}}},
-                          {"mark": {"type": "tick", "color": "white", "thickness": 5}, "encoding": {"color": {"value": "white"}, "y": {"field": "limit", "type": "quantitative"}}},   # halo, then the mark, over the bars: an over-limit bar visibly crosses it
-                          {"mark": {"type": "tick", "color": "#222", "thickness": 2.5}, "encoding": {"color": {"value": "#222"}, "y": {"field": "limit", "type": "quantitative"}}}]}
+                          {"mark": {"type": "tick", "color": "white", "thickness": 7}, "encoding": {"color": {"value": "white"}, "y": {"field": "limit", "type": "quantitative"}}},   # halo, then the mark, over the bars: an over-limit bar visibly crosses it
+                          {"mark": {"type": "tick", "color": "#111", "thickness": 4}, "encoding": {"color": {"value": "#111"}, "y": {"field": "limit", "type": "quantitative"}}}]}
     if name == "spend_by_category":
         rows = conn.execute(SPEND_BY_CATEGORY, (f"-{months} months",)).fetchall()
         return {**base, "title": f"Spend by category, last {months} months", "data": {"values": [{"category": _cat(r[0]), "amount": r[1]} for r in rows]},
