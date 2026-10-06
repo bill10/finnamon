@@ -757,6 +757,8 @@ def cmd_hook(a) -> None:
             why = browser_command_ok(argv, cdp, tab, bound=bool(tab) and marker.exists() and marker.read_text() == tab)
             if why:
                 die(f"blocked: {why}", 2)
+            if argv[3:4] in (["connect"], ["close"]):   # a (re)connect may land on any tab: bound again only by a `tab <id>` after it
+                marker.unlink(missing_ok=True)
             if tab and argv[3:] == ["tab", tab]:   # binding: only to a tab that is still open, or agent-browser stays on whichever one connect picked
                 # ponytail: checked here, then run by agent-browser; a tab closed in between leaves the pin on connect's pick. Pin from agent-browser's own reply if that ever matters.
                 try:
@@ -1043,8 +1045,16 @@ def build_mismatch(chrome: str, bank: str | None = None) -> str | None:
             f"({ATTACH_HOW}; then finnamon import --browser {bank or '<bank>'} --attach); or retry in a few days.")
 
 
+def profile_in_use(profile: Path) -> bool:
+    """A Chrome is running on this profile (ps shows its --user-data-dir): a second launch only hands that process the
+    URL, with whatever port it was started with, and it rewrites Preferences on exit."""
+    return f"--user-data-dir={profile}" in _ps()
+
+
 def chrome_open(chrome: str, profile: Path, url: str) -> None:
     """Finnamon's profile at url with no debugging port and no switch of any kind: the window HSBC has been seen to accept."""
+    if profile_in_use(profile):
+        die("Finnamon's Chrome is still running: quit it (Cmd-Q on a Mac; closing the window leaves it running), then start again")
     try:
         subprocess.Popen([chrome, f"--user-data-dir={profile}", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     except OSError as e:
@@ -1079,9 +1089,14 @@ def wait_for_csv(folder: Path, since: float) -> Path:
     first and renames it, but a slow disk can still show a growing file), or die() after WATCH_SECONDS."""
     last: tuple[Path, int] | None = None
     for _ in range(int(WATCH_SECONDS / WATCH_POLL)):
-        new = sorted((f for f in folder.glob("*.csv") if f.stat().st_mtime >= since), key=lambda f: f.stat().st_mtime)
+        try:   # a file renamed or removed between the listing and the stat is just not there yet
+            new = sorted(((f.stat().st_mtime, f) for f in folder.glob("*.csv")), key=lambda t: t[0])
+            new = [f for m, f in new if m >= since]
+            size = new[-1].stat().st_size if new else 0
+        except OSError:
+            new = []
         if new:
-            f, size = new[-1], new[-1].stat().st_size
+            f = new[-1]
             if last == (f, size) and size:
                 return f
             last = (f, size)
@@ -1102,6 +1117,8 @@ def fetch_by_hand(chrome: str, profile: Path, bank: str, to: str) -> None:
     folder = config.home() / "downloads"
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
     folder.chmod(0o700)   # bank statements
+    if profile_in_use(profile):   # a live Chrome would ignore the download folder and write its own Preferences back on exit
+        die("Finnamon's Chrome is still running: quit it (Cmd-Q on a Mac; closing the window leaves it running), then start again")
     pin_downloads(profile, folder)
     since = time.time()
     chrome_open(chrome, profile, BANK_LOGIN.get(bank.lower(), "about:blank"))
@@ -1175,12 +1192,14 @@ def chrome_diagnose(chrome: str, profile: Path, bank: str) -> dict:
               + ("WITH the debugging port open (as Fetch by AI opens it)" if port else "with NO debugging port")
               + f", at {bank}. Nothing is attached to it. Log in yourself.")
         if port:
+            if profile_in_use(profile):
+                die("Finnamon's Chrome is still running: quit it (Cmd-Q), then run --diagnose again")
             chrome_launch(chrome, profile, url)
         else:
             chrome_open(chrome, profile, url)
         results[label] = _asked("Did the login reach your accounts (no \"Something went wrong ... reference: EAC\")? [y/N] ")
         try:
-            input("Log off, quit that Chrome window (Cmd-Q / close it), then press Enter. ")
+            input("Log off, then quit that Chrome (Cmd-Q on a Mac: closing the window leaves it running), then press Enter. ")
         except EOFError:
             pass
     if results["no_port"] and not results["with_port"]:
@@ -1199,6 +1218,7 @@ def chrome_diagnose(chrome: str, profile: Path, bank: str) -> dict:
     except (OSError, ValueError):
         prev = []
     f.write_text(json.dumps([*prev, rec][-20:], indent=1))
+    f.chmod(0o600)
     print(f"\nLikely cause: {verdict}\n(recorded in {f})")
     return rec
 
@@ -1308,7 +1328,8 @@ def cmd_import(a) -> None:
         if _from_agent():
             die("the browser import is its own Claude session; run `finnamon import --browser <bank>` in a terminal")
         if not a.account:
-            die("usage: finnamon import --browser <bank> [--to <url>]")
+            die("usage: finnamon import --browser <bank> [--to <url>] [--attach [host:port] | --no-cdp | --diagnose]"
+                + ("   (--attach takes the address that follows it: put the bank first, or write --attach=<host:port>)" if a.attach else ""))
         if a.diagnose:   # no Claude, no session: a person, two logins, and what they saw
             chrome = chrome_path()
             if not chrome:

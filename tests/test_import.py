@@ -847,12 +847,19 @@ def test_browser_guard_pins_the_session_to_the_banks_tab(home, capsys, monkeypat
     (home / cli.IMPORT_TAB_FILE).write_text("OTHER")   # a binding to some other session's tab is no binding
     assert not _guard(f"{ab} snapshot", monkeypatch)
     assert cli.browser_command_ok(["agent-browser", "--session", "finnamon-import", "snapshot"]) is None, "pure: no tab given, no pin"
+    (home / cli.IMPORT_TAB_FILE).write_text(TAB)   # bound, then: tab before connect, or a reconnect, lands wherever connect picks
+    assert _guard(f"{ab} connect {CDP}", monkeypatch) and not (home / cli.IMPORT_TAB_FILE).exists()
+    assert not _guard(f"{ab} snapshot", monkeypatch), "a connect after `tab` unbinds; only a `tab <id>` after it binds again"
+    with pytest.raises(SystemExit):
+        cli.main(["import", "--browser", "--attach", "hsbc"])   # argparse hands the bank to --attach
+    assert "put the bank first" in capsys.readouterr().err
 
 
 def _fake_chrome(monkeypatch, disk="Google Chrome 154.0.8037.98 \n", ps=""):
-    from tests.conftest import REAL_CHROME_BUILDS
+    from tests.conftest import REAL_CHROME_BUILDS, REAL_PS
     import subprocess
     monkeypatch.setattr(cli, "chrome_builds", REAL_CHROME_BUILDS)
+    monkeypatch.setattr(cli, "_ps", REAL_PS)
 
     def run(argv, **kw):
         return subprocess.CompletedProcess(argv, 0, ps if argv[0] == "ps" else disk, "")
@@ -979,6 +986,18 @@ def test_no_cdp_opens_a_port_less_window_and_imports_the_csv_that_lands(home, co
     assert "Show more transactions" in out and "Spreadsheet CSV file" in out, "the bank's export steps, on screen"
     rows = conn.execute("SELECT amount FROM transactions WHERE account_id LIKE 'manual:%' ORDER BY amount").fetchall()
     assert len(rows) == 4 and rows[0][0] < 0, "imported once, signs as the file had them after flipping and flipping back"
+
+
+def test_no_cdp_refuses_while_finnamons_chrome_is_still_running(home, conn, capsys, monkeypatch):
+    """A running Chrome on the profile would take the URL with whatever port it has and ignore the pinned download folder."""
+    from finnamon import imports as imp
+    seed(conn); imp.add_account(conn, "HSBC Checking", "HSBC", "checking", "bill")
+    monkeypatch.setenv("FINNAMON_CHROME", sys.executable)
+    monkeypatch.setattr(cli, "_ps", lambda: f"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir={home / 'chrome'} --remote-debugging-port=0\n")
+    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: pytest.fail("no second launch"))
+    with pytest.raises(SystemExit):
+        cli.main(["import", "--browser", "hsbc", "--no-cdp"])
+    assert "Cmd-Q" in capsys.readouterr().err and not (home / "chrome" / "Default" / "Preferences").exists()
 
 
 def test_no_cdp_refuses_a_bank_with_no_manual_account_and_keeps_a_declined_file(home, conn, capsys, monkeypatch):
