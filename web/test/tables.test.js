@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 const src = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const escLine = src.split('\n').find(l => l.startsWith('function esc('));
 const block = src.slice(src.indexOf('const MONTHS ='), src.indexOf('// ---- end table panels'));
-const { shortDate, tableCell, tableNote, tableHtml, liveNote } = new Function(`${escLine}\n${block}; return { shortDate, tableCell, tableNote, tableHtml, liveNote };`)();
+const { shortDate, tableCell, tableNote, tableHtml, tableCaption } = new Function(`${escLine}\n${block}; return { shortDate, tableCell, tableNote, tableHtml, tableCaption };`)();
 
 test('shortDate: this year drops the year, another keeps it, anything else passes through', () => {
   assert.equal(shortDate('2026-09-08', 2026), 'Sep 8');
@@ -59,11 +59,13 @@ test('tableHtml: with no category column the merchant cell is the row\'s button'
 });
 
 test('tableHtml: ended rows are hidden and greyed behind an "ended (N)" toggle; open shows them', () => {
-  const t = { title: 'Recurring', usermeta: { finnamon: { id: 'recurring' } }, table: { total: 3, columns: [{ field: 'm', label: 'Merchant', format: 'text', align: 'left' }] },
-    data: { values: [{ m: 'Netflix', ended: 0 }, { m: 'Gone', ended: 1 }, { m: 'Old', ended: 1 }] } };
+  const t = { title: 'Recurring', usermeta: { finnamon: { id: 'recurring' } }, table: { total: 3, columns: [{ field: 'm', label: 'Merchant', format: 'text', align: 'left' }, { field: 'n', label: 'Next', format: 'date', align: 'left' }] },
+    data: { values: [{ m: 'Netflix', n: '2026-10-31', ended: 0 }, { m: 'Gone', n: null, ended: 1 }, { m: 'Old', n: null, ended: 1 }] } };
   const shut = tableHtml(t, 2026, false), open = tableHtml(t, 2026, true);
   assert.equal((shut.match(/<tr class="ended" hidden>/g) || []).length, 2);
   assert.ok(shut.includes('aria-expanded="false">ended (2)</button>') && !open.includes(' hidden>') && open.includes('aria-expanded="true">ended (2)'));
+  assert.equal((open.match(/<td>—<\/td>/g) || []).length, 2, 'an ended row has no next date: a dash');
   assert.ok(!tableHtml({ ...t, data: { values: [{ m: 'Netflix', ended: 0 }] } }, 2026, false).includes('ended ('), 'no ended rows, no toggle');
-  assert.deepEqual(liveNote(t), [{ ...t.table, total: 1 }, 1]);
+  assert.equal(tableCaption(t, false), '1 live');
+  assert.equal(tableCaption(t, true), '1 live · 2 ended');
 });

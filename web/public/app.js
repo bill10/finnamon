@@ -919,9 +919,9 @@ function tableNote(t, shown) {
   const of = (t.more ? 'over ' : '') + Number(t.total || 0).toLocaleString('en-US');
   return shown < t.total || t.more ? `showing ${shown} of ${of}` : `${shown} row${shown === 1 ? '' : 's'}`;
 }
-function liveNote(s) {   // [table, shown] for the caption, not counting ended rows (hidden or not): "12 rows" is the live ones
+function tableCaption(s, open) {   // a table with ended rows counts the live ones: "7 live", and "7 live · 3 ended" while they are shown
   const rows = (Array.isArray(s.data?.values) ? s.data.values : []), e = rows.filter(r => r?.ended).length;
-  return [{ ...s.table, total: s.table.total - e }, rows.length - e];
+  return e ? `${rows.length - e} live` + (open ? ` · ${e} ended` : '') : tableNote(s.table, rows.length);
 }
 const isTable = (s) => Array.isArray(s.table?.columns);
 const PEN = '<svg class="ic" aria-hidden="true"><use href="#i-regular-pencil-simple"/></svg>';
@@ -936,7 +936,7 @@ function tableHtml(s, year, open, id) {   // a hand-edited entry of the wrong sh
   const at = cols.some(c => c.field === 'category') ? 'category' : 'merchant';   // the cell that is the row's button
   const nEnded = rows.filter(r => r.ended).length;   // a row with `ended` is a stream that stopped (the recurring table): greyed, behind a toggle
   const body = rows.map(r => (tx(r) ? `<tr class="tx" data-tx="${esc(r.transaction_id)}">` : r.ended ? `<tr class="ended"${open ? '' : ' hidden'}>` : '<tr>') + cols.map(c => {
-    const x = tableCell(r[c.field], c.format, year), cls = [c.align === 'right' && 'r', x.out && 'out', tx(r) && c.field === 'category' && x.text === 'uncategorized' && 'none'].filter(Boolean).join(' ');
+    const x = r.ended && c.format === 'date' && (r[c.field] == null || r[c.field] === '') ? { text: '—' } : tableCell(r[c.field], c.format, year), cls = [c.align === 'right' && 'r', c.format === 'date' && 'd', x.out && 'out', tx(r) && c.field === 'category' && x.text === 'uncategorized' && 'none'].filter(Boolean).join(' ');
     const text = tx(r) && c.field === at ? `<button class="recat" data-recat="${esc(r.transaction_id)}" aria-label="Change category${at === 'category' ? '' : ' of'}: ${esc(x.text)}">${esc(x.text)}${PEN}</button>` : esc(x.text);
     return `<td${cls ? ` class="${cls}"` : ''}${c.format === 'text' ? ` title="${esc(x.text)}"` : ''}>${text}</td>`;
   }).join('') + '</tr>').join('');
@@ -978,7 +978,7 @@ async function drawChart() {
   panel.classList.toggle('board', board.length > 0);
   if (!board.length) { panel.innerHTML = EMPTY_BOARD; return; }
   panel.innerHTML = board.map(s => `<figure class="panel"><button class="x" data-remove="${esc(chartId(s))}" aria-label="Remove this ${isTable(s) ? 'table' : 'chart'}" title="Remove">${icon('x')}</button>`
-    + (isTable(s) ? `<div class="vis">${tableHtml(s, undefined, endedOpen.has(chartId(s)), chartId(s))}</div><figcaption class="asof">${tableNote(...liveNote(s))} · ${asOf(s)}</figcaption>`
+    + (isTable(s) ? `<div class="vis">${tableHtml(s, undefined, endedOpen.has(chartId(s)), chartId(s))}</div><figcaption class="asof"><span data-note>${tableCaption(s, endedOpen.has(chartId(s)))}</span> · ${asOf(s)}</figcaption>`
       : (isBudgetTrend(s) ? budgetPicker(s, budgetChoice(s)) : '') + `<div class="vis"></div><figcaption class="asof">${asOf(s)}</figcaption>`) + '</figure>').join('');
   const cells = panel.querySelectorAll('.vis');
   // usermeta.embedOptions would win over chartOpts() (actions, sourceHeader, patch: script on this origin): the CLI drops it, and so does the page
@@ -1015,7 +1015,7 @@ $('chart-panel').addEventListener('click', (e) => {
   if (tg) {
     const on = tg.getAttribute('aria-expanded') !== 'true', id = tg.dataset.endedToggle;
     on ? endedOpen.add(id) : endedOpen.delete(id);
-    tg.setAttribute('aria-expanded', String(on)); tg.closest('figure').querySelectorAll('tr.ended').forEach(r => { r.hidden = !on; });
+    tg.setAttribute('aria-expanded', String(on)); tg.closest('figure').querySelector('[data-note]').textContent = tableCaption(board.find(x => chartId(x) === id), on); tg.closest('figure').querySelectorAll('tr.ended').forEach(r => { r.hidden = !on; });
     return;
   }
   const x = e.target.closest('[data-remove]');

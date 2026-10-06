@@ -384,7 +384,7 @@ def table_preset(name: str, arg: str | None = None, months: int = 12) -> dict:
         cols = [{"field": "merchant", "label": "Merchant"}, {"field": "frequency", "label": "Every"}, {"field": "last_date", "label": "Last", "format": "date"},
                 {"field": "next_date", "label": "Next", "format": "date"}, {"field": "amount", "label": "Amount", "format": "money"}]
         sql = ("SELECT COALESCE(NULLIF(trim(r.merchant_name), ''), r.description) merchant, replace(lower(r.frequency), '_', ' ') frequency, r.last_date, "
-               "r.predicted_next_date next_date, r.last_amount amount, "
+               f"CASE WHEN {budgets.STREAM_ENDED} THEN NULL ELSE r.predicted_next_date END next_date, r.last_amount amount, "
                f"{budgets.STREAM_ENDED} ended FROM recurring r JOIN accounts a ON a.account_id = r.account_id AND a.mirror_of IS NULL "
                "WHERE r.direction = 'outflow' AND COALESCE(r.status, '') <> 'EARLY_DETECTION' ORDER BY ended, r.last_amount DESC")   # ended rows ride along: the page hides them behind a toggle
     else:

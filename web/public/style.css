@@ -339,6 +339,7 @@ details.mergebox p.muted { margin: 0 0 8px; font-size: 13px; }
 /* a table panel (finnamon chart --table-json): scrolls inside itself, sideways too on a phone; the header stays put */
 #chart-panel .tbl-title { margin: 2px 36px 10px 0; font-size: 13px; font-weight: 600; color: var(--muted); }
 #chart-panel .tbl-wrap { max-height: 420px; overflow: auto; overscroll-behavior: contain; }
+#chart-panel .tbl-wrap:has(tr.ended:not([hidden])) { max-height: none; }   /* ended rows opened: the whole list, not a scroller inside the panel */
 #chart-panel .tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 #chart-panel .tbl th { position: sticky; top: 0; background: var(--card); text-align: left; font-weight: 500; font-size: 12px; color: var(--muted); padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 #chart-panel .tbl td { padding: 7px 10px; border-bottom: 1px solid var(--line); color: var(--ink); white-space: nowrap; max-width: 28ch; overflow: hidden; text-overflow: ellipsis; }
@@ -447,6 +448,8 @@ body.editing #intercom-btn { display: none; }   /* Manage budgets, Property: Sav
 @media (max-width: 700px) {   /* a phone: the first column (a merchant) wraps, the rest stay whole, so no column is cut */
   #chart-panel .tbl { font-size: 12px; }
   #chart-panel .tbl th, #chart-panel .tbl td { max-width: none; padding: 6px 5px; }
+  #chart-panel .tbl :is(th, td).r:last-child { padding-left: 4px; }
+  #chart-panel .tbl tr.ended td.d { white-space: normal; }   /* an ended row's "May 24, 2025" wraps rather than pushing Next under the sticky Amount */
   #chart-panel .tbl :is(th, td):first-child { white-space: normal; overflow-wrap: anywhere; min-width: 9ch; }
 }
 @media (max-width: 700px) {
