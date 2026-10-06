@@ -15,13 +15,13 @@ you choose it at step 3).
 |---|---|---|
 | macOS (or Linux with systemd) | the daemon, heartbeat and dashboard run as LaunchAgents / user units | |
 | Python 3.11+ and [uv](https://docs.astral.sh/uv/) | installs the `finnamon` command | `brew install uv` (or `pip install uv`) |
-| [Claude Code](https://claude.com/claude-code), logged in with a Pro or Max plan (or a Console account) | triage, every chat reply, and the dashboard's intercom are `claude` sessions (or `codex` ones, if you pick OpenAI's Codex CLI at step 3 instead) | install it, run `claude` once and sign in |
+| [Claude Code](https://claude.com/claude-code), logged in with a Pro or Max plan (or a Console account), **or** OpenAI's [Codex CLI](https://github.com/openai/codex) 0.157+, logged in with ChatGPT Plus or higher (or an OpenAI API key) | triage, every chat reply, and the dashboard's intercom are `claude` sessions, or `codex` ones if you pick Codex at step 3 | Claude Code: install it, run `claude` once and sign in. Codex: [below](#codex-instead-of-claude-code) |
 | Node 20.12+ | the web dashboard | `brew install node` |
 | A Telegram account and a bot of your own | alerts and chat | in Telegram, message [@BotFather](https://t.me/BotFather): `/newbot`, keep the token; then `/setprivacy` → Disable |
 | A Plaid account with Production access | reading your banks | [section 2](#2-plaid-the-slow-part) below: start this first, it can take a while |
 | Optional: [Tailscale](https://tailscale.com) | the dashboard on your phone, and bank OAuth returns to the page | |
 
-`finnamon doctor` checks most of that table (Claude Code, Node, the Plaid keys, the bot) and the rest of the setup below, and says what to run for each
+`finnamon doctor` checks most of that table (Claude Code or Codex, Node, the Plaid keys, the bot) and the rest of the setup below, and says what to run for each
 one that fails. Run it whenever something seems off.
 
 ## 1. Install
@@ -109,6 +109,40 @@ A new household's Telegram chat shares the dashboard's conversation (`session` m
 and types each message into the dashboard's session; no plugin). Without the dashboard, or with `finnamon channel off`,
 the daemon answers with its own separate session (the legacy `daemon` mode). The Claude Code Telegram channel plugin
 (`finnamon channel on`, [CHANNEL-MODE.md](CHANNEL-MODE.md)) is an option you choose later, not part of setup.
+
+### Codex instead of Claude Code
+
+1. **Install Codex** (0.157 or newer) and log in once as yourself:
+   ```
+   npm i -g @openai/codex
+   codex login                  # ChatGPT Plus or higher in the browser
+   codex login --device-auth    # the same on a headless box (SSH, a Mac mini with no screen): a code to enter on another device
+   printenv OPENAI_API_KEY | codex login --with-api-key   # or an OpenAI API key instead of a ChatGPT plan
+   ```
+2. **`finnamon init`** sees `codex` at step 3 and asks which runs the assistant; answer Codex. It writes the same
+   bundle as `AGENTS.md` and `.agents/skills/` in `~/.finnamon/assistant/`, and Finnamon's own Codex home,
+   `~/.finnamon/codex/`: a `config.toml` with a permission profile that keeps the shell away from your keys and the
+   database, the secret guard and the phone's permission prompt as hooks (their trust pinned), no web search, no
+   ChatGPT apps, and the `finnamon` MCP tool, which is how the assistant runs `finnamon` commands (the same allow list as
+   Claude's). Your own `~/.codex` config, MCP servers and skills never reach the household's assistant.
+3. **The login is shared, not repeated.** `~/.finnamon/codex/auth.json` is a link to your `~/.codex/auth.json`, so a
+   token refresh by either keeps both logged in. Only if you have no `~/.codex/auth.json` (no login yet, or a keychain
+   login) does init run a separate `codex login` for Finnamon. **Never run `codex logout` with `CODEX_HOME` set to
+   `~/.finnamon/codex`**: it revokes the shared tokens and logs you out everywhere.
+4. **`finnamon doctor`** then checks the Codex lines: the version (0.157 or newer; newer than the tested one is a `·`
+   note), the login and its link, hooks on, the generated config intact (profile, trust, pinned hooks, nothing that
+   unseals it), no skills of yours leaking into the session, and the MCP package. A broken link to your login is re-made.
+
+Switch either way later with `finnamon settings set assistant codex|claude` (at a terminal; the assistant cannot do it).
+
+### Codex: what v1 does not do
+
+- **No web lookups.** Codex sessions run with web search off; Claude asks you before each fetch at the dashboard.
+- **Telegram through Finnamon's daemon only**: session mode, where it types each message into the dashboard's Codex
+  session (init sets it for Codex), or `finnamon channel off`'s separate `codex exec resume` thread. No channel mode: the
+  Telegram channel plugin is Claude Code's ([CHANNEL-MODE.md](CHANNEL-MODE.md)).
+- **No "Fetch by AI" import** (`finnamon import --browser`): it still runs `claude`. CSV import works the same.
+- **Codex 0.157 or newer.** Older versions are refused; Claude Code stays the assistant.
 
 ## 4. Open the dashboard and link a bank
 

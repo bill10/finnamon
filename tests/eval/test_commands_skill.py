@@ -1,16 +1,9 @@
 """Evals for the household's everyday commands in a real claude: normal / dismiss / undo, category and alias, a roundup
 reply, /triage and a drafted detector. Assertions are on the database and the filesystem, never on the model's prose.
-Skipped without `claude` on PATH. Spends tokens. Run: pytest tests/eval -m eval -s"""
-import json
-import shutil
-
-import pytest
-
+Each runs on claude and on codex (fixture_home, tests/eval/test_budget_skill.py). Spends tokens. Run: pytest tests/eval -m eval -s"""
 from finnamon import store
 from tests.conftest import AS_OF
-from tests.eval.test_budget_skill import fixture_home, run_claude  # noqa: F401 - fixture_home is a fixture
-
-pytestmark = [pytest.mark.eval, pytest.mark.skipif(not shutil.which("claude") or not shutil.which("finnamon"), reason="needs claude and finnamon on PATH")]
+from tests.eval.test_budget_skill import fixture_home, pytestmark, run_claude, skill  # noqa: F401 - the fixture and marks are shared
 
 
 def alert(conn, key, kind="anomaly:first_merchant", payload='{"merchant": "Costco"}', tx=None, verdict=None):
@@ -66,14 +59,15 @@ def test_roundup_reply_normal_n(fixture_home):
 
 
 def test_triage_writes_verdicts_with_a_heredoc(fixture_home):
-    """The skill has the sentence go on stdin through a quoted heredoc; this proves the allow list and the shell guard let that through."""
+    """The skill has the sentence go on stdin through a quoted heredoc; this proves the allow list and the shell guard let that
+    through. On Codex the same `-` takes the finnamon tool's `stdin` (run_codex shows it as `<<STDIN`), under the tool's triage list."""
     env = {"FINNAMON_HOME": str(fixture_home), "FINNAMON_TRIAGE": "1"}
     conn = store.connect()
     store.set_state(conn, "x", "1")
     conn.execute("INSERT INTO transactions (transaction_id, account_id, date, amount, name, merchant_name, pfc_primary, pfc_detailed, pfc_confidence, pending, raw_json) "
                  "VALUES ('big1','cc','2026-08-27',4200,'WIRE XFER UNKNOWN',NULL,'TRANSFER_OUT','TRANSFER_OUT_ACCOUNT_TRANSFER','HIGH',0,'{}')")
     alert(conn, "anom:big1", kind="anomaly:no_source", payload='{"name": "WIRE XFER UNKNOWN", "amount": 4200}', tx="big1")
-    out = run_claude("/triage", env)
+    out = run_claude(skill("triage"), env)
     row = conn.execute("SELECT verdict, reason FROM alerts WHERE transaction_id='big1'").fetchone()
     assert row["verdict"] in ("promote", "suppress"), f"no verdict written; result: {out.get('result', '')[:400]}"
     assert any("triage set" in c and "<<" in c for c in out["commands"]), out["commands"]

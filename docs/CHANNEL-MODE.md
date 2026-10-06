@@ -39,6 +39,9 @@ dashboard restart mid-turn loses that turn (the chat is told to resend).
 
 # Experiment: let Claude Code run the Telegram side
 
+**Claude Code only.** The channel plugin is Claude Code's; with Codex as the assistant `finnamon channel on` is refused,
+and the chat goes through `session` (or `off`) above.
+
 Claude Code has its own Telegram channel plugin (research preview). With it, the bot's messages land in a
 Claude Code session you keep open, and Claude replies through the bot; Finnamon's daemon then only syncs,
 detects, and sends alerts. One Telegram bot allows one reader, so you switch, not stack:

@@ -4,7 +4,7 @@
 
 ## Your money. Your financial AI.
 
-**Turn Claude into your personal finance assistant.**
+**Turn Claude or Codex into your personal finance assistant.**
 
 Like Mint, but it warns you when something's off, sorts your transactions with AI, and draws any chart you ask for.
 On your own computer (Mac, Linux or Windows via WSL2), with no ads and no data selling, so nobody can shut it down.
@@ -14,7 +14,7 @@ On your own computer (Mac, Linux or Windows via WSL2), with no ads and no data s
 
 1. **It watches for you.** It messages you only when something needs you: a duplicate charge, a new subscription,
    a budget about to go over.
-2. **A dashboard that's yours.** Ask "dining by month" or "everything over $500" and Claude draws it, whenever you want.
+2. **A dashboard that's yours.** Ask "dining by month" or "everything over $500" and your assistant draws it, whenever you want.
 3. **Yours to keep.** Your data lives on your machine, with your own keys.
 
 ## Why I built this
@@ -61,7 +61,10 @@ over the demo data). Nothing touches Plaid, Telegram or a real household.
 
 - A **technical household**: you're comfortable in a terminal and with a config step or two.
 - **A computer that stays on: Mac, Linux, or Windows via WSL2** (a Mac mini, or a laptop that mostly sleeps at home). Linux needs systemd; on Windows, Finnamon runs in Ubuntu under WSL2 ([how](docs/INSTALL.md#windows-wsl2)).
-- **A Claude subscription** (Pro or Max) with Claude Code. Triage, chat and the dashboard's intercom all run `claude`, or OpenAI's `codex` once `finnamon settings set assistant codex` picks it (a Fetch by AI import still runs `claude`).
+- **A Claude subscription (Pro/Max) or a ChatGPT Plus plan (or higher), or an OpenAI API key.** The assistant is Claude Code
+  (`claude`) or OpenAI's Codex CLI (`codex`, 0.157 or newer): triage, chat and the dashboard's intercom all run the one you
+  pick (`finnamon init` asks; `finnamon settings set assistant codex|claude` switches). A few features are Claude-only for
+  now: [what Codex doesn't do yet](docs/INSTALL.md#codex-what-v1-does-not-do).
 - **Banks in the US or Canada**, for Plaid's free Trial plan. Banks Plaid can't reach can be imported from CSV.
 
 ## What it costs
@@ -69,7 +72,7 @@ over the demo data). Nothing touches Plaid, Telegram or a real household.
 | | Cost |
 |---|---|
 | Finnamon | Free |
-| Claude | Your existing Pro or Max subscription (or Console credit). **Required.** With Codex as the assistant, your Codex login (shared with your own `codex`) carries triage, chat and the intercom instead. |
+| Claude or Codex | Free + your Claude or ChatGPT subscription: Claude Pro or Max (or Console credit), or ChatGPT Plus or higher (or OpenAI API credit). **One of them is required.** Codex uses your existing Codex login, shared with your own `codex`. |
 | Plaid | Free on the Trial plan: 10 bank logins with real data, for US/Canada teams created on or after 2026-04-15. Per Plaid it includes the big OAuth banks (Chase, Bank of America, Wells Fargo). Older teams get Limited Production, without those banks. |
 | Telegram, Tailscale | Free |
 
@@ -82,7 +85,9 @@ Your data lives in one SQLite file on your own computer. Some of it still travel
   and dates it reads go to Anthropic, under your Claude account's terms. **Turn off "Help improve Claude"** in
   Claude's privacy settings: with it on, Anthropic keeps that data for 5 years, with it off for 30 days.
 - **OpenAI, through Codex**, only when Codex is the assistant (`finnamon settings set assistant codex`): the same data goes
-  to OpenAI instead, under your ChatGPT or OpenAI account's terms and data controls.
+  to OpenAI instead of Anthropic, under your ChatGPT or OpenAI account's terms. On a ChatGPT plan, **turn off "Improve the
+  model for everyone"** (ChatGPT → Settings → Data controls): with it on, OpenAI may use what Codex sends to train its
+  models. With an OpenAI API key, API data is not used for training by default. Nothing goes to Anthropic then.
 - **Telegram**: alerts and your chat with the bot pass through Telegram's servers. Bot chats are not end-to-end
   encrypted.
 - **Nothing goes to a Finnamon company or server.** There isn't one. No telemetry, no account.
@@ -97,9 +102,9 @@ As of 2026-10-03; sources are listed in the [market research](docs/market-resear
 |---|---|---|---|---|---|
 | Where data lives | Your computer (SQLite) | OpenAI's cloud | Monarch's cloud | Self-hosted | Self-hosted |
 | Bank sync | Plaid (your keys) | Plaid | Built in (aggregators) | SimpleFIN (US), GoCardless (EU) | Separate importer |
-| Cost | Free + your Claude subscription | $0 in the US since 2026-10-02 | $99.99/yr | Free | Free |
-| Proactive alerts | Yes: rules plus Claude triage, only what needs a human | Credit score only | Rule-based push alerts, weekly recap | No | Rules, bill reminders |
-| AI Q&A and charts | Yes (your Claude) | Yes | Yes | No | No |
+| Cost | Free + your Claude or ChatGPT subscription | $0 in the US since 2026-10-02 | $99.99/yr | Free | Free |
+| Proactive alerts | Yes: rules plus AI triage (Claude or Codex), only what needs a human | Credit score only | Rule-based push alerts, weekly recap | No | Rules, bill reminders |
+| AI Q&A and charts | Yes (your Claude or Codex) | Yes | Yes | No | No |
 | Household | Yes: one chat, shared budgets | Single user | Yes | — | — |
 | Open source | Yes (MIT) | No | No | Yes (MIT) | Yes (AGPL) |
 
@@ -125,7 +130,7 @@ Every `init` step can be skipped and added later by running `finnamon init` agai
 
 ## How it works
 
-Claude Code is the agent; Finnamon is the infrastructure an agent needs: a data layer, an always-on daemon, a CLI,
+Claude Code (or Codex) is the agent; Finnamon is the infrastructure an agent needs: a data layer, an always-on daemon, a CLI,
 SQL detectors and delivery. Design: [docs/designs/finance-watchdog-agent.md](docs/designs/finance-watchdog-agent.md).
 
 ```
@@ -141,7 +146,8 @@ heartbeat (hourly timer): is the daemon alive?    /triage: invoked by the daemon
 
 The household's assistant runs in `~/.finnamon/assistant/`: its instructions, permission set and skills, written there
 from `finnamon/assistant_bundle/` by `init`, `install` and `update`. It writes only through allow-listed `finnamon`
-commands. Secrets live in `~/.finnamon/secrets.toml` (0600); everything else is in `~/.finnamon/finnamon.db`, backed up
+commands. On a Codex household the same runs are `codex exec --json` (and `exec resume`), triage is `$triage`, and the
+assistant reaches `finnamon` only through Finnamon's `finnamon` MCP tool, under a sealed `~/.finnamon/codex` home. Secrets live in `~/.finnamon/secrets.toml` (0600); everything else is in `~/.finnamon/finnamon.db`, backed up
 weekly to `~/.finnamon/backups/` (restoring one: [docs/INSTALL.md](docs/INSTALL.md) section 7).
 
 More:
@@ -155,7 +161,7 @@ More:
 ```
 uv sync --extra dev --extra charts
 pytest -m "not eval"         # unit tests, offline, about 45 seconds
-pytest -m eval               # runs real Claude over a fixture household; spends tokens
+pytest -m eval               # runs real Claude and real Codex over a fixture household; spends tokens
 FINNAMON_HOME=/tmp/x finnamon ...   # any command against a scratch home
 ```
 
