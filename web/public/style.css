@@ -348,6 +348,7 @@ details.mergebox p.muted { margin: 0 0 8px; font-size: 13px; }
 #chart-panel .tbl tr.ended td { color: var(--muted); } #chart-panel .tbl tr.ended td.out { color: var(--muted); }
 #chart-panel .ended-toggle { font: inherit; font-size: 12px; color: var(--muted); background: none; border: 0; padding: 8px 0 2px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; min-height: 32px; }
 #chart-panel .ended-toggle::before { content: '▸'; font-size: 10px; transition: transform .12s ease; } #chart-panel .ended-toggle[aria-expanded="true"]::before { transform: rotate(90deg); }
+@media (hover: none) { #chart-panel .ended-toggle { min-height: 44px; } }
 #chart-panel .ended-toggle:hover { color: var(--ink); } #chart-panel .ended-toggle:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; border-radius: 4px; }
 #chart-panel .tbl tr.tx { cursor: pointer; } #chart-panel .tbl tr.tx:hover td { background: var(--soft); }
 #chart-panel .tbl button.recat { font: inherit; color: inherit; background: none; border: 0; padding: 0; display: inline-flex; align-items: center; gap: 4px; max-width: 100%; text-align: left; cursor: pointer; }
