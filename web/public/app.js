@@ -952,15 +952,14 @@ const budgetChoice = (s, st = globalThis.localStorage) => {
   return v && budgetNames(s).includes(v.name) && (v.arg ?? null) === (fm.arg ?? null) ? v.name : fm.budget;
 };
 const saveBudgetChoice = (s, name, st = globalThis.localStorage) => { try { st.setItem(BUDGET_KEY, JSON.stringify({ name, arg: s.usermeta.finnamon.arg ?? null })); } catch { /* private mode: the pick lasts until a reload */ } };
-const budgetTitle = (n) => `Budget trend: ${n.charAt(0).toUpperCase()}${n.slice(1)}`;
-const budgetSpec = (s, name) => ({ ...s, title: budgetTitle(name), transform: [{ filter: { field: 'budget', equal: name } }] });
-function budgetPicker(s, name) {   // chips for a few budgets, a select beyond; an over-limit one carries a dot and says so
-  const bs = s.usermeta.finnamon.budgets;
-  if (bs.length > 6) return `<select class="bsel" data-budget-select aria-label="Budget to show">` +
-    bs.map(b => `<option value="${esc(b.name)}"${b.name === name ? ' selected' : ''}>${esc(b.name)}${b.over ? ' (over)' : ''}</option>`).join('') + '</select>';
-  return '<div class="chips bsel" role="group" aria-label="Budget to show">' + bs.map(b =>
-    `<button type="button" data-budget="${esc(b.name)}" aria-pressed="${b.name === name}"${b.name === name ? ' class="active"' : ''}>` +
-    `${esc(b.name)}${b.over ? '<span class="over" aria-hidden="true"></span><span class="sr-only">, over its limit</span>' : ''}</button>`).join('') + '</div>';
+const budgetLabel = (n) => `${n.charAt(0).toUpperCase()}${n.slice(1)}`;
+// the title is the picker ("Budget trend: [After-School ▾]"), so the chart's own title is dropped
+const budgetSpec = (s, name) => { const { title, ...rest } = s; return { ...rest, transform: [{ filter: { field: 'budget', equal: name } }] }; };
+function budgetPicker(s, name) {   // one styled select inline in the title, for any number of budgets; an over-limit one says so and carries a dot
+  const bs = s.usermeta.finnamon.budgets, over = bs.find(b => b.name === name)?.over;
+  return '<div class="btitle"><span>Budget trend:</span><span class="bpick"><select data-budget-select aria-label="Budget to show">' +
+    bs.map(b => `<option value="${esc(b.name)}"${b.name === name ? ' selected' : ''}>${esc(budgetLabel(b.name))}${b.over ? ' (over)' : ''}</option>`).join('') +
+    `</select>${over ? '<span class="over" aria-hidden="true"></span>' : ''}</span></div>`;
 }
 // ---- end budget trend
 
@@ -1007,8 +1006,6 @@ $('chart-panel').addEventListener('change', (e) => { if (e.target.matches('[data
 $('chart-panel').addEventListener('click', (e) => {
   const x = e.target.closest('[data-remove]');
   if (x) return chartRequest('DELETE', `/api/chart/${encodeURIComponent(x.dataset.remove)}`);
-  const pick = e.target.closest('[data-budget]');
-  if (pick) { saveBudgetChoice(board.find(isBudgetTrend), pick.dataset.budget); return drawChart(); }
   const t = e.target.closest('tr.tx');
   if (t) recategorize(t.dataset.tx);
 });

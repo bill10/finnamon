@@ -327,12 +327,14 @@ details.mergebox p.muted { margin: 0 0 8px; font-size: 13px; }
 #chart-panel.board { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }   /* one chart per row, full width; minmax(0, …) so a wide chart cannot widen the track */
 #chart-panel .panel { position: relative; margin: 0; min-width: 0; padding: 12px 12px 8px; border: 1px solid var(--line); border-radius: 8px; }
 #chart-panel .vis { width: 100%; }
-#chart-panel .bsel { margin: 0 40px 10px 0; }   /* the budget trend's picker: clear of the × */
-#chart-panel .chips.bsel { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }   /* one row; a phone scrolls it sideways */
-#chart-panel .chips.bsel button { flex: none; }
-#chart-panel .chips.bsel button { font-size: 13px; padding: 3px 11px; text-transform: capitalize; }
-#chart-panel .chips.bsel .over { width: 7px; height: 7px; border-radius: 50%; background: var(--cinnamon); }
-#chart-panel select.bsel { font: inherit; font-size: 14px; text-transform: capitalize; }
+/* the budget trend's title is its picker: "Budget trend: [After-School ▾]", set like the vega title (13px / 600 / muted), clear of the × */
+#chart-panel .btitle { display: flex; align-items: center; flex-wrap: wrap; gap: 0 6px; margin: 2px 40px 10px 0; font-size: 13px; font-weight: 600; color: var(--muted); }
+#chart-panel .bpick { position: relative; display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
+#chart-panel .bpick::after { content: ""; position: absolute; right: 8px; top: 50%; width: 5px; height: 5px; border: solid var(--muted); border-width: 0 1.5px 1.5px 0; transform: translateY(-70%) rotate(45deg); pointer-events: none; }
+#chart-panel .bpick select { appearance: none; -webkit-appearance: none; font: inherit; color: var(--ink); background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 4px 24px 4px 6px; margin-left: -6px; min-height: 28px; max-width: 100%; text-overflow: ellipsis; cursor: pointer; }
+#chart-panel .bpick select:hover { border-color: var(--line); background: var(--soft); }
+#chart-panel .bpick select:focus-visible { outline: 2px solid var(--cinnamon); outline-offset: 1px; }
+#chart-panel .bpick .over { order: -1; width: 7px; height: 7px; border-radius: 50%; background: var(--cinnamon); margin-right: -2px; }
 #chart-panel .asof { margin-top: 4px; font-size: 12px; color: var(--muted); text-align: right; }
 /* a table panel (finnamon chart --table-json): scrolls inside itself, sideways too on a phone; the header stays put */
 #chart-panel .tbl-title { margin: 2px 36px 10px 0; font-size: 13px; font-weight: 600; color: var(--muted); }
@@ -450,6 +452,7 @@ body.editing #intercom-btn { display: none; }   /* Manage budgets, Property: Sav
   .pill { padding: 0; width: 34px; height: 34px; justify-content: center; gap: 0; }   /* icon only; the label stays for assistive tech */
   .pill .pill-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   .pill svg.ic { width: 18px; height: 18px; }
+  #chart-panel .bpick select { min-height: 44px; }
   .chips button, button.primary, .menu > summary, button.quiet, button.link { min-height: 44px; padding: 10px 14px; }
   .status .txt button.link { min-height: 32px; padding: 4px; }
   .head-in { padding-right: 4px; } .status .txt { padding-right: 12px; }   /* the theme toggle's hit area runs to the edge; its glyph keeps the 16 px gutter */
