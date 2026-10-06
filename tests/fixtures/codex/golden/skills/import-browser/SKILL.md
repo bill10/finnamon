@@ -70,8 +70,10 @@ uploads the file to its dashboard, with the box's key from `FINNAMON_WEB_TOKEN` 
    EAC means and that there are three suspects, likeliest first: the debugging port the window was opened with (a fresh
    Chrome on a new profile and a new build, with no port, has logged in fine), Finnamon's own Chrome profile reading as a
    new device, or a Chrome build the bank has not seen yet (for a few days after every Chrome update). Without `--attach`, run `finnamon import --chrome-check <bank>` and, when its `message` is not null, say that
-   message as it is: it names the two builds and the ways out. Either way give them the ways out: log in to the bank in
-   their everyday browser, download the CSV by hand, and run `finnamon import "<account>" ~/Downloads/<file>.csv` (with
+   message as it is: it names the two builds and the ways out. Either way give them the ways out, this one first:
+   **Fetch without AI** in the dashboard's Import CSV window (or `finnamon import --browser <bank> --no-cdp` in a
+   terminal) opens Finnamon's window with no debugging port, lets them export the CSV themselves and imports it as it
+   lands. Or: log in to the bank in their everyday browser, download the CSV by hand, and run `finnamon import "<account>" ~/Downloads/<file>.csv` (with
    `--to <url>` if this computer is not the Finnamon box); `finnamon import --browser <bank> --attach` with their everyday
    Chrome (when this run was not already one); retry in a few days; and, to find out which suspect it is, run
    `finnamon import --browser <bank> --diagnose` in a terminal (two logins by hand, without and with the port).
