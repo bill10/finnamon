@@ -1,24 +1,41 @@
 """Property-based eval of the Step 3 budget conversation, the permission boundary, and the assistant/development line.
-Skipped without `claude` on PATH. Spends tokens. Run: pytest tests/eval -m eval -s"""
+Every eval that takes `fixture_home` runs twice, once per assistant CLI: on `claude` (claude -p in the installed bundle)
+and on `codex` (a Codex household: the generated bundle and a sealed CODEX_HOME under the scratch FINNAMON_HOME, sharing
+the developer's ~/.codex/auth.json through codex.install()'s symlink, run with agent_runner's `codex exec` lock). A CLI
+that is not installed (or, for codex, not logged in) skips its half. Spends tokens. Run: pytest tests/eval -m eval -s"""
 import json
 import os
+import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
-from finnamon import assistant, claude_runner, store
+from finnamon import agent_runner, assistant, claude_runner, codex, store
 from tests.conftest import seed, txn
 
 REPO = Path(__file__).resolve().parents[2]
-pytestmark = [pytest.mark.eval, pytest.mark.skipif(not shutil.which("claude") or not shutil.which("finnamon"), reason="needs claude and finnamon on PATH")]
+REAL_CODEX_AUTH = Path.home() / ".codex" / "auth.json"   # read here, before conftest points codex.user_auth at a scratch path
+pytestmark = [pytest.mark.eval, pytest.mark.skipif(not shutil.which("finnamon"), reason="needs finnamon on PATH")]
+CLIS = [pytest.param("claude", marks=pytest.mark.skipif(not shutil.which("claude"), reason="needs claude on PATH")),
+        pytest.param("codex", marks=pytest.mark.skipif(not shutil.which("codex") or not REAL_CODEX_AUTH.is_file(),
+                                                       reason="needs codex on PATH and a file login in ~/.codex/auth.json"))]
 
 
-@pytest.fixture
-def fixture_home(tmp_path, monkeypatch):
+def on_codex() -> bool:
+    return agent_runner.kind() == "codex"
+
+
+def skill(name: str) -> str:
+    """How the person invokes a bundle skill: /triage on Claude, $triage on Codex."""
+    return f"{'$' if on_codex() else '/'}{name}"
+
+
+@pytest.fixture(params=CLIS)
+def fixture_home(request, tmp_path, monkeypatch):
     monkeypatch.setenv("FINNAMON_HOME", str(tmp_path))
-    monkeypatch.delenv("CLAUDE_CONFIG_DIR")   # the real claude, with the developer's real login and ~/.claude.json
     conn = store.connect()
     seed(conn)
     i = 0
@@ -32,10 +49,68 @@ def fixture_home(tmp_path, monkeypatch):
         txn(conn, f"pay{m}", "chk", f"2026-{m:02d}-02", -6800, "PAYROLL", "Acme", "mch_acme", "INCOME", "INCOME_WAGES")
         txn(conn, f"xf{m}", "chk", f"2026-{m:02d}-03", 1000, "TRANSFER", None, None, "TRANSFER_OUT", "TRANSFER_OUT_SAVINGS")
     conn.execute("INSERT INTO balances VALUES ('chk','2026-08-28 06:00:00', 640, 640)")
+    if request.param == "claude":
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR")   # the real claude, with the developer's real login and ~/.claude.json
+    else:
+        _codex_household(conn, tmp_path, monkeypatch)
     return tmp_path
 
 
+def _codex_household(conn, tmp_path, monkeypatch) -> None:
+    """A Codex household under the scratch home, set up the way `finnamon init` sets one up. Never ~/.codex or
+    ~/.finnamon/codex: CODEX_HOME is tmp_path/codex, and its auth.json is a symlink to the developer's login (nothing here
+    writes it; a token refresh would write through the link, as on a household). The `finnamon` the MCP server and the
+    hooks run is a shim onto this tree: Codex hands an MCP server only its own short env, so PYTHONPATH would not reach it."""
+    monkeypatch.setattr(codex, "user_auth", lambda: REAL_CODEX_AUTH)
+    monkeypatch.setenv("FINNAMON_CODEX_BIN", shutil.which("codex"))
+    shim = tmp_path / "bin"
+    shim.mkdir()
+    (shim / "finnamon").write_text(f"#!/bin/sh\nPYTHONPATH={shlex.quote(str(REPO))} exec {shlex.quote(sys.executable)} -c "
+                                   "'import sys; sys.argv[0] = \"finnamon\"; from finnamon.cli import main; sys.exit(main())' \"$@\"\n")
+    (shim / "finnamon").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{shim}{os.pathsep}{os.environ['PATH']}")
+    store.set_setting(conn, "assistant", "codex")
+    assistant.install()
+    res = codex.install()
+    assert res["auth"] == "linked" and os.readlink(codex.home() / "auth.json") == str(REAL_CODEX_AUTH), res
+    assert agent_runner.harness_problems() == [], agent_runner.harness_problems()
+
+
+def run_codex(prompt: str, env: dict) -> dict:
+    """One `codex exec --json` turn, built by agent_runner (the sealed CODEX_HOME and HOME, the command-line lock, the
+    assistant directory as cwd), returned in run_claude's shape. `commands` are the finnamon tool's argv as a command line,
+    with ` <<STDIN` and the text when the call passed `stdin`: on Codex that is what a skill's heredoc becomes."""
+    cmd = agent_runner._codex_cmd(codex.binary(), prompt, None, ())
+    p = subprocess.run(cmd, cwd=agent_runner.cwd(), capture_output=True, text=True, timeout=600,
+                       env={**codex.env(), "CLAUDECODE": "", "FINNAMON_FROM_AGENT": "1", **env})
+    res = agent_runner._codex_result(p.stdout)
+    assert res.ok, f"{res.error}; stderr: {p.stderr[-800:]}"
+    items = [ev["item"] for line in p.stdout.splitlines() if line.startswith("{")
+             for ev in [json.loads(line)] if ev.get("type") == "item.completed"]
+    commands = []
+    for it in items:
+        if it["type"] == "mcp_tool_call" and it.get("tool") == "finnamon":
+            args = it.get("arguments") or {}
+            commands.append(shlex.join(args.get("argv") or []) + (f" <<STDIN\n{args['stdin']}" if args.get("stdin") else ""))
+        elif it["type"] == "command_execution":
+            commands.append(it.get("command", ""))
+    _report_usage(res.session_id)
+    return {"result": res.text, "tool_calls": {it["type"] for it in items} - {"agent_message", "reasoning"}, "commands": commands, "usage": res.usage}
+
+
+def _report_usage(thread_id: str | None) -> None:
+    """The plan's rate-limit window after the turn (the rollout's last token_count), for the eval lane's report under -s."""
+    for f in (codex.home() / "sessions").rglob(f"*{thread_id}.jsonl") if thread_id else ():
+        limits = [ev["payload"]["rate_limits"] for line in f.read_text().splitlines() for ev in [json.loads(line)]
+                  if ev.get("type") == "event_msg" and ev["payload"].get("type") == "token_count" and ev["payload"].get("rate_limits")]
+        if limits:
+            print(f"\n[codex rate limits] {json.dumps(limits[-1])}")
+
+
 def run_claude(prompt: str, env: dict, extra: list[str] = ()) -> dict:
+    """One headless turn of the household's assistant, whichever CLI the fixture household is on. `extra` is claude argv."""
+    if on_codex():
+        return run_codex(prompt, env)
     # cwd: the assistant bundle from this tree, installed the way `finnamon install` installs it (assistant.install) into
     # the fixture home, so the run reads exactly what a household's session reads: the bundle's CLAUDE.md, settings and
     # skills, and not the checkout's developer CLAUDE.md, which Claude Code would pick up from a parent directory.
@@ -90,6 +165,8 @@ def test_a_person_at_the_keyboard_can_reach_the_web(fixture_home):
     """The positive control for the test below: approved (what a person's Allow does in ask mode; -p has nobody to ask,
     so --allowedTools stands in), WebFetch works, so a refusal there is the flag's doing and not the environment's (no
     network, a -p quirk, the model declining)."""
+    if on_codex():
+        pytest.skip("no web lookups on Codex in v1: web_search is disabled in config.toml and on every exec's command line")
     text = run_claude(WEB_PROBE, {"FINNAMON_HOME": str(fixture_home)}, extra=["--allowedTools", "WebFetch"]).get("result", "").lower()
     assert "example domain" in text, f"the page did not come through: {text[:500]}"
 
@@ -98,11 +175,12 @@ def test_unattended_runs_cannot_reach_the_web(fixture_home):
     """claude_runner.run() puts WebFetch on --disallowedTools for every unattended run. This proves the flag wins over an
     allow (the same --allowedTools the control above passes) in a real claude, which no argv test can.
     Asserts on the tool-use events themselves, not the model's reply: the guard is that WebFetch/WebSearch never gets
-    called, not that the model's prose sounds refused (it may instead guess the page from memory)."""
+    called, not that the model's prose sounds refused (it may instead guess the page from memory). On Codex the lock is
+    agent_runner.CODEX_LOCK's web_search="disabled": no web_search item may appear."""
     env = {"FINNAMON_HOME": str(fixture_home)}
     out = run_claude(WEB_PROBE, env, extra=["--allowedTools", "WebFetch", "--disallowedTools", *claude_runner.UNATTENDED_DISALLOWED])
     text = out.get("result", "")
-    assert not (out["tool_calls"] & {"WebFetch", "WebSearch"}), f"a disallowed tool was called: {out['tool_calls']}; result was: {text[:500]}"
+    assert not (out["tool_calls"] & {"WebFetch", "WebSearch", "web_search"}), f"a disallowed tool was called: {out['tool_calls']}; result was: {text[:500]}"
 
 
 def test_a_chart_no_preset_covers_is_a_spec_not_a_code_change(fixture_home):

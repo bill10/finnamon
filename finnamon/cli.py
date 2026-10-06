@@ -146,7 +146,7 @@ def cmd_init(a) -> None:
         store.set_state(conn, "inbound", "session")
         store.set_state(conn, "session_tip_shown", 1)   # nothing to advertise to a household already on it
         print("  Telegram: session mode (the default), the chat shares the dashboard's conversation. `finnamon channel off` for the legacy separate session.")
-    if which == "codex" and me is not None and store.get_state(conn, "inbound") != "session":   # channel mode is Claude Code's plugin; the daemon's own session is claude -p
+    if which == "codex" and me is not None and store.get_state(conn, "inbound") != "session":   # channel mode is Claude Code's plugin; session mode keeps one conversation with the dashboard
         store.set_state(conn, "inbound", "session")
         print("  Telegram: session mode, the chat shares the dashboard's Codex conversation (channel mode is Claude Code only).")
 
@@ -1303,7 +1303,7 @@ def cmd_status(a) -> None:
                                                      "(SELECT group_concat(COALESCE(a.name, '') || COALESCE(' …' || a.mask, ''), ', ') FROM accounts a WHERE a.item_id=items.item_id) AS accounts FROM items")],
          "pending_alerts": conn.execute(f"SELECT count(*) FROM alerts WHERE {notify.SENDABLE}").fetchone()[0],
          "untriaged": len(triage.untriaged(conn)), "agent": store.assistant_kind(conn), "assistant": str(assistant.dir()), "assistant_problems": claude_runner.harness_problems(),
-         "scheduler": scheduler.status(), "claude": shutil.which("claude"), "codex": codex.binary(), "finnamon": shutil.which("finnamon")}
+         "scheduler": scheduler.status(), "claude": shutil.which("claude"), "codex": codex.binary(), "codex_min_version": ".".join(map(str, codex.MIN_VERSION)), "finnamon": shutil.which("finnamon")}
         | _stray_plugin_report())
 
 

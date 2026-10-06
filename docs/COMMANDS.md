@@ -4,7 +4,7 @@ Setup is [INSTALL.md](INSTALL.md); the dashboard is [DASHBOARD.md](DASHBOARD.md)
 
 In the Telegram chat, just talk. The daemon hands each message to Claude Code (or Codex, when `finnamon settings set
 assistant codex` chose it: the same skills, as `$finnamon` and `$triage`, and the CLI through its `finnamon` tool) with the `finnamon`
-skill; Claude reads with `finnamon query`/`alerts`/`budget` and writes only through the commands
+skill; the assistant reads with `finnamon query`/`alerts`/`budget` and writes only through the commands
 allow-listed in the assistant's `.claude/settings.json` (`normal`, `budget`, `threshold`, `settings`, `category`, `alias`,
 `triage set`, `detect --draft`, `account add`, `account type`, `import`, `link --start` / `--finish`).
 "It is normal" on an alert mutes that pattern (`finnamon normal --alert <id>`); on a subscription that stopped or
