@@ -162,8 +162,11 @@ export function typeInto(write, text, { gap = 10, enter = 150 } = {}) {
   next();
 }
 
-// Whatever the transcript gained since t.offset, parsed into t.entries; t.buf holds a line still being written.
+// Whatever the transcript gained since t.offset, parsed into t.entries; t.buf holds a line still being written. A turn
+// typed before its session had a file (Codex writes its rollout at the first line) names it once it appears (t.find).
 export function readNew(t) {
+  if (!t.path) t.path = t.find?.() || '';
+  if (!t.path) return;
   let fd;
   try { fd = openSync(t.path, 'r'); } catch { return; }
   try {
@@ -185,26 +188,32 @@ export function readNew(t) {
 // only grows). since: when the session now running started; a call from before it is one a crash or restart left behind.
 // Not an age: a dashboard turn's dialog has no hook timing it out and may wait for hours.
 export function openToolCall(path, since = 0, tailBytes = 512 * 1024) {
+  const open = new Map();
+  for (const e of tailEntries(path, tailBytes)) {
+    const c = e?.message?.content;   // a new prompt starts a new turn: a call a stream error left without a result is not waiting
+    if (e?.type === 'user' && !e.isMeta && (typeof c === 'string' ? c.trim() && !c.startsWith('<') : Array.isArray(c) && c.some(b => b?.type === 'text' && !String(b.text).startsWith('<')))) open.clear();
+    for (const blk of Array.isArray(e?.message?.content) ? e.message.content : []) {
+      if (blk?.type === 'tool_use' && e.type === 'assistant') open.set(blk.id, Date.parse(e.timestamp) || Infinity);
+      if (blk?.type === 'tool_result') open.delete(blk.tool_use_id);
+    }
+    if (e?.message?.stop_reason === 'end_turn') open.clear();   // a turn that ended has nothing left waiting
+  }
+  return [...open.values()].some(at => at >= since);
+}
+
+// The last tailBytes of a JSONL transcript, parsed (a line cut by the start is dropped); [] for a file that is not there.
+export function tailEntries(path, tailBytes = 512 * 1024) {
   let fd;
-  try { fd = openSync(path, 'r'); } catch { return false; }
+  try { fd = openSync(path, 'r'); } catch { return []; }
   try {
     const size = statSync(path).size, start = Math.max(0, size - tailBytes);
     const b = Buffer.alloc(size - start);
     readSync(fd, b, 0, b.length, start);
     const lines = b.toString('utf8').split('\n');
     if (start) lines.shift();   // cut mid-line
-    const open = new Map();
-    for (const l of lines) {
-      let e; try { e = JSON.parse(l); } catch { continue; }
-      const c = e?.message?.content;   // a new prompt starts a new turn: a call a stream error left without a result is not waiting
-      if (e?.type === 'user' && !e.isMeta && (typeof c === 'string' ? c.trim() && !c.startsWith('<') : Array.isArray(c) && c.some(b => b?.type === 'text' && !String(b.text).startsWith('<')))) open.clear();
-      for (const blk of Array.isArray(e?.message?.content) ? e.message.content : []) {
-        if (blk?.type === 'tool_use' && e.type === 'assistant') open.set(blk.id, Date.parse(e.timestamp) || Infinity);
-        if (blk?.type === 'tool_result') open.delete(blk.tool_use_id);
-      }
-      if (e?.message?.stop_reason === 'end_turn') open.clear();   // a turn that ended has nothing left waiting
-    }
-    return [...open.values()].some(at => at >= since);
+    const out = [];
+    for (const l of lines) { try { out.push(JSON.parse(l)); } catch {} }
+    return out;
   } finally { closeSync(fd); }
 }
 
@@ -212,8 +221,8 @@ export function openToolCall(path, since = 0, tailBytes = 512 * 1024) {
 // write: into the household session's pty; transcript(): its transcript's path, or null while there is no session;
 // idle(): the session has gone quiet (its WAITING state); asking(): it shows a dialog (QUESTION), which a typed line would answer;
 // broadcast: to every page (the same channel the terminal's output already takes); read: the CLI's turn reader (createRelay's).
-export function createTalk({ write, transcript, broadcast, idle = () => false, asking = () => false, since = () => 0, env = process.env, platform = process.platform, pollMs = 500, now = Date.now,
-                             stt = transcribe, tts = synthesize, type = typeInto, read = readTurn } = {}) {
+export function createTalk({ write, transcript, broadcast, idle = () => false, asking = () => false, busy = () => false, since = () => 0, env = process.env, platform = process.platform, pollMs = 500, now = Date.now,
+                             stt = transcribe, tts = synthesize, type = typeInto, read = readTurn, open = openToolCall } = {}) {
   const turns = new Map();   // utterance id → { prompt, offset, buf, entries, status, said, pieces, text, at, done }
   const results = new Map();   // utterance id → its answer, so a retry is the line already typed, never a second one
   const inflight = new Map();
@@ -243,15 +252,17 @@ export function createTalk({ write, transcript, broadcast, idle = () => false, a
     if (!text) return { error: 'No words were heard.', empty: true };
     const playing = typeof echoOf === 'string' && turns.get(echoOf);   // its reply, or a progress line, was being spoken
     if (playing && overPlaybackEcho(text, [playing.text, ...playing.said])) return remember(utterance, { ok: true, echo: true });
-    const path = transcript();
-    if (!path) return { error: 'The assistant is not running yet; try again in a moment.' };
+    const path = transcript();   // '' : running, with no file yet (a Codex session's first line)
+    if (path == null) return { error: 'The assistant is not running yet; try again in a moment.' };
     // A quiet session with an open tool call is a dialog whose footer a redraw hid; a running tool keeps output coming,
-    // and a line typed then is queued by Claude Code as before.
-    if (asking() || (idle() && openToolCall(path, since()))) return { error: 'The assistant is asking something on the screen; answer it there first.' };
+    // and a line typed then is queued by Claude Code. Codex would steer the running turn with it instead (busy): a phone
+    // turn's answer would be cut short and its permission prompts would stop reaching the phone, so Talk waits there.
+    if (busy()) return { error: 'The assistant is in the middle of a turn; say it again when it finishes.' };
+    if (asking() || (idle() && open(path, since()))) return { error: 'The assistant is asking something on the screen; answer it there first.' };
     const prompt = `${VOICE_TAG} ${text}`;
     let offset = 0;
     try { offset = statSync(path).size; } catch {}   // a session that has not written yet starts at 0
-    turns.set(utterance, { prompt, path, offset, buf: '', entries: [], status: '', said: [], pieces: [], text: '', at: now(), done: false });
+    turns.set(utterance, { prompt, path, find: transcript, offset, buf: '', entries: [], status: '', said: [], pieces: [], text: '', at: now(), done: false });
     type(write, prompt);
     timer ??= setInterval(poll, pollMs);
     return remember(utterance, { ok: true, id: utterance, transcript: text });
@@ -318,8 +329,8 @@ export function createTalk({ write, transcript, broadcast, idle = () => false, a
 // channel and the sender, and the reply is read back off the transcript the same way. One turn at a time: the daemon
 // already sends them in order, and a second caller with the key waits its turn rather than typing over the first.
 // The runner seam: write/type are the pty, transcript() names the file a turn's entries land in, read() turns those entries
-// into { started, reply, done } (readTurn: Claude Code's jsonl). server.js AGENTS picks both per CLI, for Talk too: a Codex
-// session brings its rollout file and a reader of its event shapes (tests/fixtures/codex); everything else here stays.
+// into { started, reply, done } (readTurn: Claude Code's jsonl), open() says a tool call is still waiting. server.js AGENTS
+// picks them per CLI, for Talk too: a Codex session brings its rollout file and codex.js readCodexTurn; the rest stays.
 export const TELEGRAM_TAG = 'telegram';   // the bundle's CLAUDE.md: `[telegram · <owner>] ...` is a phone message, answered for a phone
 export const RELAY_TIMEOUT_MS = 5 * 60_000;   // the most a caller may ask to wait; the daemon asks for claude_timeout_seconds
 export const PERMISSION_WAIT_MS = 11 * 60_000;   // added at most, for time a turn spends on a permission dialog (finnamon/daemon.py waits as long)
@@ -332,9 +343,9 @@ export const telegramPrompt = ({ from, text, note }) => {
 export function createRelay({ write, transcript, idle = () => true, asking = () => false, since = () => 0, type = typeInto, read = readTurn, pollMs = 500, now = Date.now, open = openToolCall } = {}) {
   let chain = Promise.resolve();
   const turn = (prompt, timeoutMs) => new Promise((resolve) => {
-    const path = transcript();
-    if (!path) return resolve({ status: 503, error: 'The assistant session is not running yet.' });
-    const t = { path, offset: 0, buf: '', entries: [] };
+    const path = transcript();   // '' : running, with no file yet (a Codex session's first line)
+    if (path == null) return resolve({ status: 503, error: 'The assistant session is not running yet.' });
+    const t = { path, find: transcript, offset: 0, buf: '', entries: [] };
     let at = now(), paused = 0, last = now();
     let typed = false;
     // Typed only once the session is quiet: a turn an earlier message timed out on, or one typed at the dashboard, may
@@ -348,11 +359,11 @@ export function createRelay({ write, transcript, idle = () => true, asking = () 
       // only once typed: a dashboard dialog this line waited behind is not this turn's, and must not spend its allowance
       // ponytail: an open call is a dialog or a tool still running (the screen cannot always tell them apart), so a slow tool
       // also delays the "taking longer" line by up to PERMISSION_WAIT_MS; the hook's own row would tell them apart.
-      if (typed && paused < PERMISSION_WAIT_MS && (asking() || open(path, since()))) { const d = Math.min(ts - last, PERMISSION_WAIT_MS - paused); paused += d; at += d; }
+      if (typed && paused < PERMISSION_WAIT_MS && (asking() || open(t.path, since()))) { const d = Math.min(ts - last, PERMISSION_WAIT_MS - paused); paused += d; at += d; }
       last = ts;
       if (!typed) {
-        if (!idle() || open(path, since())) { if (ts - at > timeoutMs) { clearInterval(timer); resolve({ status: 504, error: 'timeout', started: false }); } return; }
-        try { t.offset = statSync(path).size; } catch {}
+        if (!idle() || open(t.path, since())) { if (ts - at > timeoutMs) { clearInterval(timer); resolve({ status: 504, error: 'timeout', started: false }); } return; }
+        try { t.offset = t.path ? statSync(t.path).size : 0; } catch {}
         type(write, prompt); typed = true; return;
       }
       readNew(t);

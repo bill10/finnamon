@@ -339,16 +339,16 @@ test('a restart that cut a channel-mode turn short tells the chat to resend, onc
   assert.ok(!midTurn({ ...s(now - 600_000, now - 2_000), pty: null }, now), 'nor is a session that is not running');
 });
 
-test('agentArgs: claude is the only CLI yet, and a session store can hold no id until the CLI names one', () => {
+test('agentArgs: claude goes through the seam unchanged, and a session store can hold no id until the CLI names one', () => {
   for (const inbound of ['daemon', 'session', 'channel']) {
     const s = { id: '11111111-1111-4111-8111-111111111111', created: true };
     assert.deepEqual(agentArgs('claude', inbound, s), claudeArgs(inbound, s), 'claude goes through the seam unchanged');
   }
   assert.ok(AGENTS.claude.mintsId && AGENTS.claude.transcriptPath && AGENTS.claude.readTurn);
-  assert.throws(() => agentArgs('codex', 'daemon'), /Codex support is being built/);
+  assert.throws(() => agentArgs('gemini', 'daemon'), /not a CLI this release can drive/);
   // codex names its own sessions (no --session-id): the store starts at { id: null } and keeps it across a fast exit
   const s = intercomSession({ home: '/nope', read: () => null, write: () => {}, uuid: () => null });
   assert.deepEqual(s.get(), { id: null, created: false });
   s.started();
-  assert.deepEqual(s.get(), { id: null, created: true }, 'started, still waiting to learn the id off the rollout (card 5)');
+  assert.deepEqual(s.get(), { id: null, created: true }, 'started, still waiting to learn the id off the rollout (test/codex.test.js)');
 });

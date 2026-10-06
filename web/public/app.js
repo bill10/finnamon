@@ -105,7 +105,9 @@ function settingsRows() {   // label, a dot and the value; a detail under it in 
   const remote = !setx ? row('Remote access', '', null) : setx.remote.on ? row('Remote access', '', 'On', setx.remote.hosts.map(esc).join(', ')) : row('Remote access', 'off', 'Off', 'This computer only');
   const voice = !setx ? row('Voice', '', null) : !setx.voice ? row('Voice', 'off', 'Not available here')
     : setx.voice.stt === 'whisper' ? row('Voice', '', 'Whisper ready') : row('Voice', 'warn', 'Browser speech', 'Whisper is not set up');
-  return `<h3 class="sep">Status</h3><ul class="rows">${tg}${remote}${voice}</ul>`;
+  const agent = { claude: 'Claude Code', codex: 'Codex' }[st.agent];   // `finnamon settings set assistant` at a terminal changes it
+  const who = row('Assistant', agent ? '' : 'off', agent || '<span class="none">Unknown</span>');
+  return `<h3 class="sep">Status</h3><ul class="rows">${who}${tg}${remote}${voice}</ul>`;
 }
 function renderUpdate() {
   const b = $('settings-btn'), avail = upd && !upd.error && upd.ahead > 0;
