@@ -303,15 +303,17 @@ test('a CSV import lands under the home as a file the CLI is pointed at; the acc
 test('a browser import starts a session for a plausible bank name only, and a running one is reported, not replaced', async () => {
   const started = [];
   let busy = false;
-  const startImport = (bank) => { if (busy) throw new Error('an import session is still running'); started.push(bank); if (bank === 'HSBC') busy = true; };
+  const modes = [];
+  const startImport = (bank, opts) => { if (busy) throw new Error('an import session is still running'); started.push(bank); modes.push(opts?.noCdp); if (bank === 'HSBC') busy = true; };
   const app = buildApp({ token: () => KEY, cli: async () => ({}), allowHost: () => true, startImport });
   const srv = app.listen(0, '127.0.0.1'); await new Promise(r => srv.once('listening', r));
   const base = `http://127.0.0.1:${srv.address().port}`;
   const post = (body) => fetch(`${base}/api/import/browser`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   try {
     for (const bank of ['', 'x'.repeat(81), '$(rm -rf /)', '--allowedTools', 'a\nb']) assert.equal((await post({ bank })).status, 400, JSON.stringify(bank));
-    assert.equal((await post({ bank: 'Société Générale' })).status, 200, 'an institution finnamon account add accepted is a bank here too');
-    assert.equal((await post({ bank: 'HSBC' })).status, 200); assert.deepEqual(started, ['Société Générale', 'HSBC']);
+    assert.equal((await post({ bank: 'Société Générale', mode: 'no-cdp' })).status, 200, 'an institution finnamon account add accepted is a bank here too');
+    assert.equal((await post({ bank: 'HSBC', mode: '--allowedTools' })).status, 200); assert.deepEqual(started, ['Société Générale', 'HSBC']);
+    assert.deepEqual(modes, [true, false], 'Fetch without AI on request; any other mode is plain Fetch by AI');
     const r = await post({ bank: 'Ally Bank' }); assert.equal(r.status, 409); assert.match((await r.json()).error, /still running/);
     assert.deepEqual(started, ['Société Générale', 'HSBC']);
     const none = buildApp({ token: () => KEY, cli: async () => ({}), allowHost: () => true }).listen(0, '127.0.0.1'); await new Promise(r => none.once('listening', r));
@@ -320,10 +322,22 @@ test('a browser import starts a session for a plausible bank name only, and a ru
   } finally { srv.close(); }
 });
 
+test('Reset browser profile is one CLI call, its errors reported', async () => {
+  const calls = [];
+  const app = buildApp({ token: () => KEY, cli: async (...a) => { calls.push(a); if (calls.length > 1) throw new Error('Finnamon\'s Chrome is still running'); return { moved_to: '/x/chrome.old-1' }; }, allowHost: () => true });
+  const srv = app.listen(0, '127.0.0.1'); await new Promise(r => srv.once('listening', r));
+  const post = () => fetch(`http://127.0.0.1:${srv.address().port}/api/import/reset-profile`, { method: 'POST', headers: { ...COOKIE, 'content-type': 'application/json' }, body: '{}' });
+  try {
+    const r = await post(); assert.equal(r.status, 200); assert.deepEqual(calls[0], ['import', '--browser', '--reset-profile']);
+    const bad = await post(); assert.ok(bad.status >= 400); assert.match((await bad.json()).error, /still running/);
+  } finally { srv.close(); }
+});
+
 test('importCommand: the CLI launcher owns the claude argv; a bank name never becomes an option of its own', () => {
   const { cmd, args } = importCommand('HSBC');
-  assert.ok(cmd); assert.deepEqual(args.slice(-4), ['import', '--browser', '--', 'HSBC']);
+  assert.ok(cmd); assert.deepEqual(args.slice(-5), ['import', '--browser', '--attach=auto', '--', 'HSBC']);
   assert.deepEqual(importCommand('--help').args.slice(-2), ['--', '--help']);
+  assert.deepEqual(importCommand('HSBC', { noCdp: true }).args.slice(-4), ['--browser', '--no-cdp', '--', 'HSBC'], 'Fetch without AI: no port, no Claude, never --attach');
 });
 
 test('an import passes --flip through, ignores a blank or unparsable balance, and reports a CLI or a disk failure', async () => {
@@ -362,7 +376,7 @@ test('the import runner refuses a second session while one is not DOWN, then rep
   const sent = [];
   const r = importRunner({ make, broadcast: (m) => sent.push(m) });
   r.start('HSBC');
-  assert.deepEqual(made[0].opts.args.slice(-4), ['import', '--browser', '--', 'HSBC']); assert.equal(made[0].opts.once, true);
+  assert.deepEqual(made[0].opts.args.slice(-5), ['import', '--browser', '--attach=auto', '--', 'HSBC']); assert.equal(made[0].opts.once, true);
   for (const st of ['STARTING', 'WORKING', 'WAITING', 'QUESTION']) { made[0].session.state = st; assert.throws(() => r.start('Ally'), /still running/, st); }
   made[0].session.state = 'DOWN';
   r.start('Ally');

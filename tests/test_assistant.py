@@ -300,10 +300,10 @@ def test_import_browser_starts_its_session_in_the_assistant_directory(own_dir, c
     monkeypatch.setattr("finnamon.claude_runner.binary", lambda: "/usr/bin/claude")
     monkeypatch.setattr("os.chdir", lambda p: calls.append(("cd", str(p))))
     monkeypatch.setattr("os.execve", lambda exe, argv, env: calls.append((exe, argv, env)))
-    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u: "127.0.0.1:1")
+    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u: ("127.0.0.1:1", "T1"))
     monkeypatch.setenv("FINNAMON_CHROME", sys.executable)
     launched = []
-    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u: launched.append(u) or "127.0.0.1:1")
+    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u: launched.append(u) or ("127.0.0.1:1", "T1"))
     with pytest.raises(SystemExit):
         cli.main(["import", "--browser", "hsbc"])   # no bundle installed: refused, with the fix named
     assert "finnamon install" in capsys.readouterr().err and calls == [] and launched == [], "refused before the bank window opens"

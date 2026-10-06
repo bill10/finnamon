@@ -752,9 +752,22 @@ def cmd_hook(a) -> None:
             cmd = str(tool_input.get("command") or "")
             if any(c in cmd for c in ";|&`$<>()#{}\n"):   # one plain command: no lists, pipes, redirects, groups, substitutions or comments
                 die("blocked: one command at a time, no pipes, redirects or substitutions in the import session", 2)
-            why = browser_command_ok(shlex.split(cmd), os.environ.get("FINNAMON_IMPORT_CDP"))
+            argv, cdp, tab = shlex.split(cmd), os.environ.get("FINNAMON_IMPORT_CDP"), os.environ.get("FINNAMON_IMPORT_TAB")
+            marker = config.home() / IMPORT_TAB_FILE
+            why = browser_command_ok(argv, cdp, tab, bound=bool(tab) and marker.exists() and marker.read_text() == tab)
             if why:
                 die(f"blocked: {why}", 2)
+            if argv[3:4] in (["connect"], ["close"]):   # a (re)connect may land on any tab: bound again only by a `tab <id>` after it
+                marker.unlink(missing_ok=True)
+            if tab and argv[3:] == ["tab", tab]:   # binding: only to a tab that is still open, or agent-browser stays on whichever one connect picked
+                # ponytail: checked here, then run by agent-browser; a tab closed in between leaves the pin on connect's pick. Pin from agent-browser's own reply if that ever matters.
+                try:
+                    open_ = bool(cdp) and any(t.get("id") == tab for t in _cdp_json(cdp + "/json/list"))
+                except (OSError, ValueError, AttributeError):
+                    open_ = False
+                if not open_:
+                    die("blocked: the bank's tab is gone (closed, or the browser quit); start the import again", 2)
+                marker.write_text(tab)
             return
         conn = store.connect()
         chat = store.get_state(conn, "chat_id")
@@ -887,8 +900,10 @@ BROWSER_SESSION = "finnamon-import"   # the agent-browser session the skill driv
 BROWSER_GRAMMAR: dict[str, tuple[set[str], int]] = {   # verb -> (flags it may carry, how many positional arguments)
     "snapshot": ({"-i", "-c", "--interactive", "--compact"}, 0), "get": (set(), 1), "click": (set(), 1), "select": (set(), 2),
     "scroll": (set(), 2), "scrollintoview": (set(), 1), "press": (set(), 1), "back": (set(), 0), "reload": (set(), 0),
-    "is": (set(), 2), "session": (set(), 0), "close": (set(), 0), "connect": (set(), 1),
+    "is": (set(), 2), "session": (set(), 0), "close": (set(), 0), "connect": (set(), 1), "tab": (set(), 1),
 }
+IMPORT_TAB_FILE = "import-tab"   # under FINNAMON_HOME: the tab id once the guard let `tab <it>` through; the launcher clears it
+UNBOUND_OK = {"connect", "tab", "session", "close"}   # what may run before the session is bound to the bank's tab (FINNAMON_IMPORT_TAB)
 BROWSER_GET = {"url", "title"}   # `get <what>`: the page's address or title; never html/attr/cdp-url. Not `text`: agent-browser
 # wants a selector after it, which is a second positional this grammar does not allow, so `get text` only ever errors -- `snapshot` reads the page.
 BROWSER_PRESS = {"Enter", "Tab", "Escape", "PageDown", "PageUp", "End", "Home", "ArrowDown", "ArrowUp"}
@@ -898,8 +913,36 @@ CHROME = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "googl
 PORT_WAIT_SECONDS, POLL_SECONDS = 20.0, 0.2   # how long chrome_launch waits for Chrome to write DevToolsActivePort, and how often it looks
 
 
-def chrome_launch(chrome: str, profile: Path, url: str) -> str:
-    """Open the bank's login page in real Chrome and return the CDP address of that window, or die().
+def chrome_spawn(chrome: str, profile: Path, url: str, port: bool, method: str | None = None, env: dict | None = None) -> str:
+    """Start Chrome on profile at url; returns how ("open" or "popen"). On macOS through LaunchServices, `open -na <app>
+    --args ...`, so Chrome starts like one the person opened, in their session's environment, never as a child of the
+    dashboard's launchd job with its stripped one (2026-10-05: Fetch by AI from the dashboard got EAC on a fresh profile
+    while the same build and flags from `open -na` in a shell passed). Elsewhere, or with method="popen", a child process
+    with env (default: this one's). --no-first-run: no welcome page in front of the bank's; not an automation switch."""
+    app = chrome.split(".app/")[0] + ".app" if ".app/" in chrome else None
+    method = method or ("open" if app and shutil.which("open") else "popen")
+    args = [f"--user-data-dir={profile}", *(["--remote-debugging-port=0"] if port else []), "--no-first-run", url]
+    try:   # --remote-debugging-port=0: the kernel picks a free one, so a Chrome the person already debugs on 9222 cannot collide
+        if method == "open":
+            subprocess.run(["open", "-na", app or chrome, "--args", *args], check=True, capture_output=True, timeout=30)
+        else:
+            subprocess.Popen([chrome, *args], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=env)
+    except (OSError, subprocess.SubprocessError) as e:
+        die(f"could not start Chrome: {e}")
+    return method
+
+
+def launch_env() -> dict:
+    """What --diagnose records about the environment a launch would inherit: locale, timezone, home, PATH, and whether this
+    process runs under launchd (the dashboard's job) rather than a terminal."""
+    e = os.environ
+    return {"LANG": e.get("LANG"), "LC_ALL": e.get("LC_ALL"), "TZ": e.get("TZ"), "HOME": e.get("HOME"), "PATH": e.get("PATH"),
+            "under_launchd": bool(e.get("XPC_SERVICE_NAME")) and not e.get("TERM")}
+
+
+def chrome_launch(chrome: str, profile: Path, url: str, method: str | None = None, env: dict | None = None) -> tuple[str, str]:
+    """Open the bank's login page in real Chrome and return the CDP address of that window and the target id of its tab,
+    or die().
 
     The window is Finnamon's, not agent-browser's, and nothing is attached to it while the person logs in: a bank's risk
     engine (HSBC US runs Transmit Security) fails the login outright when a DevTools client is driving, but passes a
@@ -908,24 +951,324 @@ def chrome_launch(chrome: str, profile: Path, url: str) -> str:
     "unsupported command-line flag" banner -- and the session attaches afterwards (`connect`, in the grammar above)."""
     port_file = profile / "DevToolsActivePort"
     port_file.unlink(missing_ok=True)   # stale from the last run; we wait for Chrome to write a fresh one
-    try:   # --remote-debugging-port=0: the kernel picks a free one, so a Chrome the person already debugs on 9222 cannot collide
-        subprocess.Popen([chrome, f"--user-data-dir={profile}", "--remote-debugging-port=0", url],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    except OSError as e:
-        die(f"could not start Chrome: {e}")
+    chrome_spawn(chrome, profile, url, port=True, method=method, env=env)
     for _ in range(int(PORT_WAIT_SECONDS / POLL_SECONDS)):   # Chrome writes the port on startup; a profile another Chrome holds never gets there
         if port_file.exists() and (text := port_file.read_text().split("\n")[0].strip()).isdigit():
             for host in ("127.0.0.1", "[::1]"):   # which family it binds varies; take the one that answers
                 cdp = f"http://{host}:{text}"
-                try:
-                    urllib.request.urlopen(cdp + "/json/version", timeout=2).read()
-                    return cdp
-                except OSError:
-                    continue
+                if (tab := _page_target(cdp)):
+                    return cdp, tab
         time.sleep(POLL_SECONDS)
     die("Chrome did not open a debugging port. A Finnamon browser may already be open on that profile: close that window, "
         "or quit it, then start the import again.")
-    return ""   # noqa: RET503 - die() exits; unreachable
+    return "", ""   # noqa: RET503 - die() exits; unreachable
+
+
+def _cdp_json(url: str, method: str = "GET"):
+    """One of Chrome's plain-HTTP DevTools endpoints (/json/...): no websocket, so nothing is attached to any page."""
+    with urllib.request.urlopen(urllib.request.Request(url, method=method), timeout=5) as r:
+        return json.loads(r.read())
+
+
+def _page_target(cdp: str) -> str | None:
+    """The first ordinary tab (type "page") in the Chrome at cdp, or None when there is none or nothing answers."""
+    try:
+        return next((t["id"] for t in _cdp_json(cdp + "/json/list") if t.get("type") == "page"), None)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+ATTACH_PORT = "9222"   # where `--attach` looks with no address: the port people launch their own Chrome with
+LOOPBACK = {"127.0.0.1", "[::1]", "localhost"}
+ATTACH_HOW = ('quit Chrome and relaunch it with the port: open -a "Google Chrome" --args --remote-debugging-port=9222 '
+              "(Chrome 136 and later ignore the port on its default profile folder, so add --user-data-dir=<the folder you browse in> if yours is the default)")
+
+
+def chrome_attach(addr: str, url: str, required: bool = True) -> tuple[str, str] | None:
+    """Open the bank's page in ONE new tab of a Chrome the person already runs with a debugging port, and return that
+    browser's CDP address and the new tab's target id. Loopback only. Plain HTTP (/json/version, then PUT /json/new):
+    nothing attaches to any tab here, the session does that later and the guard pins it to this tab. required=False is
+    the dashboard's `--attach auto`: no Chrome answering is None (launch Finnamon's own) rather than an error."""
+    host, _, port = addr.rpartition(":")
+    hosts = [host] if host else ["127.0.0.1", "[::1]"]
+    if not port.isdigit() or any(h not in LOOPBACK for h in hosts):
+        die(f"--attach takes a port or a loopback host:port (127.0.0.1:9222, [::1]:9222), not {addr}: a debugging port is a live window into the browser")
+    for h in hosts:
+        cdp = f"http://{h}:{port}"
+        try:
+            build = _cdp_json(cdp + "/json/version").get("Browser", "Chrome")
+        except (OSError, ValueError, AttributeError):
+            continue
+        try:
+            tab = _cdp_json(f"{cdp}/json/new?{url}", "PUT")["id"]
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            die(f"the Chrome on {cdp} would not open a tab: {e}")
+        where = _chrome_profile_on(port)
+        print(f"Opened {url} in a new tab of your Chrome on {cdp} ({build}" + (f", profile {where}" if where else "") + "). "
+              "Log in there yourself. If no tab appeared in your window, that port is another program's Chrome: stop the import "
+              "(Ctrl-C, or Stop in the dashboard) and close that tab.", file=sys.stderr)
+        return cdp, tab
+    if required:
+        die(f"no Chrome answers on {addr if host else '127.0.0.1:' + port}. For --attach, {ATTACH_HOW}.")
+    return None
+
+
+def _chrome_profile_on(port: str) -> str | None:
+    """The --user-data-dir of the Chrome started with this debugging port, from ps, so the person can tell whose browser
+    the tab went to; None when ps cannot say (it was started from the default folder, or ps is not there)."""
+    for line in _ps().splitlines():
+        if f"--remote-debugging-port={port}" in line and (m := re.search(r"--user-data-dir=(.+?)(?= --|$)", line)):
+            return m.group(1)
+    return None
+
+
+def _ps() -> str:
+    try:
+        return subprocess.run(["ps", "-A", "-o", "command="], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+BUILD = re.compile(r"\d+\.\d+\.\d+\.\d+")
+
+
+def chrome_builds(chrome: str) -> tuple[str | None, set[str]]:
+    """(the build on disk, the builds running Chrome processes were started from). Chrome updates in place: the executable
+    answers --version with the new build at once, while every process started before the update keeps running the old
+    framework out of its Versions/<build>/ folder, which ps shows (macOS; elsewhere the running set is empty, so no
+    mismatch is ever claimed). Finnamon's own window is always a fresh launch, so it always runs the build on disk."""
+    try:
+        disk = (m.group(0) if (m := BUILD.search(subprocess.run([chrome, "--version"], capture_output=True, text=True, timeout=10).stdout)) else None)
+    except (OSError, subprocess.TimeoutExpired):
+        disk = None
+    app = chrome.split(".app/")[0] + ".app/" if ".app/" in chrome else None
+    running = {m.group(1) for line in _ps().splitlines() if app and line.startswith(app)
+               for m in [re.search(r"/Versions/(\d+\.\d+\.\d+\.\d+)/", line)] if m}
+    return disk, running
+
+
+def eac_message(bank: str | None = None) -> str:
+    """What to say about HSBC US's "Something went wrong ... reference: EAC" on /security. Nothing public says what EAC
+    means. The owner's tests on 2026-10-05 ruled out the Chrome build, a new device, an open debugging port, Finnamon's
+    profile and a client attached during the login; the one launch that failed differed in how Chrome was started (a child
+    of the dashboard's launchd job, with its stripped environment), which chrome_spawn now avoids on a Mac."""
+    b = bank or "<bank>"
+    return ("HSBC's \"reference: EAC\": nobody outside HSBC knows exactly what it means. Ruled out on 2026-10-05: a new Chrome "
+            "build, a new device, an open debugging port, Finnamon's browser profile, and a DevTools client attached during the "
+            "login. What differed in the launch that failed was how Chrome was started (by the dashboard's background job, "
+            "with a stripped environment), so Finnamon now starts it through macOS's LaunchServices, as if you had opened it. "
+            f"If it still fails: Fetch without AI (finnamon import --browser {b} --no-cdp), which attaches nothing; the CSV from "
+            f"your everyday browser (finnamon import \"<account>\" ~/Downloads/<file>.csv); and finnamon import --browser {b} "
+            "--diagnose in a terminal, which compares launch methods and records what it sees.")
+
+
+def build_mismatch(chrome: str) -> str | None:
+    """"Chrome updated to X; your open windows run Y", or None. A fact for --chrome-check and --diagnose, no longer a
+    suspect for EAC (eac_message)."""
+    disk, running = chrome_builds(chrome)
+    old = sorted(running - {disk}) if disk else []
+    return f"Chrome updated to {disk}; your open windows run {', '.join(old)}." if old else None
+
+
+def profile_in_use(profile: Path) -> bool:
+    """A Chrome is running on this profile (ps shows its --user-data-dir): a second launch only hands that process the
+    URL, with whatever port it was started with, and it rewrites Preferences on exit."""
+    return f"--user-data-dir={profile}" in _ps()
+
+
+def chrome_open(chrome: str, profile: Path, url: str) -> None:
+    """Finnamon's profile at url with no debugging port and no switch of any kind: the window HSBC has been seen to accept."""
+    if profile_in_use(profile):
+        die("Finnamon's Chrome is still running: quit it (Cmd-Q on a Mac; closing the window leaves it running), then start again")
+    chrome_spawn(chrome, profile, url, port=False)
+
+
+def pin_downloads(profile: Path, folder: Path) -> None:
+    """Point the profile's downloads at folder, no "Save as" dialog, by editing Default/Preferences before Chrome starts
+    (there is no command-line switch for it). Everything else in the file is kept.
+    ponytail: unverified whether Chrome's Secure Preferences ever resets these; if a file lands elsewhere, the person is told where we watch."""
+    prefs = profile / "Default" / "Preferences"
+    try:
+        data = json.loads(prefs.read_text())
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data.setdefault("download", {}).update({"default_directory": str(folder), "prompt_for_download": False, "directory_upgrade": True})
+    data.setdefault("savefile", {})["default_directory"] = str(folder)
+    prefs.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    prefs.write_text(json.dumps(data))
+
+
+BANK_STEPS = {"hsbc": ["Log in.", "Click the account's tile on the dashboard to open its transactions.",
+                       "Press \"Show more transactions\" until the list stops growing (the export takes only what is loaded; HSBC keeps about six months).",
+                       "Press \"Download\", choose \"Spreadsheet CSV file\", then \"Download\"."]}
+WATCH_SECONDS, WATCH_POLL = 1800.0, 1.0   # how long --no-cdp waits for the export, and how often it looks
+
+
+def wait_for_csv(folder: Path, since: float) -> Path:
+    """The newest .csv in folder written after `since`, once its size has stopped changing (Chrome writes a .crdownload
+    first and renames it, but a slow disk can still show a growing file), or die() after WATCH_SECONDS."""
+    last: tuple[Path, int] | None = None
+    for _ in range(int(WATCH_SECONDS / WATCH_POLL)):
+        try:   # a file renamed or removed between the listing and the stat is just not there yet
+            new = sorted(((f.stat().st_mtime, f) for f in folder.glob("*.csv")), key=lambda t: t[0])
+            new = [f for m, f in new if m >= since]
+            size = new[-1].stat().st_size if new else 0
+        except OSError:
+            new = []
+        if new:
+            f = new[-1]
+            if last == (f, size) and size:
+                return f
+            last = (f, size)
+        time.sleep(WATCH_POLL)
+    die(f"no CSV arrived in {folder} within {int(WATCH_SECONDS / 60)} minutes; if the browser saved it elsewhere, run finnamon import \"<account>\" <file.csv>")
+    return folder   # noqa: RET503 - die() exits
+
+
+def fetch_by_hand(chrome: str, profile: Path, bank: str, to: str) -> None:
+    """--no-cdp: no debugging port, no Claude, no DevTools at all. Finnamon's profile opens at the bank with its downloads
+    pinned to FINNAMON_HOME/downloads, the person logs in and exports the CSV themselves following the steps printed here,
+    and the newest file to land there goes through the ordinary import, dry run first, into the account they confirm."""
+    accounts = [r for r in (_http(to, "/api/summary").get("accounts", []) if to else
+                            [dict(r) for r in store.connect().execute("SELECT a.name, i.institution, i.source FROM accounts a JOIN items i ON i.item_id=a.item_id ORDER BY a.name")])
+                if r.get("source") == "manual" and str(r.get("institution") or "").lower() == bank.lower()]
+    if not accounts:
+        die(f'no manual account at {bank}: add one first (finnamon account add "{bank} Checking" --institution {bank})')
+    folder = config.home() / "downloads"
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    folder.chmod(0o700)   # bank statements
+    if profile_in_use(profile):   # a live Chrome would ignore the download folder and write its own Preferences back on exit
+        die("Finnamon's Chrome is still running: quit it (Cmd-Q on a Mac; closing the window leaves it running), then start again")
+    pin_downloads(profile, folder)
+    since = time.time()
+    chrome_open(chrome, profile, BANK_LOGIN.get(bank.lower(), "about:blank"))
+    steps = BANK_STEPS.get(bank.lower(), [f"Log in to {bank}.", "Open the account's transactions and export them as CSV."])
+    print(f"A Chrome window of Finnamon's own is open at {bank}, with no debugging port and nothing attached to it. In that window:")
+    for i, step in enumerate(steps, 1):
+        print(f"  {i}. {step}")
+    print(f"Waiting for the CSV in {folder} (Ctrl-C, or Stop in the dashboard, to give up)…")
+    f = wait_for_csv(folder, since)
+    if len(accounts) == 1:
+        name = accounts[0]["name"]
+    else:
+        print("Which account is this file for? " + "  ".join(f"{i}. {r['name']}" for i, r in enumerate(accounts, 1)))
+        try:
+            pick = input("Number: ").strip()
+        except EOFError:
+            pick = ""
+        if not pick.isdigit() or not 1 <= int(pick) <= len(accounts):
+            die(f"not imported; {f} is still there: finnamon import \"<account>\" {f}")
+        name = accounts[int(pick) - 1]["name"]
+    text = f.read_text(encoding="utf-8-sig", errors="replace")
+
+    def run(flip: bool, dry: bool) -> dict:
+        if to:
+            return _upload(to, name, text, flip=flip, dry_run=dry)
+        conn = store.connect()
+        return imports.apply(conn, imports.find_account(conn, name)["account_id"], imports.parse(text), flip=flip, dry_run=dry)
+    flip = False
+    while True:
+        try:
+            preview = run(flip, True)
+        except (ValueError, OSError, sqlite3.OperationalError) as e:
+            die(f"{f.name} did not read as an export: {e}")
+        print(json.dumps(preview, indent=1, default=str))
+        print("In the sample, money out (a purchase, a bill) should be positive and money in (pay) negative.")
+        try:
+            ans = input(f"Import {f.name} into {name}? [y = yes, f = flip the signs, N = no] ").strip().lower()
+        except EOFError:
+            ans = ""
+        if ans in ("f", "flip"):
+            flip = not flip
+            continue
+        if ans not in ("y", "yes"):
+            die(f"not imported; {f} is still there")
+        out(run(flip, False))
+        return
+
+
+DIAGNOSE_FILE = "chrome-diagnose.json"   # under FINNAMON_HOME: every --diagnose run's answers, newest last
+
+
+def _asked(prompt: str) -> bool:
+    try:
+        return input(prompt).strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
+
+
+def chrome_diagnose(chrome: str, bank: str) -> dict:
+    """Tell the causes of a refused login apart by observation; the person logs in by hand every time, nothing is attached,
+    and each pass is a fresh throwaway profile with the debugging port open, as Fetch by AI opens it. The owner's tests on
+    2026-10-05 ruled out the build, a new device, an open port, Finnamon's profile and an early attach; what differed in the
+    one launch that failed was how Chrome was started. So: 1. a child process with a launchd-like stripped environment
+    (how the dashboard's job started it); 2. a child process with this terminal's environment; 3. LaunchServices (`open -na`,
+    macOS only), how Finnamon now starts it. Answers, methods and the environment go to DIAGNOSE_FILE."""
+    url = BANK_LOGIN.get(bank.lower(), "about:blank")
+    disk, running = chrome_builds(chrome)
+    env = launch_env()
+    print(f"Chrome on disk: {disk or 'unknown'}; your open windows run: {', '.join(sorted(running)) or 'none this computer can see'}.")
+    print("This shell: " + ", ".join(f"{k}={v}" for k, v in env.items() if k != "PATH"))
+    stripped = {"PATH": scheduler.env_path(), "HOME": str(Path.home()), **{k: os.environ[k] for k in ("USER", "LOGNAME", "SHELL", "TMPDIR") if k in os.environ}}
+    passes = [("popen_launchd_env", "popen", stripped, "as a child process with the stripped environment the dashboard's launchd job has"),
+              ("popen_terminal_env", "popen", None, "as a child process with this terminal's environment")]
+    if ".app/" in chrome and shutil.which("open"):
+        passes.append(("open", "open", None, "through LaunchServices (open -na), how Finnamon starts it now"))
+    quit_ = "Log off, then quit that Chrome (Cmd-Q on a Mac: closing the window leaves it running), then press Enter. "
+    asked = "Did the login reach your accounts (no \"Something went wrong ... reference: EAC\")? [y/N] "
+    results: dict = {}
+    for i, (label, method, penv, how) in enumerate(passes, 1):
+        fresh = config.home() / f"chrome-diagnose-{label}-{int(time.time())}"
+        fresh.mkdir(mode=0o700, parents=True)
+        try:
+            print(f"\n{i}/{len(passes)}: a fresh throwaway Chrome profile, the debugging port open, nothing attached, started {how}. At {bank}. Log in yourself.")
+            chrome_launch(chrome, fresh, url, method=method, env=penv)
+            results[label] = _asked(asked)
+            try:
+                input(quit_)
+            except EOFError:
+                pass
+        finally:
+            shutil.rmtree(fresh, ignore_errors=True)   # a throwaway profile's cookies are a bank session's
+    r1, r2, r3 = results["popen_launchd_env"], results["popen_terminal_env"], results.get("open")
+    if not r1 and r2:
+        verdict = "the launch environment: refused with the dashboard's stripped environment, passed with this terminal's. Finnamon now starts Chrome through LaunchServices on a Mac, in your session's environment."
+    elif not r1 and not r2 and r3:
+        verdict = "starting Chrome as a child process: refused both ways, passed through LaunchServices (open -na), which is how Finnamon starts it now."
+    elif not r1 and not r2 and r3 is None:
+        verdict = "every launch was refused here; compare these flags with a launch that passes by hand."
+    elif r1 and r2 and r3 is not False:
+        verdict = "nothing reproduced it: every launch passed. Retry Fetch by AI (it now starts Chrome through LaunchServices on a Mac)."
+    else:
+        verdict = "inconclusive: the answers do not line up with one cause; run --diagnose again."
+    rec = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "bank": bank, "on_disk": disk, "running": sorted(running), "env": env,
+           "methods": {label: method for label, method, _, _ in passes}, **results, "verdict": verdict}
+    f = config.home() / DIAGNOSE_FILE
+    try:
+        prev = json.loads(f.read_text())
+    except (OSError, ValueError):
+        prev = []
+    f.write_text(json.dumps([*prev, rec][-20:], indent=1))
+    f.chmod(0o600)
+    print(f"\nLikely cause: {verdict}\n(recorded in {f})")
+    return rec
+
+
+def reset_profile() -> dict:
+    """Move Finnamon's Chrome profile aside (it holds the bank's cookies, so it stays 0700 where it lands) and start an empty
+    one: HSBC may remember a profile that got EAC as a bad device. Refused while a Chrome runs on it."""
+    profile = config.home() / "chrome"
+    if profile_in_use(profile):
+        die("Finnamon's Chrome is still running: quit it (Cmd-Q on a Mac; closing the window leaves it running), then reset")
+    old = None
+    if profile.exists():
+        old = profile.with_name(f"chrome.old-{time.strftime('%Y%m%d-%H%M%S')}")
+        profile.rename(old)
+    _import_profile()
+    return {"profile": str(profile), "moved_to": str(old) if old else None,
+            "next": "the next browser fetch starts on a fresh profile; delete the old folder once that works (it holds the bank's cookies)"}
 
 
 def chrome_path() -> str | None:
@@ -939,8 +1282,11 @@ def chrome_path() -> str | None:
     return None
 
 
-def browser_command_ok(argv: list[str], cdp: str | None = None) -> str | None:
-    """None when argv is a command the import session may run without asking; otherwise why not. Pure, so tests pin it."""
+def browser_command_ok(argv: list[str], cdp: str | None = None, tab: str | None = None, bound: bool = False) -> str | None:
+    """None when argv is a command the import session may run without asking; otherwise why not. Pure, so tests pin it.
+    tab: the bank's tab (FINNAMON_IMPORT_TAB), the one target the session may drive; bound: `tab <it>` has run (the hook
+    keeps that). Until then only connect, tab, session and close: right after `connect`, agent-browser drives whichever
+    tab it picked, which in --attach mode is one of the person's own."""
     if not argv:
         return "empty command"
     if argv[0] == "sleep":
@@ -959,6 +1305,10 @@ def browser_command_ok(argv: list[str], cdp: str | None = None) -> str | None:
     verb, args = rest[0], rest[1:]
     if verb not in BROWSER_GRAMMAR:
         return f"{verb} is not a verb of this session"
+    if verb == "tab":   # `tab <the bank's tab>` binds (pinned by AGENT_BROWSER_PIN_TAB), `tab close <it>` ends it; never list, new or another
+        return None if tab and args in ([tab], ["close", tab]) else "tab takes the bank's tab (the --tab id) and nothing else: no list, new or other tab"
+    if tab and not bound and verb not in UNBOUND_OK:
+        return f"bind the session to the bank's tab first: agent-browser --session {BROWSER_SESSION} tab <the --tab id>"
     flags, npos = BROWSER_GRAMMAR[verb]
     pos = [a for a in args if not a.startswith("-")]
     bad = [a for a in args if a.startswith("-") and a not in flags]
@@ -1008,6 +1358,14 @@ def browser_session_tools(to: str | None) -> tuple[list[str], list[str]]:
     return allowed, disallowed
 
 
+def _import_profile() -> Path:
+    """Finnamon's own Chrome profile, ~/.finnamon/chrome, 0700."""
+    profile = config.home() / "chrome"
+    profile.mkdir(mode=0o700, parents=True, exist_ok=True)
+    profile.chmod(0o700)   # mkdir's mode does not apply to a directory that already exists; it holds the bank's live cookies
+    return profile
+
+
 def cmd_import(a) -> None:
     """`finnamon import "<account>" <file.csv>`: a bank's export into a manual account, here or (`--to <url>`) on the Finnamon
     box through its dashboard. `--browser <bank>` starts the Claude session that fetches the file through a visible browser
@@ -1017,23 +1375,40 @@ def cmd_import(a) -> None:
     if a.browser:
         if _from_agent():
             die("the browser import is its own Claude session; run `finnamon import --browser <bank>` in a terminal")
+        if a.reset_profile:   # no bank needed: the profile is one for every bank
+            out(reset_profile()); return
         if not a.account:
-            die("usage: finnamon import --browser <bank> [--to <url>]")
+            die("usage: finnamon import --browser <bank> [--to <url>] [--attach [host:port] | --no-cdp | --diagnose]   |   finnamon import --browser --reset-profile"
+                + ("   (--attach takes the address that follows it: put the bank first, or write --attach=<host:port>)" if a.attach else ""))
+        if a.diagnose:   # no Claude, no session: a person, two logins, and what they saw
+            chrome = chrome_path()
+            if not chrome:
+                die("Google Chrome not found; install it, or set FINNAMON_CHROME to its executable")
+            chrome_diagnose(chrome, a.account); return
+        if a.no_cdp:   # no debugging port, no Claude: the person exports, Finnamon watches the folder and imports
+            chrome = chrome_path()
+            if not chrome:
+                die("Google Chrome not found; install it, or set FINNAMON_CHROME to its executable")
+            profile = _import_profile()
+            if to and not _box_key(to):
+                die(f"--to {KEY_HINT}")
+            fetch_by_hand(chrome, profile, a.account, to); return
         exe = claude_runner.binary()
         if not exe:
             die("claude is not on PATH")
         chrome = chrome_path()
-        if not chrome:
+        if not chrome and a.attach in (None, "auto"):   # an explicit --attach drives the person's Chrome, wherever it is installed
             die("Google Chrome not found; install it, or set FINNAMON_CHROME to its executable" + (f" (not an executable: {os.environ['FINNAMON_CHROME']})" if os.environ.get("FINNAMON_CHROME") else ""))
         if (problems := assistant.problems()):   # before the window opens: a die() after chrome_launch leaves the bank browser up with nothing driving it
             die("\n".join(problems))
-        profile = config.home() / "chrome"
-        profile.mkdir(mode=0o700, parents=True, exist_ok=True)
-        profile.chmod(0o700)   # mkdir's mode does not apply to a directory that already exists; it holds the bank's live cookies
+        profile = _import_profile()
         if to and not _box_key(to):   # the sealed session could only meet the 401, and cannot set an env var, so refuse before a bank login is spent
             die(f"--to {KEY_HINT}")
-        cdp = chrome_launch(chrome, profile, BANK_LOGIN.get(a.account.lower(), "about:blank"))
-        prompt = f"/import-browser {a.account}" + (f" --to {to}" if to else "") + f" --cdp {cdp}"
+        url = BANK_LOGIN.get(a.account.lower(), "about:blank")
+        attached = chrome_attach(ATTACH_PORT if a.attach == "auto" else a.attach, url, required=a.attach != "auto") if a.attach else None
+        cdp, tab = attached or chrome_launch(chrome, profile, url)
+        (config.home() / IMPORT_TAB_FILE).unlink(missing_ok=True)   # bound again by this session's own `tab <id>`, never by the last one's
+        prompt = f"/import-browser {a.account}" + (f" --to {to}" if to else "") + f" --cdp {cdp} --tab {tab}" + (" --attach" if attached else "")
         allowed, disallowed = browser_session_tools(to)
         os.chdir(assistant.dir())   # the skill lives in the assistant directory
         # FINNAMON_IMPORT_SESSION: the CLI itself refuses every command but import and account list (main()), whatever the pattern
@@ -1046,15 +1421,22 @@ def cmd_import(a) -> None:
         # .claude/settings.local.json, a local source), but that is a guard held for another reason, and the skill drives
         # agent-browser over Bash and wants no MCP server of its own.
         # The window is already open (chrome_launch) on a Chrome profile of Finnamon's own, so the bank's known-device state
-        # survives between runs; FINNAMON_IMPORT_CDP is its address, and the guard hook lets `connect` name that one and no other.
+        # survives between runs, or (--attach) one new tab is open in the person's own Chrome; FINNAMON_IMPORT_CDP is the
+        # browser's address and FINNAMON_IMPORT_TAB the bank's tab, and the guard hook lets `connect` name that address and
+        # nothing drive any tab but that one.
         # Every AGENT_BROWSER_* the person's shell carries is still dropped: auto-connect or a CDP URL of their own would attach
         # the session to their everyday Chrome, which holds every cookie they own.
         os.execve(exe, [exe, prompt, "--setting-sources", "project", "--strict-mcp-config",
                         "--settings", json.dumps(browser_guard_settings()),
                         "--allowedTools", *allowed, "--disallowedTools", *disallowed],
                   {**{k: v for k, v in os.environ.items() if not k.startswith("AGENT_BROWSER_")},   # no inherited auto-connect/cdp/args
-                   "FINNAMON_IMPORT_SESSION": to or "local", "FINNAMON_IMPORT_CDP": cdp})
+                   "FINNAMON_IMPORT_SESSION": to or "local", "FINNAMON_IMPORT_CDP": cdp, "FINNAMON_IMPORT_TAB": tab,
+                   "AGENT_BROWSER_PIN_TAB": "1"})   # sticky per agent-browser session: once `tab <id>` binds, a closed tab is an error, never another tab
         return   # noqa: RET503 - execve does not return; tests stub it
+    if a.chrome_check:   # the import session's way to explain "reference: EAC": it cannot run ps or Chrome itself
+        chrome = chrome_path()
+        disk, running = chrome_builds(chrome) if chrome else (None, set())
+        out({"on_disk": disk, "running": sorted(running), "builds": build_mismatch(chrome) if chrome else None, "eac": eac_message(a.account)}); return
     if not a.account or not a.file:
         die('usage: finnamon import "<account>" <file.csv> [--balance N] [--flip] [--dry-run] [--to <url>]   |   finnamon import --browser <bank> [--to <url>]')
     path = Path(a.file).expanduser()
@@ -2232,7 +2614,12 @@ def build_parser() -> argparse.ArgumentParser:
     s = sp.add_parser("import", help="a bank's CSV export into a manual account; --browser <bank> fetches it through a browser you log into"); s.add_argument("account", nargs="?", help="the manual account (name or id); with --browser, the bank")
     s.add_argument("file", nargs="?", help="the CSV (- for stdin)"); s.add_argument("--balance", type=float, help="the account's balance now, when the file has no balance column")
     s.add_argument("--flip", action="store_true", help="the file shows money out as positive (some card exports); default: negative, as banks do"); s.add_argument("--dry-run", action="store_true", help="parse and report, write nothing")
-    s.add_argument("--browser", action="store_true", help="open a Claude session that drives a visible browser: you log in, it downloads and imports"); s.add_argument("--to", metavar="URL", help="on another computer: the Finnamon box's dashboard URL; the file (or the browser session's result) is uploaded there, with FINNAMON_WEB_TOKEN set to the box's `finnamon web token`"); s.set_defaults(fn=cmd_import)
+    s.add_argument("--browser", action="store_true", help="open a Claude session that drives a visible browser: you log in, it downloads and imports"); s.add_argument("--to", metavar="URL", help="on another computer: the Finnamon box's dashboard URL; the file (or the browser session's result) is uploaded there, with FINNAMON_WEB_TOKEN set to the box's `finnamon web token`")
+    s.add_argument("--attach", nargs="?", const=ATTACH_PORT, metavar="HOST:PORT", help="with --browser: open one new tab in the Chrome you already run with --remote-debugging-port (default 9222, loopback only) instead of Finnamon's own window; auto: that if one answers, else Finnamon's")
+    s.add_argument("--no-cdp", action="store_true", help="with --browser: no debugging port and no AI: Finnamon's Chrome opens at the bank, you export the CSV yourself, and the file is imported as it lands")
+    s.add_argument("--reset-profile", action="store_true", help="with --browser: move Finnamon's Chrome profile aside and start a fresh one (HSBC may remember one that got 'reference: EAC')")
+    s.add_argument("--diagnose", action="store_true", help="with --browser: log in by hand three times (Finnamon's profile without and with the debugging port, then a fresh profile with a DevTools client attached) to tell what makes the bank refuse it (HSBC's 'reference: EAC')")
+    s.add_argument("--chrome-check", action="store_true", help="the Chrome builds on disk and running, and what is known about HSBC's 'reference: EAC'"); s.set_defaults(fn=cmd_import)
     s = sp.add_parser("sync"); s.add_argument("--item"); s.set_defaults(fn=cmd_sync)
     s = sp.add_parser("detect"); s.add_argument("--as-of"); s.add_argument("--only", nargs="*"); s.add_argument("--sql", metavar="NAME", help="print the assembled query"); s.add_argument("--prelude", action="store_true", help="print _prelude.sql, the CTEs every detector selects from")
     s.add_argument("--review", action="store_true"); s.add_argument("--tier", choices=["rules", "candidates"], default="candidates")

@@ -9,6 +9,7 @@ from finnamon import store
 from finnamon.daemon import bot_configured as REAL_BOT_CONFIGURED  # noqa: N812, F401 - the real guard, before the autouse fixture stubs it
 from finnamon.assistant import plugin_dir_problem as REAL_PLUGIN_DIR_PROBLEM  # noqa: N812 - the real guard, before the autouse fixture stubs it
 from finnamon.remote import tailscale_bin as REAL_TAILSCALE_BIN  # noqa: N812, F401 - for tests/test_remote.py
+from finnamon.cli import chrome_builds as REAL_CHROME_BUILDS, _ps as REAL_PS  # noqa: N812, F401 - for tests/test_import.py, under faked --version and ps
 from finnamon.scheduler import log_dir as REAL_LOG_DIR, unit_dir as REAL_UNIT_DIR  # noqa: N812 - for the tests of these themselves, under a scratch Path.home
 
 AS_OF = "2026-09-19 12:00:00"
@@ -58,6 +59,9 @@ def _not_inside_claude(monkeypatch, tmp_path):
     monkeypatch.setattr(daemon, "bot_configured", lambda: True)
     from finnamon import remote   # doctor asks tailscale; no test may reach the machine's real one (tests/test_remote.py fakes it)
     monkeypatch.setattr(remote, "tailscale_bin", lambda: None)
+    from finnamon import cli   # doctor and import --browser compare Chrome builds: never the developer's own Chrome and processes
+    monkeypatch.setattr(cli, "chrome_builds", lambda chrome: (None, set()))
+    monkeypatch.setattr(cli, "_ps", lambda: "")   # nor the machine's processes (a Chrome running on some profile)
     scratch_assistant()
 
 
