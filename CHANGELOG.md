@@ -3,6 +3,11 @@
 All notable changes to Finnamon are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.46.0.0] - 2026-10-06
+
+### Added
+- **Codex groundwork: the `finnamon` tool and the guards on Codex's tools.** `finnamon serve` now has a `finnamon(argv)` tool, the way a Codex assistant runs Finnamon commands. Codex's sandbox keeps its shell away from your data. The tool checks each command against the same allow and deny lists Claude Code uses, never prompts, and marks every call as the assistant's, so the human-only commands still refuse. The secret guard now also understands Codex's file edits and image reads, and blocks the call if it hits an error of its own. Phone approvals can read a Codex session's log. Codex still cannot be selected as the assistant; a Codex household needs the `mcp` extra (`uv tool install -e '.[mcp]'`), which `finnamon doctor` already checks.
+
 ## [0.45.0.0] - 2026-10-05
 
 ### Added
