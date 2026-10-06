@@ -6,7 +6,8 @@ time, most of it waiting on Plaid. Linux works too (systemd user units instead o
 Windows works through WSL2, as a Linux install: [Windows (WSL2)](#windows-wsl2) first, then these steps inside Ubuntu.
 
 Finnamon is a self-hosted personal tool: your bank data stays in a SQLite file on this machine, and the only
-outside services are Plaid (bank data), Telegram (messages to you) and Claude Code (the assistant).
+outside services are Plaid (bank data), Telegram (messages to you) and Claude Code (the assistant; or OpenAI's Codex, if
+you choose it at step 3).
 
 ## 0. What you need first
 
@@ -14,7 +15,7 @@ outside services are Plaid (bank data), Telegram (messages to you) and Claude Co
 |---|---|---|
 | macOS (or Linux with systemd) | the daemon, heartbeat and dashboard run as LaunchAgents / user units | |
 | Python 3.11+ and [uv](https://docs.astral.sh/uv/) | installs the `finnamon` command | `brew install uv` (or `pip install uv`) |
-| [Claude Code](https://claude.com/claude-code), logged in with a Pro or Max plan (or a Console account) | triage, every chat reply, and the dashboard's intercom are `claude` sessions | install it, run `claude` once and sign in |
+| [Claude Code](https://claude.com/claude-code), logged in with a Pro or Max plan (or a Console account) | triage, every chat reply, and the dashboard's intercom are `claude` sessions (or `codex` ones, if you pick OpenAI's Codex CLI at step 3 instead) | install it, run `claude` once and sign in |
 | Node 20.12+ | the web dashboard | `brew install node` |
 | A Telegram account and a bot of your own | alerts and chat | in Telegram, message [@BotFather](https://t.me/BotFather): `/newbot`, keep the token; then `/setprivacy` → Disable |
 | A Plaid account with Production access | reading your banks | [section 2](#2-plaid-the-slow-part) below: start this first, it can take a while |
@@ -93,8 +94,11 @@ shows the whole thing on a made-up household meanwhile.
    `finnamon init --plaid` (prompts for the client_id and secrets without echoing them; Enter keeps one already on file).
 2. **Telegram bot.** Paste the token; then open the link it prints and tap Start, which records the household
    chat. To add your partner later: `finnamon owner add <name>` (make a group with both of you and the bot). A partner who won't chat with the bot: `finnamon owner add <name> --no-telegram`; add their Telegram id later with `--user-id <id>`.
-3. **Claude Code.** Checks `claude` is installed and logged in, and writes the assistant's directory,
-   `~/.finnamon/assistant/` (its instructions, allow list and skills), and marks it trusted for Claude Code.
+3. **Assistant.** Checks `claude` is installed and logged in, and writes the assistant's directory,
+   `~/.finnamon/assistant/` (its instructions, allow list and skills), and marks it trusted for Claude Code. With OpenAI's
+   Codex CLI installed it first asks which runs the assistant (Enter keeps Claude Code); `codex` shares your Codex login,
+   writes Finnamon's own Codex config under `~/.finnamon/codex/` and selects it. Switch later with
+   `finnamon settings set assistant codex|claude`.
 4. **Dashboard.** `npm install` in `web/`.
 5. **Schedule.** Installs the LaunchAgents: the always-on daemon (syncs every 6 hours, detects, triages,
    notifies, reads Telegram), an hourly heartbeat, and the dashboard on `http://localhost:8888`.

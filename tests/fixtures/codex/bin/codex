@@ -6,7 +6,14 @@ real Codex 0.157 run printed (../exec.jsonl, recorded in the card-1 spike; CODEX
 CODEX_FAKE_LOG appends {argv, CODEX_HOME, HOME, FINNAMON_TRIAGE} per exec; CODEX_FAKE_EXIT makes it fail instead.
 `app-server` answers hooks/list and skills/list the way 0.157 does (keys `<config path>:<event>:<group>:<handler>`, a
 hook trusted when [hooks.state] pins its hash; skills under $HOME/.agents/skills are the user's). CODEX_FAKE_VERSION,
-CODEX_FAKE_LOGGED_OUT and CODEX_FAKE_NO_HOOKS steer version, login status and features list."""
+CODEX_FAKE_LOGGED_OUT and CODEX_FAKE_NO_HOOKS steer version, login status and features list.
+
+With no subcommand (or `resume [--no-daemon] <id>`) it is the TUI, in its pty, as far as web/codex.js reads it: a rollout
+under $CODEX_HOME/sessions/YYYY/MM/DD written at the first line typed, as 0.157 does (session_meta: cwd, source cli;
+`resume` appends to the id's file, or exits 1 with Codex's error when there is none), a prompt frame in DEC 2026 synchronized output, and per line typed
+(a bracketed paste, then Enter) a UserMessage item, a "Working (… esc to interrupt)" status, an AgentMessage "stub reply:
+<line>" and task_complete. A line containing "approve" first shows Codex's approval dialog and waits for y or n.
+CODEX_FAKE_TRUST_DIALOG shows the trust dialog at start instead of the prompt (until a key)."""
 import hashlib
 import json
 import os
@@ -88,6 +95,83 @@ elif args[:1] == ["exec"] and "--json" in args:
         sys.stdout.write(out)
         if '"turn.failed"' in out:
             sys.exit(1)
+elif not args or args[0].startswith("-") or args[0] == "resume":
+    import datetime
+    import time
+    import tty
+    import uuid
+    if os.environ.get("CODEX_FAKE_LOG"):
+        with open(os.environ["CODEX_FAKE_LOG"], "a") as f:
+            f.write(json.dumps({"argv": args, **{k: os.environ.get(k) for k in ("CODEX_HOME", "HOME", "FINNAMON_FROM_AGENT")}}) + "\n")
+    rest = [a for i, a in enumerate(args) if not a.startswith("-") and not (i and args[i - 1] in ("-c", "-C"))]
+    sessions = home / "sessions"
+    if rest[:1] == ["resume"]:
+        tid = rest[1]
+        found = sorted(sessions.glob(f"*/*/*/rollout-*-{tid}.jsonl"))
+        if not found:
+            print(f"Error: thread/resume failed: no rollout found for thread id {tid}", file=sys.stderr)
+            sys.exit(1)
+        rollout = found[0]
+    else:
+        tid = str(uuid.uuid4())
+        started = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        now = datetime.datetime.now()
+        rollout = sessions / now.strftime("%Y/%m/%d") / f"rollout-{now.strftime('%Y-%m-%dT%H-%M-%S')}-{tid}.jsonl"
+
+    def record(payload, kind="event_msg"):   # response_item: a tool call's line as it starts, its output as it returns
+        if not rollout.exists():   # 0.157 writes the rollout at the first line typed, not at start
+            rollout.parent.mkdir(parents=True, exist_ok=True)
+            rollout.write_text(json.dumps({"type": "session_meta", "payload": {"id": tid, "session_id": tid, "timestamp": started, "cwd": os.path.realpath(os.getcwd()),
+                                                                               "originator": "codex-tui", "source": "cli", "cli_version": "0.157.0"}}) + "\n")
+        with open(rollout, "a") as f:
+            f.write(json.dumps({"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(), "type": kind, "payload": payload}) + "\n")
+
+    def frame(text):
+        sys.stdout.write(f"\x1b[?2026h\x1b[2J\x1b[H{text}\x1b[?2026l")
+        sys.stdout.flush()
+
+    def key():
+        b = os.read(0, 1)
+        if not b:
+            sys.exit(0)
+        return b
+
+    tty.setraw(0)
+    prompt = "\u203a Ask Codex to do anything   ? for shortcuts"
+    if os.environ.get("CODEX_FAKE_TRUST_DIALOG"):
+        frame("Do you trust the contents of this directory?\r\n\u203a 1. Trust and continue\r\n  2. Quit\r\nPress enter to continue")
+        key()
+    frame(prompt)
+    line, paste = b"", False
+    while True:
+        c = key()
+        if c == b"\x1b":   # ESC[200~ / ESC[201~ bracket a paste
+            seq = c + b"".join(key() for _ in range(5))
+            paste = seq == b"\x1b[200~"
+            continue
+        if c != b"\r" or paste:
+            line += c
+            continue
+        text, line = line.decode("utf8", "replace").strip(), b""
+        if not text:
+            continue
+        record({"type": "task_started", "turn_id": "t"})
+        record({"type": "item_completed", "item": {"type": "UserMessage", "content": [{"type": "text", "text": text}]}})
+        frame(f"\u203a {text}\r\n\u2022 Working (0s \u2022 esc to interrupt)")
+        if "approve" in text:
+            record({"type": "custom_tool_call", "call_id": "call_1", "name": "exec", "input": "tools.exec_command({cmd: 'touch /outside/probe'})"}, "response_item")
+            time.sleep(0.2)
+            frame("Would you like to run the following command?\r\n$ touch /outside/probe\r\n\u203a 1. Yes, proceed (y)\r\n"
+                  "  2. No, and tell Codex what to do differently (esc)\r\nPress enter to confirm or esc to cancel")
+            ans = key()
+            frame(f"\u2714 You {'approved' if ans == b'y' else 'did not approve'} codex to run touch /outside/probe\r\n\u2022 Working (1s \u2022 esc to interrupt)")
+            record({"type": "custom_tool_call_output", "call_id": "call_1", "output": "Script completed"}, "response_item")
+            record({"type": "item_completed", "item": {"type": "CommandExecution", "command": ["/bin/bash", "-lc", "touch /outside/probe"], "exit_code": 0 if ans == b"y" else 1}})
+        time.sleep(0.2)
+        reply = f"stub reply: {text}"
+        record({"type": "item_completed", "item": {"type": "AgentMessage", "content": [{"type": "Text", "text": reply}]}})
+        record({"type": "task_complete", "turn_id": "t", "last_agent_message": reply})
+        frame(f"\u2022 {reply}\r\n\r\n{prompt}")
 else:
     print(f"stub codex: unsupported {args}", file=sys.stderr)
     sys.exit(2)

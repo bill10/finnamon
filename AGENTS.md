@@ -2,7 +2,7 @@
 
 This directory is the source of Finnamon, a personal finance assistant built on Claude: a daemon syncs the household's bank
 accounts through Plaid into a local SQLite database, SQL detectors raise alerts, a Telegram bot delivers them,
-and Claude Code is the assistant on top. **Working here means changing Finnamon, not being its assistant.**
+and Claude Code (or OpenAI's Codex, once `finnamon settings set assistant codex` picks it) is the assistant on top. **Working here means changing Finnamon, not being its assistant.**
 The assistant is a separate thing: its instructions, permission set and skills are the bundle under
 `finnamon/assistant_bundle/` (`CLAUDE.md`, `.claude/settings.json`, `.claude/skills/{finnamon,triage,import-browser}`),
 which `finnamon install`, `init` and `update` write to `~/.finnamon/assistant/`, and every `claude` Finnamon

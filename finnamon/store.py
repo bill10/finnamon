@@ -175,8 +175,6 @@ def validate_setting(key: str, value, ops: bool = False) -> str:
         v = str(value).strip().lower()
         if v not in CHOICE_SETTINGS[key]:
             raise ValueError(f"{key} must be one of {', '.join(CHOICE_SETTINGS[key])}")
-        if v == "codex":   # ponytail: refused until the dashboard card (5 of 6) lands; then this line goes
-            raise ValueError("Codex support is being built; the assistant stays claude for now")
         return v
     spec = SETTINGS.get(key) or (OPS_SETTINGS.get(key) if ops else None)
     if key in OPS_SETTINGS and not ops:

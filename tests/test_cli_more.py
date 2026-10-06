@@ -820,6 +820,17 @@ def test_install_only_asks_when_there_is_something_to_retire(home, capsys, monke
     assert f.exists() and ran == [1, 2, 3, 4], "a file we cannot read is left alone, and does not abort the install"
 
 
+def test_install_retires_a_codex_thread_with_codex_s_resume_and_keeps_its_cli(home, capsys, monkeypatch):
+    # Value: protects=a Codex household's retired thread stays reachable (codex resume, Finnamon's CODEX_HOME) and its record keeps the CLI; fails_when=install prints `claude --resume <codex id>` or drops kind, so server.js would read the record as Claude's; why_new=every retire test writes a Claude record; seam=none
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: [])
+    f = config.home() / "intercom.json"
+    tid = "01a10ede-2d6a-7e50-9545-fb0a1c756713"
+    f.write_text(json.dumps({"id": tid, "created": True, "kind": "codex", "prev": "11111111-2222-3333-4444-555555555555"}))
+    out = run_cli(capsys, "install", "--yes")
+    assert f"codex resume --no-daemon {tid}" in out and f"CODEX_HOME={config.home() / 'codex'}" in out and "claude --strict-mcp-config --resume" not in out
+    assert json.loads(f.read_text()) == {"prev": tid, "kind": "codex"}
+
+
 def test_install_without_a_terminal_refuses_rather_than_retiring(home, capsys, monkeypatch):
     """Nobody to answer is not the same as yes; the conversation is not dropped by a script that meant `update`."""
     monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: [])

@@ -78,7 +78,11 @@ def denied() -> list[str]:
     h, real = config.home(), Path.home()
     paths = [h / "secrets.toml", h / "finnamon.db", h / "finnamon.db-wal", h / "finnamon.db-shm", h / "finnamon.db-journal",
              h / "backups", config.web_token_path(), h / "web-hosts", h / config.INTERCOM_FILE, h / "imports", h / "chrome",
-             home() / "sessions", home() / "auth.json", user_auth(), real / ".agent-browser", real / ".claude" / "channels"]
+             home() / "sessions", home() / "auth.json", user_auth(), real / ".agent-browser", real / ".claude" / "channels",
+             # the person's own keys and logins: the dashboard's Codex session reads without asking inside its profile, and a
+             # phone turn's reply would carry whatever it read (the whole home, with tools granted back, is TODOS.md)
+             real / ".ssh", real / ".aws", real / ".gnupg", real / ".netrc", real / ".config" / "gh", real / ".kube",
+             real / ".claude" / ".credentials.json", real / ".claude.json", real / "Library" / "Keychains"]
     return list(dict.fromkeys(str(p) for p in paths))
 
 
@@ -330,6 +334,16 @@ def config_problems() -> list[str]:
         out.append(f"the {PROFILE} permission profile is not the default")
     if cfg.get("web_search") != "disabled" or (cfg.get("features") or {}).get("apps") is not False:
         out.append("web search or the ChatGPT-apps server is on")
+    if (cfg.get("features") or {}).get("hooks") is not True:
+        out.append("hooks are off, so neither the secret guard nor the phone's permission prompt runs")
+    if set(cfg.get("mcp_servers") or {}) - {"finnamon"}:
+        out.append(f"MCP servers other than finnamon are configured: {', '.join(sorted(set(cfg['mcp_servers']) - {'finnamon'}))}")
+    pol = cfg.get("shell_environment_policy") or {}
+    if any(k in pol for k in ("include_only", "exclude")) or (pol.get("set") or {}).get("FINNAMON_FROM_AGENT") != "1":
+        out.append("shell_environment_policy no longer marks tool commands as the assistant's (FINNAMON_FROM_AGENT)")
+    fs = ((cfg.get("permissions") or {}).get(PROFILE) or {}).get("filesystem") or {}
+    if (missing := [p for p in denied() if fs.get(p) != "deny"]):
+        out.append(f"the {PROFILE} profile no longer denies {missing[0]}" + (f" (and {len(missing) - 1} more)" if len(missing) > 1 else ""))
     if (assistant.dir() / ".codex").exists():   # a trusted project's own layer, which the command-line lock does not cover
         out.append(f"{assistant.dir() / '.codex'} exists: a project config there would apply over the sealed one")
     if ((cfg.get("projects") or {}).get(str(assistant.dir())) or {}).get("trust_level") != "trusted":

@@ -5,5 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 const home = mkdtempSync(join(tmpdir(), 'finnamon-web-test-'));
 process.env.FINNAMON_HOME = home;
+delete process.env.FINNAMON_CODEX_BIN; delete process.env.CLAUDE_BIN;   // server.js reads both at import: never a developer's own binaries
 delete process.env.PORT;   // the cookie is named by port; a shell with PORT exported must not rename it under the tests
 process.on('exit', () => rmSync(home, { recursive: true, force: true }));

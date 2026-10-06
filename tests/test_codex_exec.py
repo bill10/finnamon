@@ -16,7 +16,7 @@ STUB = CODEX / "bin" / "codex"
 
 @pytest.fixture
 def household(conn, monkeypatch, tmp_path):
-    """A Codex household (the setting written directly: `settings set` still refuses it until card 5), set up by install."""
+    """A Codex household (the setting written directly), set up by install."""
     monkeypatch.setenv("FINNAMON_CODEX_BIN", str(STUB))
     monkeypatch.setenv("CODEX_FAKE_LOG", str(tmp_path / "codex.log"))
     conn.execute("INSERT INTO settings(account_id, key, value) VALUES ('*', 'assistant', 'codex')")
