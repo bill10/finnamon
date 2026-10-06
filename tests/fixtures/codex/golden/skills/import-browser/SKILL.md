@@ -67,15 +67,14 @@ uploads the file to its dashboard, with the box's key from `FINNAMON_WEB_TOKEN` 
    names with balances). If `connect` fails, or the page is still the login form, say so plainly and stop -- do not
    retry in a loop and do not ask them to log in again more than once. When the bank refused the login outright
    (HSBC US: `/security`, "Something went wrong ... reference: EAC"), run `finnamon import --chrome-check <bank>` and
-   say its `eac` text to the person as it is. In short: nobody outside HSBC knows what EAC means; a new Chrome build, a
-   new device and an open debugging port have been ruled out, and the two causes left are Finnamon's own browser profile
-   (HSBC may now remember it as a bad device) and a DevTools client attached during the login (which is why you never
-   attach before they say they are in). The ways out, first one first: **Fetch without AI** in the dashboard's Import
-   CSV window (or `finnamon import --browser <bank> --no-cdp` in a terminal), which attaches nothing: they export the CSV
-   themselves and it is imported as it lands; **Reset browser profile** in that window (or
-   `finnamon import --browser --reset-profile`) and try again on a fresh profile; or the CSV from their everyday browser,
-   `finnamon import "<account>" ~/Downloads/<file>.csv` (with `--to <url>` if this computer is not the Finnamon box).
-   To find out which cause it is: `finnamon import --browser <bank> --diagnose` in a terminal (three logins by hand).
+   say its `eac` text to the person as it is. In short: nobody outside HSBC knows what EAC means; the Chrome build, a new
+   device, an open debugging port, Finnamon's browser profile and an early attach have all been ruled out, and the
+   launch that failed differed in how Chrome was started, which Finnamon has since changed. The ways out, first one
+   first: **Fetch without AI** in the dashboard's Import CSV window (or `finnamon import --browser <bank> --no-cdp` in a
+   terminal), which attaches nothing: they export the CSV themselves and it is imported as it lands; or the CSV from
+   their everyday browser, `finnamon import "<account>" ~/Downloads/<file>.csv` (with `--to <url>` if this computer is
+   not the Finnamon box). To find out more: `finnamon import --browser <bank> --diagnose` in a terminal (three logins by
+   hand, comparing how Chrome is started). **Reset browser profile** stays available but is not the fix.
 4. **Download the CSV** for each manual account at this bank. Navigate by reading the page (`snapshot -i`, refs)
    and clicking, never by guessing selectors. If the site offers no CSV for an account, say so and skip it.
    HSBC US, which is the bank this was built for, goes: the account tile on the dashboard -> its transaction list ->

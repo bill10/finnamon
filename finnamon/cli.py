@@ -913,7 +913,34 @@ CHROME = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "googl
 PORT_WAIT_SECONDS, POLL_SECONDS = 20.0, 0.2   # how long chrome_launch waits for Chrome to write DevToolsActivePort, and how often it looks
 
 
-def chrome_launch(chrome: str, profile: Path, url: str) -> tuple[str, str]:
+def chrome_spawn(chrome: str, profile: Path, url: str, port: bool, method: str | None = None, env: dict | None = None) -> str:
+    """Start Chrome on profile at url; returns how ("open" or "popen"). On macOS through LaunchServices, `open -na <app>
+    --args ...`, so Chrome starts like one the person opened, in their session's environment, never as a child of the
+    dashboard's launchd job with its stripped one (2026-10-05: Fetch by AI from the dashboard got EAC on a fresh profile
+    while the same build and flags from `open -na` in a shell passed). Elsewhere, or with method="popen", a child process
+    with env (default: this one's). --no-first-run: no welcome page in front of the bank's; not an automation switch."""
+    app = chrome.split(".app/")[0] + ".app" if ".app/" in chrome else None
+    method = method or ("open" if app and shutil.which("open") else "popen")
+    args = [f"--user-data-dir={profile}", *(["--remote-debugging-port=0"] if port else []), "--no-first-run", url]
+    try:   # --remote-debugging-port=0: the kernel picks a free one, so a Chrome the person already debugs on 9222 cannot collide
+        if method == "open":
+            subprocess.run(["open", "-na", app or chrome, "--args", *args], check=True, capture_output=True, timeout=30)
+        else:
+            subprocess.Popen([chrome, *args], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=env)
+    except (OSError, subprocess.SubprocessError) as e:
+        die(f"could not start Chrome: {e}")
+    return method
+
+
+def launch_env() -> dict:
+    """What --diagnose records about the environment a launch would inherit: locale, timezone, home, PATH, and whether this
+    process runs under launchd (the dashboard's job) rather than a terminal."""
+    e = os.environ
+    return {"LANG": e.get("LANG"), "LC_ALL": e.get("LC_ALL"), "TZ": e.get("TZ"), "HOME": e.get("HOME"), "PATH": e.get("PATH"),
+            "under_launchd": bool(e.get("XPC_SERVICE_NAME")) and not e.get("TERM")}
+
+
+def chrome_launch(chrome: str, profile: Path, url: str, method: str | None = None, env: dict | None = None) -> tuple[str, str]:
     """Open the bank's login page in real Chrome and return the CDP address of that window and the target id of its tab,
     or die().
 
@@ -924,11 +951,7 @@ def chrome_launch(chrome: str, profile: Path, url: str) -> tuple[str, str]:
     "unsupported command-line flag" banner -- and the session attaches afterwards (`connect`, in the grammar above)."""
     port_file = profile / "DevToolsActivePort"
     port_file.unlink(missing_ok=True)   # stale from the last run; we wait for Chrome to write a fresh one
-    try:   # --remote-debugging-port=0: the kernel picks a free one, so a Chrome the person already debugs on 9222 cannot collide
-        subprocess.Popen([chrome, f"--user-data-dir={profile}", "--remote-debugging-port=0", url],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    except OSError as e:
-        die(f"could not start Chrome: {e}")
+    chrome_spawn(chrome, profile, url, port=True, method=method, env=env)
     for _ in range(int(PORT_WAIT_SECONDS / POLL_SECONDS)):   # Chrome writes the port on startup; a profile another Chrome holds never gets there
         if port_file.exists() and (text := port_file.read_text().split("\n")[0].strip()).isdigit():
             for host in ("127.0.0.1", "[::1]"):   # which family it binds varies; take the one that answers
@@ -1026,17 +1049,17 @@ def chrome_builds(chrome: str) -> tuple[str | None, set[str]]:
 
 def eac_message(bank: str | None = None) -> str:
     """What to say about HSBC US's "Something went wrong ... reference: EAC" on /security. Nothing public says what EAC
-    means. Ruled out on 2026-10-05 by the owner's tests: a fresh profile on the new Chrome build logged in fine with no
-    port and again with a debugging port open (nothing attached). Left: Finnamon's own profile, which got EAC once and may
-    be remembered as a bad device, and a DevTools client attached during the login."""
+    means. The owner's tests on 2026-10-05 ruled out the Chrome build, a new device, an open debugging port, Finnamon's
+    profile and a client attached during the login; the one launch that failed differed in how Chrome was started (a child
+    of the dashboard's launchd job, with its stripped environment), which chrome_spawn now avoids on a Mac."""
     b = bank or "<bank>"
-    return ("HSBC's \"reference: EAC\" has two likely causes: Finnamon's own Chrome profile, which HSBC may now remember as a "
-            f"bad device (finnamon import --browser --reset-profile, or Reset browser profile in the dashboard, starts a fresh one), "
-            "or a DevTools client attached while you log in. A new Chrome build, a new device and an open debugging port were "
-            "ruled out on 2026-10-05 (a fresh profile on the new build logged in fine without and with a port). Ways out: Fetch "
-            f"without AI (finnamon import --browser {b} --no-cdp), which attaches nothing; reset the profile and retry; or the CSV "
-            f"from your everyday browser (finnamon import \"<account>\" ~/Downloads/<file>.csv). finnamon import --browser {b} "
-            "--diagnose tells the causes apart.")
+    return ("HSBC's \"reference: EAC\": nobody outside HSBC knows exactly what it means. Ruled out on 2026-10-05: a new Chrome "
+            "build, a new device, an open debugging port, Finnamon's browser profile, and a DevTools client attached during the "
+            "login. What differed in the launch that failed was how Chrome was started (by the dashboard's background job, "
+            "with a stripped environment), so Finnamon now starts it through macOS's LaunchServices, as if you had opened it. "
+            f"If it still fails: Fetch without AI (finnamon import --browser {b} --no-cdp), which attaches nothing; the CSV from "
+            f"your everyday browser (finnamon import \"<account>\" ~/Downloads/<file>.csv); and finnamon import --browser {b} "
+            "--diagnose in a terminal, which compares launch methods and records what it sees.")
 
 
 def build_mismatch(chrome: str) -> str | None:
@@ -1057,10 +1080,7 @@ def chrome_open(chrome: str, profile: Path, url: str) -> None:
     """Finnamon's profile at url with no debugging port and no switch of any kind: the window HSBC has been seen to accept."""
     if profile_in_use(profile):
         die("Finnamon's Chrome is still running: quit it (Cmd-Q on a Mac; closing the window leaves it running), then start again")
-    try:
-        subprocess.Popen([chrome, f"--user-data-dir={profile}", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    except OSError as e:
-        die(f"could not start Chrome: {e}")
+    chrome_spawn(chrome, profile, url, port=False)
 
 
 def pin_downloads(profile: Path, folder: Path) -> None:
@@ -1179,77 +1199,52 @@ def _asked(prompt: str) -> bool:
         return False
 
 
-DIAGNOSE_SESSION = "finnamon-diagnose"   # the agent-browser session --diagnose's third pass attaches with; never the import's
-
-
-def _agent_browser(*args: str) -> bool:
-    """One agent-browser call by the CLI itself (--diagnose only), with no AGENT_BROWSER_* from the shell. True on success."""
-    exe = shutil.which("agent-browser")
-    if not exe:
-        return False
-    env = {k: v for k, v in os.environ.items() if not k.startswith("AGENT_BROWSER_")}
-    try:
-        return subprocess.run([exe, "--session", DIAGNOSE_SESSION, *args], capture_output=True, text=True, timeout=60, env=env).returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-
-
-def chrome_diagnose(chrome: str, profile: Path, bank: str) -> dict:
-    """Tell the causes of a refused login apart by observation; the person logs in by hand every time.
-    1. Finnamon's profile, no debugging port. 2. Finnamon's profile, the port open as Fetch by AI opens it, nothing attached.
-    3. A fresh throwaway profile, the port open, and a DevTools client (agent-browser connect + tab) attached BEFORE the login.
-    1 and 2 fail: the profile (fresh profiles pass both ways, 2026-10-05), so --reset-profile. 1 and 2 pass, 3 fails: an
-    attached client is what trips it. Answers go to DIAGNOSE_FILE so runs on different days can be compared."""
+def chrome_diagnose(chrome: str, bank: str) -> dict:
+    """Tell the causes of a refused login apart by observation; the person logs in by hand every time, nothing is attached,
+    and each pass is a fresh throwaway profile with the debugging port open, as Fetch by AI opens it. The owner's tests on
+    2026-10-05 ruled out the build, a new device, an open port, Finnamon's profile and an early attach; what differed in the
+    one launch that failed was how Chrome was started. So: 1. a child process with a launchd-like stripped environment
+    (how the dashboard's job started it); 2. a child process with this terminal's environment; 3. LaunchServices (`open -na`,
+    macOS only), how Finnamon now starts it. Answers, methods and the environment go to DIAGNOSE_FILE."""
     url = BANK_LOGIN.get(bank.lower(), "about:blank")
     disk, running = chrome_builds(chrome)
+    env = launch_env()
     print(f"Chrome on disk: {disk or 'unknown'}; your open windows run: {', '.join(sorted(running)) or 'none this computer can see'}.")
+    print("This shell: " + ", ".join(f"{k}={v}" for k, v in env.items() if k != "PATH"))
+    stripped = {"PATH": scheduler.env_path(), "HOME": str(Path.home()), **{k: os.environ[k] for k in ("USER", "LOGNAME", "SHELL", "TMPDIR") if k in os.environ}}
+    passes = [("popen_launchd_env", "popen", stripped, "as a child process with the stripped environment the dashboard's launchd job has"),
+              ("popen_terminal_env", "popen", None, "as a child process with this terminal's environment")]
+    if ".app/" in chrome and shutil.which("open"):
+        passes.append(("open", "open", None, "through LaunchServices (open -na), how Finnamon starts it now"))
     quit_ = "Log off, then quit that Chrome (Cmd-Q on a Mac: closing the window leaves it running), then press Enter. "
     asked = "Did the login reach your accounts (no \"Something went wrong ... reference: EAC\")? [y/N] "
     results: dict = {}
-    for i, (label, port) in enumerate((("profile_no_port", False), ("profile_with_port", True)), 1):
-        print(f"\n{i}/3: Finnamon's own Chrome profile " + ("WITH the debugging port open (as Fetch by AI opens it)" if port else "with NO debugging port")
-              + f", at {bank}. Nothing is attached to it. Log in yourself.")
-        if profile_in_use(profile):
-            die("Finnamon's Chrome is still running: quit it (Cmd-Q), then run --diagnose again")
-        chrome_launch(chrome, profile, url) if port else chrome_open(chrome, profile, url)
-        results[label] = _asked(asked)
+    for i, (label, method, penv, how) in enumerate(passes, 1):
+        fresh = config.home() / f"chrome-diagnose-{label}-{int(time.time())}"
+        fresh.mkdir(mode=0o700, parents=True)
         try:
-            input(quit_)
-        except EOFError:
-            pass
-    fresh = config.home() / f"chrome-diagnose-{int(time.time())}"
-    fresh.mkdir(mode=0o700, parents=True)
-    try:
-        print(f"\n3/3: a fresh throwaway Chrome profile with the debugging port open, and a DevTools client attached to the tab "
-              f"BEFORE you log in (what Fetch by AI must never do). At {bank}. Log in yourself.")
-        cdp, tab = chrome_launch(chrome, fresh, url)
-        if _agent_browser("connect", cdp) and _agent_browser("tab", tab):
-            results["fresh_attached"] = _asked(asked)
-        else:
-            print("Could not attach (is agent-browser installed?); this pass is skipped.")
-            results["fresh_attached"] = None
-        _agent_browser("close")   # detaches; the browser stays up for the person to quit
-        try:
-            input(quit_)
-        except EOFError:
-            pass
-    finally:
-        shutil.rmtree(fresh, ignore_errors=True)   # a throwaway profile's cookies are a bank session's
-    r1, r2, r3 = results["profile_no_port"], results["profile_with_port"], results["fresh_attached"]
-    if not r1 and not r2:
-        verdict = ("Finnamon's Chrome profile: HSBC refuses it with and without the port, while fresh profiles pass. "
-                   "Run finnamon import --browser --reset-profile and try again.")
-    elif r1 and not r2:
-        verdict = ("the port on Finnamon's profile (a fresh profile passed with a port on 2026-10-05, so most likely the profile and "
-                   "the port together): reset the profile (--reset-profile), or use Fetch without AI (--no-cdp).")
-    elif not r1:
-        verdict = "inconclusive (it failed without the port and passed with it): run --diagnose again."
-    elif r3 is False:
-        verdict = ("a DevTools client attached during the login: the profile and the port pass on their own. Fetch by AI attaches only "
-                   "after you say you are in; use Fetch without AI (--no-cdp) until that is confirmed.")
+            print(f"\n{i}/{len(passes)}: a fresh throwaway Chrome profile, the debugging port open, nothing attached, started {how}. At {bank}. Log in yourself.")
+            chrome_launch(chrome, fresh, url, method=method, env=penv)
+            results[label] = _asked(asked)
+            try:
+                input(quit_)
+            except EOFError:
+                pass
+        finally:
+            shutil.rmtree(fresh, ignore_errors=True)   # a throwaway profile's cookies are a bank session's
+    r1, r2, r3 = results["popen_launchd_env"], results["popen_terminal_env"], results.get("open")
+    if not r1 and r2:
+        verdict = "the launch environment: refused with the dashboard's stripped environment, passed with this terminal's. Finnamon now starts Chrome through LaunchServices on a Mac, in your session's environment."
+    elif not r1 and not r2 and r3:
+        verdict = "starting Chrome as a child process: refused both ways, passed through LaunchServices (open -na), which is how Finnamon starts it now."
+    elif not r1 and not r2 and r3 is None:
+        verdict = "every launch was refused here; compare these flags with a launch that passes by hand."
+    elif r1 and r2 and r3 is not False:
+        verdict = "nothing reproduced it: every launch passed. Retry Fetch by AI (it now starts Chrome through LaunchServices on a Mac)."
     else:
-        verdict = "nothing reproduced it: every login passed. Retry Fetch by AI; if it fails, note whether it attached before you said you were in."
-    rec = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "bank": bank, "on_disk": disk, "running": sorted(running), **results, "verdict": verdict}
+        verdict = "inconclusive: the answers do not line up with one cause; run --diagnose again."
+    rec = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "bank": bank, "on_disk": disk, "running": sorted(running), "env": env,
+           "methods": {label: method for label, method, _, _ in passes}, **results, "verdict": verdict}
     f = config.home() / DIAGNOSE_FILE
     try:
         prev = json.loads(f.read_text())
@@ -1389,8 +1384,7 @@ def cmd_import(a) -> None:
             chrome = chrome_path()
             if not chrome:
                 die("Google Chrome not found; install it, or set FINNAMON_CHROME to its executable")
-            profile = _import_profile()
-            chrome_diagnose(chrome, profile, a.account); return
+            chrome_diagnose(chrome, a.account); return
         if a.no_cdp:   # no debugging port, no Claude: the person exports, Finnamon watches the folder and imports
             chrome = chrome_path()
             if not chrome:

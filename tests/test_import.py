@@ -886,11 +886,11 @@ def test_chrome_builds_reads_the_build_on_disk_and_the_ones_running(monkeypatch)
     assert cli.build_mismatch(APP) is None
 
 
-def test_eac_message_names_the_causes_left_and_the_ways_out(monkeypatch):
-    """The build, a new device and an open port were ruled out on 2026-10-05; the message says so and names what is left."""
+def test_eac_message_says_what_was_ruled_out_and_the_ways_out(monkeypatch):
+    """The owner's 2026-10-05 tests ruled out the build, a new device, an open port, the profile and an early attach; what
+    is left is how Chrome was started, which Finnamon changed. The message says so, and the ways out that attach nothing."""
     msg = cli.eac_message("hsbc")
-    assert "Finnamon's own Chrome profile" in msg and "DevTools client attached while you log in" in msg
-    assert "ruled out on 2026-10-05" in msg and "--reset-profile" in msg
+    assert "Ruled out on 2026-10-05" in msg and "Finnamon's browser profile" in msg and "LaunchServices" in msg
     assert "finnamon import --browser hsbc --no-cdp" in msg and "finnamon import --browser hsbc --diagnose" in msg
     _fake_chrome(monkeypatch, ps=PS)
     assert cli.build_mismatch(APP) == "Chrome updated to 154.0.8037.98; your open windows run 153.0.8010.53.", "a fact, no longer a suspect"
@@ -901,7 +901,7 @@ def test_chrome_check_is_the_sessions_way_to_explain_eac(home, capsys, monkeypat
     monkeypatch.setenv("FINNAMON_IMPORT_SESSION", "local")
     cli.main(["import", "--chrome-check", "hsbc"])
     got = json.loads(capsys.readouterr().out)
-    assert got["builds"] is None and "reset-profile" in got["eac"]
+    assert got["builds"] is None and "--no-cdp" in got["eac"]
 
 
 def test_reset_profile_moves_the_old_one_aside_and_starts_fresh(home, capsys, monkeypatch):
@@ -921,37 +921,50 @@ def test_reset_profile_moves_the_old_one_aside_and_starts_fresh(home, capsys, mo
         cli.main(["import", "--browser", "--reset-profile"])   # a person's decision, never the assistant's
 
 
-@pytest.mark.parametrize("answers,attached,verdict", [
-    (["n", "", "n", "", "y", ""], True, "Finnamon's Chrome profile"),
-    (["y", "", "n", "", "y", ""], True, "the port on Finnamon's profile"),
-    (["n", "", "y", "", "y", ""], True, "inconclusive"),
-    (["y", "", "y", "", "n", ""], True, "a DevTools client attached during the login"),
-    (["y", "", "y", "", "y", ""], True, "nothing reproduced it"),
-    (["y", "", "y", "", ""], False, "nothing reproduced it"),
+@pytest.mark.parametrize("answers,verdict", [
+    (["n", "", "y", "", "y", ""], "the launch environment"),
+    (["n", "", "n", "", "y", ""], "starting Chrome as a child process"),
+    (["y", "", "y", "", "y", ""], "nothing reproduced it"),
+    (["y", "", "n", "", "y", ""], "inconclusive"),
 ])
-def test_diagnose_isolates_the_cause_by_three_manual_logins(home, capsys, monkeypatch, answers, attached, verdict):
-    """--diagnose: Finnamon's profile with no port, then with one (nothing attached), then a fresh profile with a DevTools
-    client attached before the login. The person's answers decide; they are recorded with the builds, the throwaway
-    profile is removed, and no Claude session starts."""
-    started, launched, ab = [], [], []
+def test_diagnose_compares_launch_methods_by_manual_logins(home, capsys, monkeypatch, answers, verdict):
+    """--diagnose: three fresh throwaway profiles, port open, nothing attached, started as a child with a launchd-like
+    stripped environment, as a child with this terminal's, and through LaunchServices. The person's answers decide; the
+    methods and the environment are recorded, every throwaway profile is removed, and no Claude session starts."""
+    launched = []
     monkeypatch.setenv("FINNAMON_CHROME", sys.executable)
-    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: started.append(argv) or _FakePopen(argv))
-    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u: (launched.append(p), (CDP, TAB))[1])
-    monkeypatch.setattr(cli, "_agent_browser", lambda *a: ab.append(a) or attached)
+    monkeypatch.setenv("LANG", "en_US.UTF-8")
+    monkeypatch.setattr("finnamon.cli.chrome_path", lambda: APP)
+    monkeypatch.setattr("shutil.which", lambda c: "/usr/bin/open" if c == "open" else None)
+    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u, method=None, env=None: (launched.append((p, method, env)), (CDP, TAB))[1])
     monkeypatch.setattr("os.execve", lambda *a: pytest.fail("no Claude session"))
     monkeypatch.setattr(cli, "chrome_builds", lambda chrome: ("154.0.8037.98", {"153.0.8010.53"}))
     it = iter(answers)
     monkeypatch.setattr("builtins.input", lambda prompt="": next(it))
     cli.main(["import", "--browser", "hsbc", "--diagnose"])
     out = capsys.readouterr().out
-    assert len(started) == 1 and not any("remote-debugging" in a for a in started[0]), "1: no port at all"
-    assert launched[0] == home / "chrome" and launched[1] != home / "chrome", "2: Finnamon's profile with the port; 3: a fresh one"
-    assert not launched[1].exists(), "the throwaway profile is removed"
-    if attached:
-        assert ab[:2] == [("connect", CDP), ("tab", TAB)], "3: attached before the login question"
-    assert "154.0.8037.98" in out and verdict in out
+    assert [m for _, m, _ in launched] == ["popen", "popen", "open"]
+    stripped = launched[0][2]
+    assert stripped and "LANG" not in stripped and "TZ" not in stripped and stripped["HOME"], "the dashboard's job has no locale or timezone"
+    assert launched[1][2] is None, "this terminal's own environment"
+    assert len({p for p, _, _ in launched}) == 3 and not any(p.exists() or p == home / "chrome" for p, _, _ in launched), "fresh each time, removed after"
+    assert "LANG=en_US.UTF-8" in out and verdict in out
     rec = json.loads((home / cli.DIAGNOSE_FILE).read_text())[-1]
-    assert rec["bank"] == "hsbc" and verdict in rec["verdict"] and rec["fresh_attached"] == (answers[4] == "y" if attached else None)
+    assert rec["env"]["LANG"] == "en_US.UTF-8" and rec["methods"]["open"] == "open" and verdict in rec["verdict"]
+
+
+def test_chrome_starts_through_launchservices_on_a_mac(tmp_path, monkeypatch):
+    """`open -na <app> --args ...`: Chrome starts in the person's session environment, not as a child of the dashboard's
+    launchd job; the flags are the same as before plus --no-first-run, and still no automation switch."""
+    ran = []
+    monkeypatch.setattr("shutil.which", lambda c: "/usr/bin/open")
+    monkeypatch.setattr("subprocess.run", lambda argv, **kw: ran.append(argv))
+    monkeypatch.setattr("subprocess.Popen", lambda *a, **k: pytest.fail("not a child process on a Mac"))
+    assert cli.chrome_spawn(APP, tmp_path / "chrome", "https://www.us.hsbc.com/", port=True) == "open"
+    assert ran[-1] == ["open", "-na", "/Applications/Google Chrome.app", "--args", f"--user-data-dir={tmp_path / 'chrome'}",
+                       "--remote-debugging-port=0", "--no-first-run", "https://www.us.hsbc.com/"]
+    cli.chrome_spawn(APP, tmp_path / "chrome", "https://www.us.hsbc.com/", port=False)
+    assert "--remote-debugging-port=0" not in ran[-1] and not any("automation" in a or "headless" in a for a in ran[-1])
 
 
 def test_no_cdp_opens_a_port_less_window_and_imports_the_csv_that_lands(home, conn, capsys, monkeypatch):
