@@ -525,7 +525,7 @@ function renderImport(s) {
       `<input id="i-bal" class="num" placeholder="Balance now (optional)" inputmode="decimal" aria-label="Balance now" title="Some exports carry no running balance; the figure here becomes the account's balance in net worth">` +
       `<button class="del" id="i-del" aria-label="Remove the chosen account" title="Remove the chosen account and its transactions">${icon('trash')}</button></div>` +
       `<div id="i-prev" class="prev" hidden aria-live="polite"></div>` +
-      `<div class="eactions"><span class="err" id="i-err"></span><button class="quiet" id="i-fetch"${ON_BOX ? '' : ' disabled'} title="${ON_BOX ? 'Opens a browser window on this machine for you to log in; the file is downloaded and imported for you' : 'The browser window would open on the Finnamon box, not here: upload the CSV, or on this computer run finnamon import --browser <bank> --to ' + esc(location.origin)}">Fetch by AI</button><button class="primary" id="i-go" disabled>Import</button></div>` +
+      `<div class="eactions"><span class="err" id="i-err"></span><button class="quiet" id="i-fetch"${ON_BOX ? '' : ' disabled'} title="${ON_BOX ? 'Opens a browser window on this machine for you to log in; the file is downloaded and imported for you' : 'The browser window would open on the Finnamon box, not here: upload the CSV, or on this computer run finnamon import --browser <bank> --to ' + esc(location.origin)}">Fetch by AI</button><button class="quiet" id="i-hand"${ON_BOX ? '' : ' disabled'} title="No AI and no debugging port: a browser window opens at the bank, you download the CSV yourself, and it is imported as it lands (use this when the bank refuses Fetch by AI's login)">Fetch without AI</button><button class="primary" id="i-go" disabled>Import</button></div>` +
       (ON_BOX ? '' : `<p class="muted">Fetch by AI works on the Finnamon box itself; from here, upload the CSV, or run <code>finnamon import --browser &lt;bank&gt; --to ${esc(location.origin)}</code> on this computer, with <code>FINNAMON_WEB_TOKEN</code> set to what <code>finnamon web token</code> prints on the box.</p>`)
     : `<p class="muted">No manual account yet — add one below.</p>`) +
     `<h3 class="sep">Add a manual account<span class="hint">one per account; add as many as the bank has (HSBC Checking, HSBC Savings, HSBC Credit Card)</span></h3>` +
@@ -560,12 +560,14 @@ function renderImport(s) {
     try { await loadSummary(); } catch { $('i-err').textContent = `${a.name} was removed, but the page could not refresh. Reload to see the list.`; return; }
     renderImport(summary);
   });
-  $('i-fetch')?.addEventListener('click', async () => {   // its own Claude session in the panel's Import tab, never the household's
+  const fetchIt = (mode) => async () => {   // its own session in the panel's Import tab, never the household's
     const bank = $('i-acct').selectedOptions[0]?.dataset.bank;
-    const r = await api('POST', '/api/import/browser', { bank });
+    const r = await api('POST', '/api/import/browser', { bank, ...(mode ? { mode } : {}) });
     if (!r.ok) { $('i-err').textContent = r.error; return; }
     toggleImport(false); showView('import'); openIntercom(true);
-  });
+  };
+  $('i-fetch')?.addEventListener('click', fetchIt(null));
+  $('i-hand')?.addEventListener('click', fetchIt('no-cdp'));   // no AI, no debugging port: the CLI prints the steps and watches the folder
   // Before anything is saved: a dry run of the chosen file (the CLI's --dry-run, with --flip when the toggle is on) shows the first rows
   // and whether each reads as spending or money in. A file that parses to no rows is an error here, never a success.
   const post = (extra, text) => fetch(`/api/import?account=${encodeURIComponent($('i-acct').value)}${extra}`, { method: 'POST', headers: { 'content-type': 'text/csv' }, body: text });

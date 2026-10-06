@@ -941,3 +941,61 @@ def test_diagnose_isolates_the_cause_by_two_manual_logins(home, capsys, monkeypa
     assert "154.0.8037.98" in out and "153.0.8010.53" in out and verdict in out
     rec = json.loads((home / cli.DIAGNOSE_FILE).read_text())[-1]
     assert rec["bank"] == "hsbc" and rec["on_disk"] == "154.0.8037.98" and verdict in rec["verdict"]
+
+
+def test_no_cdp_opens_a_port_less_window_and_imports_the_csv_that_lands(home, conn, capsys, monkeypatch):
+    """--no-cdp: no debugging port, no Claude. Downloads are pinned to Finnamon's folder through the profile's Preferences
+    (the person's other settings kept), the steps for the bank are printed, and the first .csv to land there goes through
+    the ordinary import: a dry run, a y / flip / no, then the write, into the bank's manual account."""
+    from finnamon import imports as imp
+    seed(conn)
+    imp.add_account(conn, "HSBC Checking", "HSBC", "checking", "bill")
+    started = []
+    monkeypatch.setenv("FINNAMON_CHROME", sys.executable)
+    monkeypatch.setattr("os.execve", lambda *a: pytest.fail("no Claude session"))
+    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda *a: pytest.fail("no debugging port"))
+    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: started.append(argv) or _FakePopen(argv))
+    prefs = home / "chrome" / "Default" / "Preferences"
+    prefs.parent.mkdir(parents=True); prefs.write_text(json.dumps({"profile": {"name": "Finnamon"}, "download": {"prompt_for_download": True}}))
+    ticks = []
+
+    def sleep(_):   # the person exports: a partial download, then the finished file, then a tick with nothing new
+        ticks.append(1)
+        folder = home / "downloads"
+        if len(ticks) == 1:
+            (folder / "TransactionHistory.csv.crdownload").write_text("Date,")
+        elif len(ticks) == 2:
+            (folder / "TransactionHistory.csv").write_text(HSBC)
+    monkeypatch.setattr("time.sleep", sleep)
+    answers = iter(["f", "f", "y"])   # flip, flip back, import
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    cli.main(["import", "--browser", "hsbc", "--no-cdp"])
+    out = capsys.readouterr().out
+    assert len(started) == 1 and not any("remote-debugging" in a for a in started[0]) and "https://www.us.hsbc.com/" in started[0]
+    p = json.loads(prefs.read_text())
+    assert p["download"]["default_directory"] == str(home / "downloads") and p["download"]["prompt_for_download"] is False
+    assert p["profile"] == {"name": "Finnamon"}, "the rest of the profile's settings are kept"
+    assert (home / "downloads").stat().st_mode & 0o777 == 0o700
+    assert "Show more transactions" in out and "Spreadsheet CSV file" in out, "the bank's export steps, on screen"
+    rows = conn.execute("SELECT amount FROM transactions WHERE account_id LIKE 'manual:%' ORDER BY amount").fetchall()
+    assert len(rows) == 4 and rows[0][0] < 0, "imported once, signs as the file had them after flipping and flipping back"
+
+
+def test_no_cdp_refuses_a_bank_with_no_manual_account_and_keeps_a_declined_file(home, conn, capsys, monkeypatch):
+    seed(conn)
+    monkeypatch.setenv("FINNAMON_CHROME", sys.executable)
+    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: pytest.fail("no window without an account to fill"))
+    with pytest.raises(SystemExit):
+        cli.main(["import", "--browser", "hsbc", "--no-cdp"])
+    assert "no manual account at hsbc" in capsys.readouterr().err
+    from finnamon import imports as imp
+    imp.add_account(conn, "HSBC Checking", "HSBC", "checking", "bill")
+    imp.add_account(conn, "HSBC Savings", "HSBC", "savings", "bill")
+    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: _FakePopen(argv))
+    monkeypatch.setattr("time.sleep", lambda _: (home / "downloads" / "x.csv").write_text(HSBC))
+    answers = iter(["2", "n"])   # the savings account, then decline
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    with pytest.raises(SystemExit):
+        cli.main(["import", "--browser", "hsbc", "--no-cdp"])
+    assert "HSBC Savings" in capsys.readouterr().out and (home / "downloads" / "x.csv").exists()
+    assert conn.execute("SELECT count(*) FROM transactions WHERE account_id LIKE 'manual:%'").fetchone()[0] == 0

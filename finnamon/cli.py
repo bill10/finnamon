@@ -1043,6 +1043,113 @@ def build_mismatch(chrome: str, bank: str | None = None) -> str | None:
             f"({ATTACH_HOW}; then finnamon import --browser {bank or '<bank>'} --attach); or retry in a few days.")
 
 
+def chrome_open(chrome: str, profile: Path, url: str) -> None:
+    """Finnamon's profile at url with no debugging port and no switch of any kind: the window HSBC has been seen to accept."""
+    try:
+        subprocess.Popen([chrome, f"--user-data-dir={profile}", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError as e:
+        die(f"could not start Chrome: {e}")
+
+
+def pin_downloads(profile: Path, folder: Path) -> None:
+    """Point the profile's downloads at folder, no "Save as" dialog, by editing Default/Preferences before Chrome starts
+    (there is no command-line switch for it). Everything else in the file is kept.
+    ponytail: unverified whether Chrome's Secure Preferences ever resets these; if a file lands elsewhere, the person is told where we watch."""
+    prefs = profile / "Default" / "Preferences"
+    try:
+        data = json.loads(prefs.read_text())
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data.setdefault("download", {}).update({"default_directory": str(folder), "prompt_for_download": False, "directory_upgrade": True})
+    data.setdefault("savefile", {})["default_directory"] = str(folder)
+    prefs.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    prefs.write_text(json.dumps(data))
+
+
+BANK_STEPS = {"hsbc": ["Log in.", "Click the account's tile on the dashboard to open its transactions.",
+                       "Press \"Show more transactions\" until the list stops growing (the export takes only what is loaded; HSBC keeps about six months).",
+                       "Press \"Download\", choose \"Spreadsheet CSV file\", then \"Download\"."]}
+WATCH_SECONDS, WATCH_POLL = 1800.0, 1.0   # how long --no-cdp waits for the export, and how often it looks
+
+
+def wait_for_csv(folder: Path, since: float) -> Path:
+    """The newest .csv in folder written after `since`, once its size has stopped changing (Chrome writes a .crdownload
+    first and renames it, but a slow disk can still show a growing file), or die() after WATCH_SECONDS."""
+    last: tuple[Path, int] | None = None
+    for _ in range(int(WATCH_SECONDS / WATCH_POLL)):
+        new = sorted((f for f in folder.glob("*.csv") if f.stat().st_mtime >= since), key=lambda f: f.stat().st_mtime)
+        if new:
+            f, size = new[-1], new[-1].stat().st_size
+            if last == (f, size) and size:
+                return f
+            last = (f, size)
+        time.sleep(WATCH_POLL)
+    die(f"no CSV arrived in {folder} within {int(WATCH_SECONDS / 60)} minutes; if the browser saved it elsewhere, run finnamon import \"<account>\" <file.csv>")
+    return folder   # noqa: RET503 - die() exits
+
+
+def fetch_by_hand(chrome: str, profile: Path, bank: str, to: str) -> None:
+    """--no-cdp: no debugging port, no Claude, no DevTools at all. Finnamon's profile opens at the bank with its downloads
+    pinned to FINNAMON_HOME/downloads, the person logs in and exports the CSV themselves following the steps printed here,
+    and the newest file to land there goes through the ordinary import, dry run first, into the account they confirm."""
+    accounts = [r for r in (_http(to, "/api/summary").get("accounts", []) if to else
+                            [dict(r) for r in store.connect().execute("SELECT a.name, i.institution, i.source FROM accounts a JOIN items i ON i.item_id=a.item_id ORDER BY a.name")])
+                if r.get("source") == "manual" and str(r.get("institution") or "").lower() == bank.lower()]
+    if not accounts:
+        die(f'no manual account at {bank}: add one first (finnamon account add "{bank} Checking" --institution {bank})')
+    folder = config.home() / "downloads"
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    folder.chmod(0o700)   # bank statements
+    pin_downloads(profile, folder)
+    since = time.time()
+    chrome_open(chrome, profile, BANK_LOGIN.get(bank.lower(), "about:blank"))
+    steps = BANK_STEPS.get(bank.lower(), [f"Log in to {bank}.", "Open the account's transactions and export them as CSV."])
+    print(f"A Chrome window of Finnamon's own is open at {bank}, with no debugging port and nothing attached to it. In that window:")
+    for i, step in enumerate(steps, 1):
+        print(f"  {i}. {step}")
+    print(f"Waiting for the CSV in {folder} (Ctrl-C, or Stop in the dashboard, to give up)…")
+    f = wait_for_csv(folder, since)
+    if len(accounts) == 1:
+        name = accounts[0]["name"]
+    else:
+        print("Which account is this file for? " + "  ".join(f"{i}. {r['name']}" for i, r in enumerate(accounts, 1)))
+        try:
+            pick = input("Number: ").strip()
+        except EOFError:
+            pick = ""
+        if not pick.isdigit() or not 1 <= int(pick) <= len(accounts):
+            die(f"not imported; {f} is still there: finnamon import \"<account>\" {f}")
+        name = accounts[int(pick) - 1]["name"]
+    text = f.read_text(encoding="utf-8-sig", errors="replace")
+
+    def run(flip: bool, dry: bool) -> dict:
+        if to:
+            return _upload(to, name, text, flip=flip, dry_run=dry)
+        conn = store.connect()
+        return imports.apply(conn, imports.find_account(conn, name)["account_id"], imports.parse(text), flip=flip, dry_run=dry)
+    flip = False
+    while True:
+        try:
+            preview = run(flip, True)
+        except (ValueError, OSError, sqlite3.OperationalError) as e:
+            die(f"{f.name} did not read as an export: {e}")
+        print(json.dumps(preview, indent=1, default=str))
+        print("In the sample, money out (a purchase, a bill) should be positive and money in (pay) negative.")
+        try:
+            ans = input(f"Import {f.name} into {name}? [y = yes, f = flip the signs, N = no] ").strip().lower()
+        except EOFError:
+            ans = ""
+        if ans in ("f", "flip"):
+            flip = not flip
+            continue
+        if ans not in ("y", "yes"):
+            die(f"not imported; {f} is still there")
+        out(run(flip, False))
+        return
+
+
 DIAGNOSE_FILE = "chrome-diagnose.json"   # under FINNAMON_HOME: every --diagnose run's answers, newest last
 
 
@@ -1070,10 +1177,7 @@ def chrome_diagnose(chrome: str, profile: Path, bank: str) -> dict:
         if port:
             chrome_launch(chrome, profile, url)
         else:
-            try:
-                subprocess.Popen([chrome, f"--user-data-dir={profile}", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-            except OSError as e:
-                die(f"could not start Chrome: {e}")
+            chrome_open(chrome, profile, url)
         results[label] = _asked("Did the login reach your accounts (no \"Something went wrong ... reference: EAC\")? [y/N] ")
         try:
             input("Log off, quit that Chrome window (Cmd-Q / close it), then press Enter. ")
@@ -1186,6 +1290,14 @@ def browser_session_tools(to: str | None) -> tuple[list[str], list[str]]:
     return allowed, disallowed
 
 
+def _import_profile() -> Path:
+    """Finnamon's own Chrome profile, ~/.finnamon/chrome, 0700."""
+    profile = config.home() / "chrome"
+    profile.mkdir(mode=0o700, parents=True, exist_ok=True)
+    profile.chmod(0o700)   # mkdir's mode does not apply to a directory that already exists; it holds the bank's live cookies
+    return profile
+
+
 def cmd_import(a) -> None:
     """`finnamon import "<account>" <file.csv>`: a bank's export into a manual account, here or (`--to <url>`) on the Finnamon
     box through its dashboard. `--browser <bank>` starts the Claude session that fetches the file through a visible browser
@@ -1201,10 +1313,16 @@ def cmd_import(a) -> None:
             chrome = chrome_path()
             if not chrome:
                 die("Google Chrome not found; install it, or set FINNAMON_CHROME to its executable")
-            profile = config.home() / "chrome"
-            profile.mkdir(mode=0o700, parents=True, exist_ok=True)
-            profile.chmod(0o700)
+            profile = _import_profile()
             chrome_diagnose(chrome, profile, a.account); return
+        if a.no_cdp:   # no debugging port, no Claude: the person exports, Finnamon watches the folder and imports
+            chrome = chrome_path()
+            if not chrome:
+                die("Google Chrome not found; install it, or set FINNAMON_CHROME to its executable")
+            profile = _import_profile()
+            if to and not _box_key(to):
+                die(f"--to {KEY_HINT}")
+            fetch_by_hand(chrome, profile, a.account, to); return
         exe = claude_runner.binary()
         if not exe:
             die("claude is not on PATH")
@@ -1213,9 +1331,7 @@ def cmd_import(a) -> None:
             die("Google Chrome not found; install it, or set FINNAMON_CHROME to its executable" + (f" (not an executable: {os.environ['FINNAMON_CHROME']})" if os.environ.get("FINNAMON_CHROME") else ""))
         if (problems := assistant.problems()):   # before the window opens: a die() after chrome_launch leaves the bank browser up with nothing driving it
             die("\n".join(problems))
-        profile = config.home() / "chrome"
-        profile.mkdir(mode=0o700, parents=True, exist_ok=True)
-        profile.chmod(0o700)   # mkdir's mode does not apply to a directory that already exists; it holds the bank's live cookies
+        profile = _import_profile()
         if to and not _box_key(to):   # the sealed session could only meet the 401, and cannot set an env var, so refuse before a bank login is spent
             die(f"--to {KEY_HINT}")
         url = BANK_LOGIN.get(a.account.lower(), "about:blank")
@@ -2434,6 +2550,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--flip", action="store_true", help="the file shows money out as positive (some card exports); default: negative, as banks do"); s.add_argument("--dry-run", action="store_true", help="parse and report, write nothing")
     s.add_argument("--browser", action="store_true", help="open a Claude session that drives a visible browser: you log in, it downloads and imports"); s.add_argument("--to", metavar="URL", help="on another computer: the Finnamon box's dashboard URL; the file (or the browser session's result) is uploaded there, with FINNAMON_WEB_TOKEN set to the box's `finnamon web token`")
     s.add_argument("--attach", nargs="?", const=ATTACH_PORT, metavar="HOST:PORT", help="with --browser: open one new tab in the Chrome you already run with --remote-debugging-port (default 9222, loopback only) instead of Finnamon's own window; auto: that if one answers, else Finnamon's")
+    s.add_argument("--no-cdp", action="store_true", help="with --browser: no debugging port and no AI: Finnamon's Chrome opens at the bank, you export the CSV yourself, and the file is imported as it lands")
     s.add_argument("--diagnose", action="store_true", help="with --browser: log in by hand on Finnamon's Chrome profile twice, without and then with the debugging port, to tell what makes the bank refuse it (HSBC's 'reference: EAC')")
     s.add_argument("--chrome-check", action="store_true", help="say whether Chrome on disk is a newer build than the windows you have open (one possible cause of HSBC's 'reference: EAC')"); s.set_defaults(fn=cmd_import)
     s = sp.add_parser("sync"); s.add_argument("--item"); s.set_defaults(fn=cmd_sync)

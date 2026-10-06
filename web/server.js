@@ -391,9 +391,10 @@ export async function restartNotice({ inbound, intercom, send, now = Date.now() 
 // The CLI owns that session's argv (`finnamon import --browser` execs claude on the skill with its allow list), so the
 // server spawns the CLI rather than keeping a second copy of the list here. --attach=auto: when the person's own Chrome
 // answers on 9222 the bank opens in one new tab of it (the build they already run), else in Finnamon's own window.
-export function importCommand(bank) {
+// noCdp (Fetch without AI): no debugging port and no Claude; the person exports, the CLI watches the folder and imports.
+export function importCommand(bank, { noCdp = false } = {}) {
   const [bin, ...pre] = config.finnamon;
-  return { cmd: bin, args: [...pre, 'import', '--browser', '--attach=auto', '--', bank] };
+  return { cmd: bin, args: [...pre, 'import', '--browser', noCdp ? '--no-cdp' : '--attach=auto', '--', bank] };
 }
 
 // once: a session that ends when the process exits (the import), instead of one kept alive for the household (the intercom)
@@ -774,7 +775,7 @@ export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon',
     const bank = String(req.body?.bank ?? '').trim();   // the account's institution, as `finnamon account add` accepted it (up to MAX_NAME); it becomes a prompt, never a shell string
     if (!BANK_NAME.test(bank)) return res.status(400).json({ error: `a bank name is letters, digits, spaces and .&'- up to ${MAX_NAME} characters` });
     if (!startImport) return res.status(503).json({ error: 'this server has no session runner' });
-    try { startImport(bank); res.json({ ok: true }); } catch (e) { res.status(409).json({ error: e.message }); }
+    try { startImport(bank, { noCdp: req.body?.mode === 'no-cdp' }); res.json({ ok: true }); } catch (e) { res.status(409).json({ error: e.message }); }
   });
 
   // Plaid Link in the page: a plain token now, the public token back when the person has logged into the bank.
@@ -828,7 +829,7 @@ export function importRunner({ make = createSession, broadcast }) {
   let current = null;
   return {
     get current() { return current; },
-    start(bank) {
+    start(bank, opts) {
       if (current && current.session.state !== 'DOWN') throw new Error('an import session is still running; finish it or press Stop in the Import tab first');
       current?.stop();
       // `let`, not `const`: the callbacks fire inside make() (the first WORKING, a spawn that fails) before `own` is assigned.
@@ -836,7 +837,7 @@ export function importRunner({ make = createSession, broadcast }) {
       let own;
       // cwd: the checkout, not the assistant directory: this spawns the finnamon CLI (in development "python3 -m finnamon.cli",
       // which imports from the checkout), and cmd_import moves itself into the assistant directory before exec'ing claude.
-      own = make({ ...importCommand(bank), cwd: config.repo, once: true, onOutput: (data) => own?.orphan || broadcast({ type: 'output', session: 'import', data }),
+      own = make({ ...importCommand(bank, opts), cwd: config.repo, once: true, onOutput: (data) => own?.orphan || broadcast({ type: 'output', session: 'import', data }),
         onState: (state) => { if (own?.orphan) return; broadcast({ type: 'state', session: 'import', state }); if (state === 'DOWN' && own && current === own) { own.stop(); current = null; } } });
       current = own;
       return own;
@@ -920,7 +921,7 @@ export async function main() {
                             since: () => term?.session.startedAt || 0, transcript: sessionTranscript, read, open });
   const relay = createRelay({ write: (d) => term?.write(d), idle: () => term?.session.state === 'WAITING', asking: () => term?.session.state === 'QUESTION',
                               since: () => term?.session.startedAt || 0, transcript: sessionTranscript, read, open });
-  const app = buildApp({ inbound, allowHost: lo.host, allowOrigin: lo.origin, startImport: (bank) => imports.start(bank), talk, relay, update: process.env.FINNAMON_DEMO ? null : updater() });   // a demo has nothing to update: `finnamon update` would act on the household
+  const app = buildApp({ inbound, allowHost: lo.host, allowOrigin: lo.origin, startImport: (bank, opts) => imports.start(bank, opts), talk, relay, update: process.env.FINNAMON_DEMO ? null : updater() });   // a demo has nothing to update: `finnamon update` would act on the household
   const server = createServer(app);
   // A browser sends the page's Origin; a non-browser client on this machine (wscat, a test) sends none. Any other origin
   // is a hostile tab, whatever Host it managed to resolve to. Either way the handshake carries the key or is refused.
