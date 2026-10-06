@@ -778,6 +778,11 @@ export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon',
     try { startImport(bank, { noCdp: req.body?.mode === 'no-cdp' }); res.json({ ok: true }); } catch (e) { res.status(409).json({ error: e.message }); }
   });
 
+  // Reset browser profile: Finnamon's Chrome profile moved aside for a fresh one (HSBC may remember one that got "reference: EAC").
+  app.post('/api/import/reset-profile', async (_req, res) => {
+    try { res.json(await call('import', '--browser', '--reset-profile')); } catch (e) { fail(res, e); }
+  });
+
   // Plaid Link in the page: a plain token now, the public token back when the person has logged into the bank.
   // Plaid takes an HTTPS redirect only, so the page's own address is sent as the OAuth return just when it is served over
   // TLS (tailscale serve; README says to register it); on plain http, OAuth banks open in a popup instead.

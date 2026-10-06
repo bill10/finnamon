@@ -1024,25 +1024,27 @@ def chrome_builds(chrome: str) -> tuple[str | None, set[str]]:
     return disk, running
 
 
-EAC_CAUSES = ("the likelier cause of a refused login is the debugging port Finnamon opens its window with (a fresh Chrome "
-              "on the new build and a brand-new profile, with no port, has logged in to HSBC fine), and Finnamon's profile "
-              "reading as a new device is a third suspect; finnamon import --browser {bank} --diagnose tells them apart")
+def eac_message(bank: str | None = None) -> str:
+    """What to say about HSBC US's "Something went wrong ... reference: EAC" on /security. Nothing public says what EAC
+    means. Ruled out on 2026-10-05 by the owner's tests: a fresh profile on the new Chrome build logged in fine with no
+    port and again with a debugging port open (nothing attached). Left: Finnamon's own profile, which got EAC once and may
+    be remembered as a bad device, and a DevTools client attached during the login."""
+    b = bank or "<bank>"
+    return ("HSBC's \"reference: EAC\" has two likely causes: Finnamon's own Chrome profile, which HSBC may now remember as a "
+            f"bad device (finnamon import --browser --reset-profile, or Reset browser profile in the dashboard, starts a fresh one), "
+            "or a DevTools client attached while you log in. A new Chrome build, a new device and an open debugging port were "
+            "ruled out on 2026-10-05 (a fresh profile on the new build logged in fine without and with a port). Ways out: Fetch "
+            f"without AI (finnamon import --browser {b} --no-cdp), which attaches nothing; reset the profile and retry; or the CSV "
+            f"from your everyday browser (finnamon import \"<account>\" ~/Downloads/<file>.csv). finnamon import --browser {b} "
+            "--diagnose tells the causes apart.")
 
 
-def build_mismatch(chrome: str, bank: str | None = None) -> str | None:
-    """What to tell the person when Chrome on disk is newer than the windows they have open, or None. HSBC US's risk engine
-    (Transmit Security) fails the login on /security, "reference: EAC"; nothing public says what EAC means. A build it has
-    not seen is the weakest suspect (2026-10-05: a throwaway profile on the new build with no port logged in fine), the
-    open debugging port the strongest, so the message says both and points at --diagnose."""
+def build_mismatch(chrome: str) -> str | None:
+    """"Chrome updated to X; your open windows run Y", or None. A fact for --chrome-check and --diagnose, no longer a
+    suspect for EAC (eac_message)."""
     disk, running = chrome_builds(chrome)
     old = sorted(running - {disk}) if disk else []
-    if not old:
-        return None
-    who = "HSBC" if (bank or "").lower() == "hsbc" else "A bank's risk engine (HSBC's may)"
-    return (f"Chrome updated to {disk}; your open windows run {', '.join(old)}. {who} may reject a build it hasn't seen, but "
-            + EAC_CAUSES.format(bank=bank or "<bank>") + ". Options: import the CSV from your everyday browser (log in there, download the export, then "
-            f'finnamon import "<account>" ~/Downloads/<file>.csv); relaunch Chrome with the debug port and use --attach '
-            f"({ATTACH_HOW}; then finnamon import --browser {bank or '<bank>'} --attach); or retry in a few days.")
+    return f"Chrome updated to {disk}; your open windows run {', '.join(old)}." if old else None
 
 
 def profile_in_use(profile: Path) -> bool:
@@ -1177,40 +1179,76 @@ def _asked(prompt: str) -> bool:
         return False
 
 
+DIAGNOSE_SESSION = "finnamon-diagnose"   # the agent-browser session --diagnose's third pass attaches with; never the import's
+
+
+def _agent_browser(*args: str) -> bool:
+    """One agent-browser call by the CLI itself (--diagnose only), with no AGENT_BROWSER_* from the shell. True on success."""
+    exe = shutil.which("agent-browser")
+    if not exe:
+        return False
+    env = {k: v for k, v in os.environ.items() if not k.startswith("AGENT_BROWSER_")}
+    try:
+        return subprocess.run([exe, "--session", DIAGNOSE_SESSION, *args], capture_output=True, text=True, timeout=60, env=env).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def chrome_diagnose(chrome: str, profile: Path, bank: str) -> dict:
-    """Tell the causes of a refused login apart by observation: the person logs in by hand on Finnamon's profile twice,
-    first with no debugging port at all, then with the port open as Fetch by AI opens it. Nothing attaches either time.
-    Port-less fails too: not the port (the build, or the profile reading as a new device; the builds printed alongside
-    say which is likelier). Only the port run fails: the port. Both pass: neither, so it was the attaching or a passing
-    flag. Answers are kept in DIAGNOSE_FILE so a second run days later (after the build ages) can be compared."""
+    """Tell the causes of a refused login apart by observation; the person logs in by hand every time.
+    1. Finnamon's profile, no debugging port. 2. Finnamon's profile, the port open as Fetch by AI opens it, nothing attached.
+    3. A fresh throwaway profile, the port open, and a DevTools client (agent-browser connect + tab) attached BEFORE the login.
+    1 and 2 fail: the profile (fresh profiles pass both ways, 2026-10-05), so --reset-profile. 1 and 2 pass, 3 fails: an
+    attached client is what trips it. Answers go to DIAGNOSE_FILE so runs on different days can be compared."""
     url = BANK_LOGIN.get(bank.lower(), "about:blank")
     disk, running = chrome_builds(chrome)
     print(f"Chrome on disk: {disk or 'unknown'}; your open windows run: {', '.join(sorted(running)) or 'none this computer can see'}.")
-    results = {}
-    for label, port in (("no_port", False), ("with_port", True)):
-        print(f"\n{'2' if port else '1'}/2: a window of Finnamon's own Chrome profile "
-              + ("WITH the debugging port open (as Fetch by AI opens it)" if port else "with NO debugging port")
+    quit_ = "Log off, then quit that Chrome (Cmd-Q on a Mac: closing the window leaves it running), then press Enter. "
+    asked = "Did the login reach your accounts (no \"Something went wrong ... reference: EAC\")? [y/N] "
+    results: dict = {}
+    for i, (label, port) in enumerate((("profile_no_port", False), ("profile_with_port", True)), 1):
+        print(f"\n{i}/3: Finnamon's own Chrome profile " + ("WITH the debugging port open (as Fetch by AI opens it)" if port else "with NO debugging port")
               + f", at {bank}. Nothing is attached to it. Log in yourself.")
-        if port:
-            if profile_in_use(profile):
-                die("Finnamon's Chrome is still running: quit it (Cmd-Q), then run --diagnose again")
-            chrome_launch(chrome, profile, url)
-        else:
-            chrome_open(chrome, profile, url)
-        results[label] = _asked("Did the login reach your accounts (no \"Something went wrong ... reference: EAC\")? [y/N] ")
+        if profile_in_use(profile):
+            die("Finnamon's Chrome is still running: quit it (Cmd-Q), then run --diagnose again")
+        chrome_launch(chrome, profile, url) if port else chrome_open(chrome, profile, url)
+        results[label] = _asked(asked)
         try:
-            input("Log off, then quit that Chrome (Cmd-Q on a Mac: closing the window leaves it running), then press Enter. ")
+            input(quit_)
         except EOFError:
             pass
-    if results["no_port"] and not results["with_port"]:
-        verdict = "the debugging port: the login passes without it and fails with it. --attach opens a port too, so import the CSV from your everyday browser by hand."
-    elif not results["no_port"] and not results["with_port"]:
-        verdict = ("not the port: it fails without one too. It may be the new Chrome build (" + ("yours differs from the open windows'" if running - {disk} else "the builds match, so less likely")
-                   + ") or Finnamon's profile reading as a new device. --attach uses your everyday profile and its running build; or import the CSV by hand, or retry in a few days.")
-    elif results["no_port"] and results["with_port"]:
-        verdict = "neither the port nor the profile: both logins passed. Retry Fetch by AI; if it fails again, it is the attaching, so import the CSV by hand."
-    else:
+    fresh = config.home() / f"chrome-diagnose-{int(time.time())}"
+    fresh.mkdir(mode=0o700, parents=True)
+    try:
+        print(f"\n3/3: a fresh throwaway Chrome profile with the debugging port open, and a DevTools client attached to the tab "
+              f"BEFORE you log in (what Fetch by AI must never do). At {bank}. Log in yourself.")
+        cdp, tab = chrome_launch(chrome, fresh, url)
+        if _agent_browser("connect", cdp) and _agent_browser("tab", tab):
+            results["fresh_attached"] = _asked(asked)
+        else:
+            print("Could not attach (is agent-browser installed?); this pass is skipped.")
+            results["fresh_attached"] = None
+        _agent_browser("close")   # detaches; the browser stays up for the person to quit
+        try:
+            input(quit_)
+        except EOFError:
+            pass
+    finally:
+        shutil.rmtree(fresh, ignore_errors=True)   # a throwaway profile's cookies are a bank session's
+    r1, r2, r3 = results["profile_no_port"], results["profile_with_port"], results["fresh_attached"]
+    if not r1 and not r2:
+        verdict = ("Finnamon's Chrome profile: HSBC refuses it with and without the port, while fresh profiles pass. "
+                   "Run finnamon import --browser --reset-profile and try again.")
+    elif r1 and not r2:
+        verdict = ("the port on Finnamon's profile (a fresh profile passed with a port on 2026-10-05, so most likely the profile and "
+                   "the port together): reset the profile (--reset-profile), or use Fetch without AI (--no-cdp).")
+    elif not r1:
         verdict = "inconclusive (it failed without the port and passed with it): run --diagnose again."
+    elif r3 is False:
+        verdict = ("a DevTools client attached during the login: the profile and the port pass on their own. Fetch by AI attaches only "
+                   "after you say you are in; use Fetch without AI (--no-cdp) until that is confirmed.")
+    else:
+        verdict = "nothing reproduced it: every login passed. Retry Fetch by AI; if it fails, note whether it attached before you said you were in."
     rec = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "bank": bank, "on_disk": disk, "running": sorted(running), **results, "verdict": verdict}
     f = config.home() / DIAGNOSE_FILE
     try:
@@ -1221,6 +1259,21 @@ def chrome_diagnose(chrome: str, profile: Path, bank: str) -> dict:
     f.chmod(0o600)
     print(f"\nLikely cause: {verdict}\n(recorded in {f})")
     return rec
+
+
+def reset_profile() -> dict:
+    """Move Finnamon's Chrome profile aside (it holds the bank's cookies, so it stays 0700 where it lands) and start an empty
+    one: HSBC may remember a profile that got EAC as a bad device. Refused while a Chrome runs on it."""
+    profile = config.home() / "chrome"
+    if profile_in_use(profile):
+        die("Finnamon's Chrome is still running: quit it (Cmd-Q on a Mac; closing the window leaves it running), then reset")
+    old = None
+    if profile.exists():
+        old = profile.with_name(f"chrome.old-{time.strftime('%Y%m%d-%H%M%S')}")
+        profile.rename(old)
+    _import_profile()
+    return {"profile": str(profile), "moved_to": str(old) if old else None,
+            "next": "the next browser fetch starts on a fresh profile; delete the old folder once that works (it holds the bank's cookies)"}
 
 
 def chrome_path() -> str | None:
@@ -1327,8 +1380,10 @@ def cmd_import(a) -> None:
     if a.browser:
         if _from_agent():
             die("the browser import is its own Claude session; run `finnamon import --browser <bank>` in a terminal")
+        if a.reset_profile:   # no bank needed: the profile is one for every bank
+            out(reset_profile()); return
         if not a.account:
-            die("usage: finnamon import --browser <bank> [--to <url>] [--attach [host:port] | --no-cdp | --diagnose]"
+            die("usage: finnamon import --browser <bank> [--to <url>] [--attach [host:port] | --no-cdp | --diagnose]   |   finnamon import --browser --reset-profile"
                 + ("   (--attach takes the address that follows it: put the bank first, or write --attach=<host:port>)" if a.attach else ""))
         if a.diagnose:   # no Claude, no session: a person, two logins, and what they saw
             chrome = chrome_path()
@@ -1357,8 +1412,6 @@ def cmd_import(a) -> None:
             die(f"--to {KEY_HINT}")
         url = BANK_LOGIN.get(a.account.lower(), "about:blank")
         attached = chrome_attach(ATTACH_PORT if a.attach == "auto" else a.attach, url, required=a.attach != "auto") if a.attach else None
-        if not attached and chrome and (msg := build_mismatch(chrome, a.account)):   # Finnamon's window is a fresh launch, so it runs the build on disk
-            print(f"note: {msg}", file=sys.stderr)   # a note, not a stop: the build is the weakest suspect
         cdp, tab = attached or chrome_launch(chrome, profile, url)
         (config.home() / IMPORT_TAB_FILE).unlink(missing_ok=True)   # bound again by this session's own `tab <id>`, never by the last one's
         prompt = f"/import-browser {a.account}" + (f" --to {to}" if to else "") + f" --cdp {cdp} --tab {tab}" + (" --attach" if attached else "")
@@ -1389,7 +1442,7 @@ def cmd_import(a) -> None:
     if a.chrome_check:   # the import session's way to explain "reference: EAC": it cannot run ps or Chrome itself
         chrome = chrome_path()
         disk, running = chrome_builds(chrome) if chrome else (None, set())
-        out({"on_disk": disk, "running": sorted(running), "message": build_mismatch(chrome, a.account) if chrome else None}); return
+        out({"on_disk": disk, "running": sorted(running), "builds": build_mismatch(chrome) if chrome else None, "eac": eac_message(a.account)}); return
     if not a.account or not a.file:
         die('usage: finnamon import "<account>" <file.csv> [--balance N] [--flip] [--dry-run] [--to <url>]   |   finnamon import --browser <bank> [--to <url>]')
     path = Path(a.file).expanduser()
@@ -1789,8 +1842,6 @@ def cmd_doctor(a) -> None:
                "session": "session (default): the daemon types the chat into the dashboard's intercom session" + ("" if web else ", but the dashboard is not installed"),
                "channel": "channel: Claude Code's Telegram channel plugin in the dashboard's session reads the chat"}.get(mode, mode),
               "cd web && npm install && finnamon install, or finnamon channel off")
-    if (chrome := chrome_path()) and (msg := build_mismatch(chrome)):   # Fetch by AI's own window would run the new build
-        check(None, "Chrome (Fetch by AI)", msg)
     strays = _stray_plugin_report()
     if strays:
         check(False, "Telegram plugin", "registered outside the assistant: " + ", ".join(strays["stray_telegram_plugins"]), strays["stray_telegram_plugins_fix"])
@@ -2572,8 +2623,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--browser", action="store_true", help="open a Claude session that drives a visible browser: you log in, it downloads and imports"); s.add_argument("--to", metavar="URL", help="on another computer: the Finnamon box's dashboard URL; the file (or the browser session's result) is uploaded there, with FINNAMON_WEB_TOKEN set to the box's `finnamon web token`")
     s.add_argument("--attach", nargs="?", const=ATTACH_PORT, metavar="HOST:PORT", help="with --browser: open one new tab in the Chrome you already run with --remote-debugging-port (default 9222, loopback only) instead of Finnamon's own window; auto: that if one answers, else Finnamon's")
     s.add_argument("--no-cdp", action="store_true", help="with --browser: no debugging port and no AI: Finnamon's Chrome opens at the bank, you export the CSV yourself, and the file is imported as it lands")
-    s.add_argument("--diagnose", action="store_true", help="with --browser: log in by hand on Finnamon's Chrome profile twice, without and then with the debugging port, to tell what makes the bank refuse it (HSBC's 'reference: EAC')")
-    s.add_argument("--chrome-check", action="store_true", help="say whether Chrome on disk is a newer build than the windows you have open (one possible cause of HSBC's 'reference: EAC')"); s.set_defaults(fn=cmd_import)
+    s.add_argument("--reset-profile", action="store_true", help="with --browser: move Finnamon's Chrome profile aside and start a fresh one (HSBC may remember one that got 'reference: EAC')")
+    s.add_argument("--diagnose", action="store_true", help="with --browser: log in by hand three times (Finnamon's profile without and with the debugging port, then a fresh profile with a DevTools client attached) to tell what makes the bank refuse it (HSBC's 'reference: EAC')")
+    s.add_argument("--chrome-check", action="store_true", help="the Chrome builds on disk and running, and what is known about HSBC's 'reference: EAC'"); s.set_defaults(fn=cmd_import)
     s = sp.add_parser("sync"); s.add_argument("--item"); s.set_defaults(fn=cmd_sync)
     s = sp.add_parser("detect"); s.add_argument("--as-of"); s.add_argument("--only", nargs="*"); s.add_argument("--sql", metavar="NAME", help="print the assembled query"); s.add_argument("--prelude", action="store_true", help="print _prelude.sql, the CTEs every detector selects from")
     s.add_argument("--review", action="store_true"); s.add_argument("--tier", choices=["rules", "candidates"], default="candidates")

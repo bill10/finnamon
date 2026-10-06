@@ -877,77 +877,81 @@ def test_chrome_builds_reads_the_build_on_disk_and_the_ones_running(monkeypatch)
     _fake_chrome(monkeypatch, ps=PS)
     assert cli.chrome_builds(APP) == ("154.0.8037.98", {"153.0.8010.53"}), "only this Chrome's helpers count, not another app's framework"
     _fake_chrome(monkeypatch, ps=PS.replace("153.0.8010.53", "154.0.8037.98"))
-    assert cli.build_mismatch(APP, "hsbc") is None, "the windows already run the build on disk"
+    assert cli.build_mismatch(APP) is None, "the windows already run the build on disk"
     _fake_chrome(monkeypatch, ps="")
-    assert cli.build_mismatch(APP, "hsbc") is None, "no Chrome running: nothing to compare"
+    assert cli.build_mismatch(APP) is None, "no Chrome running: nothing to compare"
     _fake_chrome(monkeypatch, ps=PS)
-    assert cli.build_mismatch("/usr/bin/google-chrome", "hsbc") is None, "no Versions/ path off macOS: never a claim it cannot check"
+    assert cli.build_mismatch("/usr/bin/google-chrome") is None, "no Versions/ path off macOS: never a claim it cannot check"
     _fake_chrome(monkeypatch, disk="", ps=PS)
-    assert cli.build_mismatch(APP, "hsbc") is None
+    assert cli.build_mismatch(APP) is None
 
 
-def test_build_mismatch_says_what_happened_and_the_three_ways_out(monkeypatch):
+def test_eac_message_names_the_causes_left_and_the_ways_out(monkeypatch):
+    """The build, a new device and an open port were ruled out on 2026-10-05; the message says so and names what is left."""
+    msg = cli.eac_message("hsbc")
+    assert "Finnamon's own Chrome profile" in msg and "DevTools client attached while you log in" in msg
+    assert "ruled out on 2026-10-05" in msg and "--reset-profile" in msg
+    assert "finnamon import --browser hsbc --no-cdp" in msg and "finnamon import --browser hsbc --diagnose" in msg
     _fake_chrome(monkeypatch, ps=PS)
-    msg = cli.build_mismatch(APP, "hsbc")
-    assert msg.startswith("Chrome updated to 154.0.8037.98; your open windows run 153.0.8010.53. HSBC may reject a build it hasn't seen, but ")
-    assert "likelier cause of a refused login is the debugging port" in msg and "new device" in msg and "finnamon import --browser hsbc --diagnose" in msg, "a hypothesis, said as one, with the other two suspects"
-    assert "rejects" not in msg
-    assert 'finnamon import "<account>" ~/Downloads/<file>.csv' in msg, "the CSV from the everyday browser, and how"
-    assert 'open -a "Google Chrome" --args --remote-debugging-port=9222' in msg and "finnamon import --browser hsbc --attach" in msg
-    assert msg.endswith("or retry in a few days.")
-    assert "HSBC's may" in cli.build_mismatch(APP, "Ally"), "another bank: the same facts, not a claim about that bank"
+    assert cli.build_mismatch(APP) == "Chrome updated to 154.0.8037.98; your open windows run 153.0.8010.53.", "a fact, no longer a suspect"
 
 
-def test_import_browser_says_so_before_opening_a_window_on_a_newer_build(home, capsys, monkeypatch):
-    """A note, never a stop: the build is the weakest of the three suspects, so the window still opens."""
-    calls = []
-    _launcher(monkeypatch, calls)
-    launched = []
-    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u: (launched.append(u), (CDP, TAB))[1])
-    monkeypatch.setattr(cli, "build_mismatch", lambda chrome, bank=None: "Chrome updated to 154; your open windows run 153.")
-    monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail("nothing to answer"))
-    cli.main(["import", "--browser", "hsbc"])
-    assert "note: Chrome updated to 154; your open windows run 153." in capsys.readouterr().err and launched and calls
-    monkeypatch.setattr("urllib.request.urlopen", _urlopen_answering("127.0.0.1"))
-    cli.main(["import", "--browser", "hsbc", "--attach"])
-    assert "Chrome updated" not in capsys.readouterr().err, "attach mode uses the running build; nothing to note"
-    monkeypatch.setenv("FINNAMON_IMPORT_SESSION", "local")   # the sealed session's own check, for "reference: EAC"
-    cli.main(["import", "--chrome-check", "hsbc"])
-    assert json.loads(capsys.readouterr().out)["message"] == "Chrome updated to 154; your open windows run 153."
-
-
-def test_doctor_says_when_chrome_on_disk_is_newer_than_the_open_windows(home, capsys, monkeypatch):
+def test_chrome_check_is_the_sessions_way_to_explain_eac(home, capsys, monkeypatch):
     monkeypatch.setenv("FINNAMON_CHROME", sys.executable)
-    monkeypatch.setattr(cli, "build_mismatch", lambda chrome, bank=None: "Chrome updated to 154; your open windows run 153.")
+    monkeypatch.setenv("FINNAMON_IMPORT_SESSION", "local")
+    cli.main(["import", "--chrome-check", "hsbc"])
+    got = json.loads(capsys.readouterr().out)
+    assert got["builds"] is None and "reset-profile" in got["eac"]
+
+
+def test_reset_profile_moves_the_old_one_aside_and_starts_fresh(home, capsys, monkeypatch):
+    old = home / "chrome"; (old / "Default").mkdir(parents=True); (old / "Default" / "Cookies").write_text("bank")
+    old.chmod(0o700)
+    cli.main(["import", "--browser", "--reset-profile"])
+    got = json.loads(capsys.readouterr().out)
+    moved = Path(got["moved_to"])
+    assert (moved / "Default" / "Cookies").read_text() == "bank" and moved.stat().st_mode & 0o777 == 0o700, "kept, still private"
+    assert old.is_dir() and not any(old.iterdir()) and old.stat().st_mode & 0o777 == 0o700
+    monkeypatch.setattr(cli, "_ps", lambda: f"chrome --user-data-dir={old} --remote-debugging-port=0\n")
     with pytest.raises(SystemExit):
-        cli.main(["doctor"])
-    assert "! Chrome (Fetch by AI): Chrome updated to 154; your open windows run 153." in capsys.readouterr().out
+        cli.main(["import", "--browser", "--reset-profile"])
+    assert "Cmd-Q" in capsys.readouterr().err
+    monkeypatch.setenv("CLAUDECODE", "1")
+    with pytest.raises(SystemExit):
+        cli.main(["import", "--browser", "--reset-profile"])   # a person's decision, never the assistant's
 
 
-@pytest.mark.parametrize("answers,verdict", [
-    (["y", "", "n", ""], "the debugging port"),
-    (["n", "", "n", ""], "not the port"),
-    (["y", "", "y", ""], "neither the port nor the profile"),
-    (["n", "", "y", ""], "inconclusive"),
+@pytest.mark.parametrize("answers,attached,verdict", [
+    (["n", "", "n", "", "y", ""], True, "Finnamon's Chrome profile"),
+    (["y", "", "n", "", "y", ""], True, "the port on Finnamon's profile"),
+    (["n", "", "y", "", "y", ""], True, "inconclusive"),
+    (["y", "", "y", "", "n", ""], True, "a DevTools client attached during the login"),
+    (["y", "", "y", "", "y", ""], True, "nothing reproduced it"),
+    (["y", "", "y", "", ""], False, "nothing reproduced it"),
 ])
-def test_diagnose_isolates_the_cause_by_two_manual_logins(home, capsys, monkeypatch, answers, verdict):
-    """--diagnose: Finnamon's profile with no debugging port, then with one, the person logging in by hand both times and
-    nothing attached; their answers decide, and are recorded with the builds. No Claude session is started."""
-    started, launched = [], []
+def test_diagnose_isolates_the_cause_by_three_manual_logins(home, capsys, monkeypatch, answers, attached, verdict):
+    """--diagnose: Finnamon's profile with no port, then with one (nothing attached), then a fresh profile with a DevTools
+    client attached before the login. The person's answers decide; they are recorded with the builds, the throwaway
+    profile is removed, and no Claude session starts."""
+    started, launched, ab = [], [], []
     monkeypatch.setenv("FINNAMON_CHROME", sys.executable)
     monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: started.append(argv) or _FakePopen(argv))
-    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u: (launched.append(u), (CDP, TAB))[1])
+    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u: (launched.append(p), (CDP, TAB))[1])
+    monkeypatch.setattr(cli, "_agent_browser", lambda *a: ab.append(a) or attached)
     monkeypatch.setattr("os.execve", lambda *a: pytest.fail("no Claude session"))
     monkeypatch.setattr(cli, "chrome_builds", lambda chrome: ("154.0.8037.98", {"153.0.8010.53"}))
     it = iter(answers)
     monkeypatch.setattr("builtins.input", lambda prompt="": next(it))
     cli.main(["import", "--browser", "hsbc", "--diagnose"])
     out = capsys.readouterr().out
-    assert len(started) == 1 and not any("remote-debugging" in a for a in started[0]) and "https://www.us.hsbc.com/" in started[0], "first window: no port at all"
-    assert launched == ["https://www.us.hsbc.com/"], "second window: the port, exactly as Fetch by AI opens it"
-    assert "154.0.8037.98" in out and "153.0.8010.53" in out and verdict in out
+    assert len(started) == 1 and not any("remote-debugging" in a for a in started[0]), "1: no port at all"
+    assert launched[0] == home / "chrome" and launched[1] != home / "chrome", "2: Finnamon's profile with the port; 3: a fresh one"
+    assert not launched[1].exists(), "the throwaway profile is removed"
+    if attached:
+        assert ab[:2] == [("connect", CDP), ("tab", TAB)], "3: attached before the login question"
+    assert "154.0.8037.98" in out and verdict in out
     rec = json.loads((home / cli.DIAGNOSE_FILE).read_text())[-1]
-    assert rec["bank"] == "hsbc" and rec["on_disk"] == "154.0.8037.98" and verdict in rec["verdict"]
+    assert rec["bank"] == "hsbc" and verdict in rec["verdict"] and rec["fresh_attached"] == (answers[4] == "y" if attached else None)
 
 
 def test_no_cdp_opens_a_port_less_window_and_imports_the_csv_that_lands(home, conn, capsys, monkeypatch):

@@ -322,6 +322,17 @@ test('a browser import starts a session for a plausible bank name only, and a ru
   } finally { srv.close(); }
 });
 
+test('Reset browser profile is one CLI call, its errors reported', async () => {
+  const calls = [];
+  const app = buildApp({ token: () => KEY, cli: async (...a) => { calls.push(a); if (calls.length > 1) throw new Error('Finnamon\'s Chrome is still running'); return { moved_to: '/x/chrome.old-1' }; }, allowHost: () => true });
+  const srv = app.listen(0, '127.0.0.1'); await new Promise(r => srv.once('listening', r));
+  const post = () => fetch(`http://127.0.0.1:${srv.address().port}/api/import/reset-profile`, { method: 'POST', headers: { ...COOKIE, 'content-type': 'application/json' }, body: '{}' });
+  try {
+    const r = await post(); assert.equal(r.status, 200); assert.deepEqual(calls[0], ['import', '--browser', '--reset-profile']);
+    const bad = await post(); assert.ok(bad.status >= 400); assert.match((await bad.json()).error, /still running/);
+  } finally { srv.close(); }
+});
+
 test('importCommand: the CLI launcher owns the claude argv; a bank name never becomes an option of its own', () => {
   const { cmd, args } = importCommand('HSBC');
   assert.ok(cmd); assert.deepEqual(args.slice(-5), ['import', '--browser', '--attach=auto', '--', 'HSBC']);
