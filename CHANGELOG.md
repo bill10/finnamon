@@ -3,6 +3,11 @@
 All notable changes to Finnamon are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.52.1.0] - 2026-10-06
+
+### Changed
+- **The budget trend chart's picker is its title.** "Budget trend: [After-School ▾]": the budget name is a styled select inline in the title, for any number of budgets, matching the page's other controls in light and dark. The separate native select and the chips row are gone; the remembered pick and the default (first over-limit budget, else first) are unchanged.
+
 ## [0.52.0.0] - 2026-10-06
 
 ### Changed
