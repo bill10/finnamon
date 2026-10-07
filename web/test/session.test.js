@@ -155,7 +155,7 @@ test('a once session that cannot start says so once and stays DOWN, instead of r
 
 test('the import session is the CLI launcher, so the claude argv lives in one place; a failed spawn leaves no timer behind', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] });
-  assert.deepEqual(importCommand('HSBC').args.slice(-5), ['import', '--browser', '--attach=auto', '--', 'HSBC']);
+  assert.deepEqual(importCommand('HSBC').args.slice(-4), ['import', '--browser', '--', 'HSBC']);
   const states = [];
   const s = createSession({ spawn: () => { throw new Error('ENOENT'); }, cmd: 'finnamon', args: [], once: true, onState: (st) => states.push(st), log: { warn() {}, error() {} } });
   assert.equal(s.session.state, 'DOWN'); assert.match(s.replay(), /could not start finnamon: ENOENT/);

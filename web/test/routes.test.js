@@ -335,8 +335,9 @@ test('Reset browser profile is one CLI call, its errors reported', async () => {
 
 test('importCommand: the CLI launcher owns the claude argv; a bank name never becomes an option of its own', () => {
   const { cmd, args } = importCommand('HSBC');
-  assert.ok(cmd); assert.deepEqual(args.slice(-5), ['import', '--browser', '--attach=auto', '--', 'HSBC']);
+  assert.ok(cmd); assert.deepEqual(args.slice(-4), ['import', '--browser', '--', 'HSBC']);
   assert.deepEqual(importCommand('--help').args.slice(-2), ['--', '--help']);
+  assert.ok(!importCommand('HSBC').args.some((x) => x.startsWith('--attach')), 'Fetch by AI never attaches: a Chrome on 9222 may be another program\'s');
   assert.deepEqual(importCommand('HSBC', { noCdp: true }).args.slice(-4), ['--browser', '--no-cdp', '--', 'HSBC'], 'Fetch without AI: no port, no Claude, never --attach');
 });
 
@@ -376,7 +377,7 @@ test('the import runner refuses a second session while one is not DOWN, then rep
   const sent = [];
   const r = importRunner({ make, broadcast: (m) => sent.push(m) });
   r.start('HSBC');
-  assert.deepEqual(made[0].opts.args.slice(-5), ['import', '--browser', '--attach=auto', '--', 'HSBC']); assert.equal(made[0].opts.once, true);
+  assert.deepEqual(made[0].opts.args.slice(-4), ['import', '--browser', '--', 'HSBC']); assert.equal(made[0].opts.once, true);
   for (const st of ['STARTING', 'WORKING', 'WAITING', 'QUESTION']) { made[0].session.state = st; assert.throws(() => r.start('Ally'), /still running/, st); }
   made[0].session.state = 'DOWN';
   r.start('Ally');
