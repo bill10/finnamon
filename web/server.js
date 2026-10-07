@@ -392,7 +392,11 @@ export async function restartNotice({ inbound, intercom, send, now = Date.now() 
 // server spawns the CLI rather than keeping a second copy of the list here. Never --attach: a Chrome answering on 9222
 // may be another program's (an automation browser), and the bank login would land in its profile; Finnamon's own window.
 // noCdp (Fetch without AI): no debugging port and no Claude; the person exports, the CLI watches the folder and imports.
+// NO_CDP_BANKS: finnamon/cli.py NO_CDP_BANKS (a parity test holds them together), banks that refuse any Chrome with a
+// debugging port, so Fetch by AI is the by-hand export there (the CLI would route it so anyway; this keeps the argv honest).
+export const NO_CDP_BANKS = new Set(['hsbc']);
 export function importCommand(bank, { noCdp = false } = {}) {
+  noCdp ||= NO_CDP_BANKS.has(bank.toLowerCase());
   const [bin, ...pre] = config.finnamon;
   return { cmd: bin, args: [...pre, 'import', '--browser', ...(noCdp ? ['--no-cdp'] : []), '--', bank] };
 }

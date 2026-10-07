@@ -514,6 +514,7 @@ $('row-prop').addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.k
 // import: a bank's CSV export into a manual account (one Plaid can't reach); the server hands the file to `finnamon import`
 const ON_BOX = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);   // the browser window opens where the server runs
 const KINDS = { checking: 'Checking', savings: 'Savings', credit: 'Credit card', loan: 'Loan', investment: 'Investment' };   // labels for finnamon.imports.KINDS; a parity test holds web/server.js KINDS to it
+const NO_CDP_BANKS = new Set(['hsbc']);   // web/server.js NO_CDP_BANKS: Fetch by AI can never log in there, so only Fetch without AI shows
 const MAX_NAME = 80;   // web/server.js MAX_NAME, which /api/account enforces
 const ownerOptions = (members) => members.map(m => `<option value="${esc(m.owner)}">Owner: ${esc(m.display_name || m.owner)}</option>`).join('') + `<option value="joint">Owner: Joint</option>`;   // the select has no label of its own beside the other fields
 function renderImport(s) {
@@ -596,7 +597,9 @@ function renderImport(s) {
     go.disabled = false;
   };
   $('i-file').addEventListener('change', () => { flip = false; preview(); });
-  $('i-acct').addEventListener('change', preview);
+  const aiOk = () => { const f = $('i-fetch'); if (f) f.hidden = NO_CDP_BANKS.has(($('i-acct').selectedOptions?.[0]?.dataset.bank || '').toLowerCase()); };
+  aiOk();
+  $('i-acct').addEventListener('change', preview); $('i-acct').addEventListener('change', aiOk);
   $('i-go')?.addEventListener('click', async () => {
     const f = $('i-file').files[0];
     if (!f) { $('i-err').textContent = 'Pick the CSV file first.'; return; }

@@ -22,6 +22,40 @@ def today() -> str:
 
 
 @pytest.fixture(autouse=True)
+def _no_real_chrome(monkeypatch):
+    """No test ever opens a real browser on the owner's screen (one did, at HSBC, on 2026-10-06): a subprocess that would
+    start Chrome, directly or through `open`, fails the test unless the test stubbed subprocess itself. Anything else
+    (FINNAMON_CHROME=sys.executable standing in for Chrome, git, node) runs as before."""
+    import subprocess
+    run, popen = subprocess.run, subprocess.Popen
+
+    def chrome(argv) -> bool:
+        argv = [str(x) for x in argv] if isinstance(argv, (list, tuple)) else [str(argv)]
+        return argv[0] == "open" or "chrome" in Path(argv[0]).name.lower() or ".app/Contents/MacOS/" in argv[0]
+
+    def guarded_run(argv, *a, **k):
+        if chrome(argv) and not (k.get("capture_output") and "--version" in argv):   # chrome_builds' --version prints and exits
+            pytest.fail(f"a test reached a real Chrome launch with nothing stubbed: {argv}")
+        return run(argv, *a, **k)
+
+    class GuardedPopen(popen):   # a class, not a function: libraries subscript it (Popen[bytes]) and check isinstance
+        def __init__(self, argv, *a, **k):
+            if chrome(argv):
+                pytest.fail(f"a test reached a real Chrome launch with nothing stubbed: {argv}")
+            super().__init__(argv, *a, **k)
+    monkeypatch.setattr(subprocess, "run", guarded_run)
+    monkeypatch.setattr(subprocess, "Popen", GuardedPopen)
+
+
+@pytest.fixture(autouse=True)
+def _fetch_by_ai_everywhere(monkeypatch):
+    """The Fetch by AI tests drive HSBC, the bank it was built for, which cli.NO_CDP_BANKS now sends to the by-hand export;
+    here no bank is routed, and test_fetch_by_ai_on_a_no_cdp_bank_is_the_by_hand_export puts the real set back."""
+    from finnamon import cli
+    monkeypatch.setattr(cli, "NO_CDP_BANKS", set())
+
+
+@pytest.fixture(autouse=True)
 def _not_inside_claude(monkeypatch, tmp_path):
     """The suite often runs from a Claude Code session; the CLI's human-only gates must see a plain terminal."""
     monkeypatch.delenv("CLAUDECODE", raising=False)
