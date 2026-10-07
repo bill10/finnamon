@@ -401,3 +401,10 @@ def test_tab_urls_accept_the_real_quoted_tab_context_lines():
     assert cli.tab_urls(full) == {TAB: "chrome://newtab/"} and cli.tab_urls(full)[TAB] in cli.BLANK
     off = f'Tab Context:\n- Available tabs:\n  \u2022 tabId {TAB}: "x" ("https://evil.example/")'
     assert cli.tab_urls(off) == {TAB: "https://evil.example/"}
+
+
+def test_tab_urls_on_the_owners_real_tabs_context_result():
+    blocks = [{"type": "text", "text": '{"availableTabs":[{"tabId":411189896,"title":"New Tab","url":"chrome://newtab/"}],"tabGroupId":201351179}'},
+              {"type": "text", "text": 'Tab Context:\n- Available tabs:\n  \u2022 tabId 411189896: "New Tab" ("chrome://newtab/")'},
+              {"type": "text", "text": "<system-reminder>Prefer browser_batch to run several actions at once.</system-reminder>"}]
+    assert cli.tab_urls(blocks) == {"411189896": "chrome://newtab/"}
