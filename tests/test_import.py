@@ -897,11 +897,11 @@ def test_chrome_builds_reads_the_build_on_disk_and_the_ones_running(monkeypatch)
     assert cli.build_mismatch(APP) is None
 
 
-def test_eac_message_says_what_was_ruled_out_and_the_ways_out(monkeypatch):
-    """The owner's 2026-10-05 tests ruled out the build, a new device, an open port, the profile and an early attach; what
-    is left is how Chrome was started, which Finnamon changed. The message says so, and the ways out that attach nothing."""
+def test_eac_message_says_hsbc_refuses_the_debugging_port_and_the_ways_out(monkeypatch):
+    """The owner's 2026-10-06 tests: every launch with the debugging port got EAC, the same without it logged in. The
+    message says so, never that the launch method fixes it, and names the ways out that open no port."""
     msg = cli.eac_message("hsbc")
-    assert "Ruled out on 2026-10-05" in msg and "Finnamon's browser profile" in msg and "LaunchServices" in msg
+    assert "refuses a browser with a debugging port" in msg and "LaunchServices" not in msg
     assert "finnamon import --browser hsbc --no-cdp" in msg and "finnamon import --browser hsbc --diagnose" in msg
     _fake_chrome(monkeypatch, ps=PS)
     assert cli.build_mismatch(APP) == "Chrome updated to 154.0.8037.98; your open windows run 153.0.8010.53.", "a fact, no longer a suspect"
@@ -932,36 +932,71 @@ def test_reset_profile_moves_the_old_one_aside_and_starts_fresh(home, capsys, mo
         cli.main(["import", "--browser", "--reset-profile"])   # a person's decision, never the assistant's
 
 
-@pytest.mark.parametrize("answers,verdict", [
-    (["n", "", "y", "", "y", ""], "the launch environment"),
-    (["n", "", "n", "", "y", ""], "starting Chrome as a child process"),
-    (["y", "", "y", "", "y", ""], "nothing reproduced it"),
-    (["y", "", "n", "", "y", ""], "inconclusive"),
+@pytest.mark.parametrize("ported,no_port,verdict", [
+    ([False, False, False], True, "the debugging port"),   # the owner's answers on 2026-10-06
+    ([False, False], True, "the debugging port"),   # off a Mac: no open -na pass
+    ([False, False, False], False, "however Chrome starts"),
+    ([True, True, True], True, "nothing reproduced it"),
+    ([False, True, True], True, "inconclusive"),
+    ([True, False, True], False, "inconclusive"),
 ])
-def test_diagnose_compares_launch_methods_by_manual_logins(home, capsys, monkeypatch, answers, verdict):
-    """--diagnose: three fresh throwaway profiles, port open, nothing attached, started as a child with a launchd-like
-    stripped environment, as a child with this terminal's, and through LaunchServices. The person's answers decide; the
-    methods and the environment are recorded, every throwaway profile is removed, and no Claude session starts."""
-    launched = []
+def test_diagnose_verdict(ported, no_port, verdict):
+    assert verdict in cli.diagnose_verdict(ported, no_port, "hsbc")
+    assert "--no-cdp" in cli.diagnose_verdict([False], True, "hsbc"), "the port: names the way out"
+
+
+def test_diagnose_compares_logins_with_and_without_the_debugging_port(home, capsys, monkeypatch):
+    """--diagnose: four fresh throwaway profiles, nothing attached; three with the port open, started as a child with a
+    launchd-like stripped environment, as a child with this terminal's, and through LaunchServices, then one with no port at
+    all. The person's answers decide; the methods and the environment are recorded, every throwaway profile is removed, and
+    no Claude session starts."""
+    launched, spawned = [], []
     monkeypatch.setenv("FINNAMON_CHROME", sys.executable)
     monkeypatch.setenv("LANG", "en_US.UTF-8")
     monkeypatch.setattr("finnamon.cli.chrome_path", lambda: APP)
     monkeypatch.setattr("shutil.which", lambda c: "/usr/bin/open" if c == "open" else None)
     monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u, method=None, env=None: (launched.append((p, method, env)), (CDP, TAB))[1])
+    monkeypatch.setattr("finnamon.cli.chrome_spawn", lambda c, p, u, port, method=None, env=None: (spawned.append((p, port)), "open")[1])
     monkeypatch.setattr("os.execve", lambda *a: pytest.fail("no Claude session"))
     monkeypatch.setattr(cli, "chrome_builds", lambda chrome: ("154.0.8037.98", {"153.0.8010.53"}))
-    it = iter(answers)
+    it = iter(["n", "", "n", "", "n", "", "y", ""])   # the owner's: every port pass refused, the no-port one through
     monkeypatch.setattr("builtins.input", lambda prompt="": next(it))
     cli.main(["import", "--browser", "hsbc", "--diagnose"])
     out = capsys.readouterr().out
     assert [m for _, m, _ in launched] == ["popen", "popen", "open"]
+    assert len(spawned) == 1 and spawned[0][1] is False, "the last pass has no debugging port"
     stripped = launched[0][2]
     assert stripped and "LANG" not in stripped and "TZ" not in stripped and stripped["HOME"], "the dashboard's job has no locale or timezone"
     assert launched[1][2] is None, "this terminal's own environment"
-    assert len({p for p, _, _ in launched}) == 3 and not any(p.exists() or p == home / "chrome" for p, _, _ in launched), "fresh each time, removed after"
-    assert "LANG=en_US.UTF-8" in out and verdict in out
+    profiles = [p for p, _, _ in launched] + [spawned[0][0]]
+    assert len(set(profiles)) == 4 and not any(p.exists() or p == home / "chrome" for p in profiles), "fresh each time, removed after"
+    assert "LANG=en_US.UTF-8" in out and "the debugging port" in out
     rec = json.loads((home / cli.DIAGNOSE_FILE).read_text())[-1]
-    assert rec["env"]["LANG"] == "en_US.UTF-8" and rec["methods"]["open"] == "open" and verdict in rec["verdict"]
+    assert rec["env"]["LANG"] == "en_US.UTF-8" and rec["methods"]["open"] == "open" and rec["methods"]["no_port"] == "open"
+    assert rec["no_port"] is True and rec["open"] is False and "the debugging port" in rec["verdict"]
+
+
+@pytest.mark.parametrize("bank", ["hsbc", "HSBC"])
+def test_fetch_by_ai_on_a_no_cdp_bank_is_the_by_hand_export(home, capsys, monkeypatch, bank):
+    """HSBC refuses any Chrome with a debugging port, so `import --browser hsbc` never opens one: it says why and goes to
+    the by-hand export. An explicit --attach still does what the person typed."""
+    by_hand = []
+    monkeypatch.setattr(cli, "NO_CDP_BANKS", {"hsbc"})   # conftest empties it for the Fetch by AI tests
+    assert cli.NO_CDP_BANKS == {"hsbc"} and "NO_CDP_BANKS = {\"hsbc\"}" in Path(cli.__file__).read_text(), "the shipped set"
+    monkeypatch.setenv("FINNAMON_CHROME", sys.executable)
+    monkeypatch.setattr("finnamon.cli.fetch_by_hand", lambda c, p, b, to: by_hand.append(b))
+    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda *a, **k: pytest.fail("no debuggable Chrome"))
+    monkeypatch.setattr("os.execve", lambda *a: pytest.fail("no Claude session"))
+    cli.main(["import", "--browser", bank])
+    assert by_hand == [bank] and "refuses a browser with a debugging port" in capsys.readouterr().out
+    def attach(addr, url):
+        raise SystemExit(7)   # reached: the attach path, not the by-hand one
+    monkeypatch.setattr("finnamon.cli.chrome_attach", attach)
+    monkeypatch.setattr("finnamon.claude_runner.binary", lambda: "/usr/bin/claude")
+    monkeypatch.setattr("finnamon.assistant.problems", lambda: [])
+    with pytest.raises(SystemExit) as e:
+        cli.main(["import", "--browser", bank, "--attach"])
+    assert e.value.code == 7 and by_hand == [bank], "--attach goes where the person pointed it"
 
 
 def test_chrome_starts_through_launchservices_on_a_mac(tmp_path, monkeypatch):

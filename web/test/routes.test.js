@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, statSync, chmodSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildApp, loopback, allowSocket, importRunner, importCommand, frame, createSession, KINDS, csp, webToken, same, authOf, peer, guardKey, throttled, redeemPair, COOKIE as COOKIE_NAME, TOKEN_FILE, HOSTS_FILE, PAIR_FILE } from '../server.js';
+import { buildApp, loopback, allowSocket, importRunner, importCommand, NO_CDP_BANKS, frame, createSession, KINDS, csp, webToken, same, authOf, peer, guardKey, throttled, redeemPair, COOKIE as COOKIE_NAME, TOKEN_FILE, HOSTS_FILE, PAIR_FILE } from '../server.js';
 
 // Every test here holds the dashboard's key: a fixed one injected into buildApp, sent as the page's cookie on each request.
 const KEY = 'k'.repeat(64);
@@ -334,11 +334,21 @@ test('Reset browser profile is one CLI call, its errors reported', async () => {
 });
 
 test('importCommand: the CLI launcher owns the claude argv; a bank name never becomes an option of its own', () => {
-  const { cmd, args } = importCommand('HSBC');
-  assert.ok(cmd); assert.deepEqual(args.slice(-4), ['import', '--browser', '--', 'HSBC']);
+  const { cmd, args } = importCommand('Chase');
+  assert.ok(cmd); assert.deepEqual(args.slice(-4), ['import', '--browser', '--', 'Chase']);
   assert.deepEqual(importCommand('--help').args.slice(-2), ['--', '--help']);
-  assert.ok(!importCommand('HSBC').args.some((x) => x.startsWith('--attach')), 'Fetch by AI never attaches: a Chrome on 9222 may be another program\'s');
-  assert.deepEqual(importCommand('HSBC', { noCdp: true }).args.slice(-4), ['--browser', '--no-cdp', '--', 'HSBC'], 'Fetch without AI: no port, no Claude, never --attach');
+  assert.ok(!importCommand('Chase').args.some((x) => x.startsWith('--attach')), 'Fetch by AI never attaches: a Chrome on 9222 may be another program\'s');
+  assert.deepEqual(importCommand('Chase', { noCdp: true }).args.slice(-4), ['--browser', '--no-cdp', '--', 'Chase'], 'Fetch without AI: no port, no Claude, never --attach');
+  assert.deepEqual(importCommand('HSBC').args.slice(-4), ['--browser', '--no-cdp', '--', 'HSBC'], 'HSBC refuses any debugging port: Fetch by AI is the by-hand export');
+});
+
+test('NO_CDP_BANKS: the server and the page hold the CLI\'s list', async () => {
+  const { readFileSync } = await import('node:fs');
+  const py = readFileSync(new URL('../../finnamon/cli.py', import.meta.url), 'utf8');
+  const want = [...py.match(/^NO_CDP_BANKS = \{([^}]*)\}/m)[1].matchAll(/"([^"]+)"/g)].map(m => m[1]).sort();
+  assert.deepEqual([...NO_CDP_BANKS].sort(), want, 'finnamon/cli.py NO_CDP_BANKS changed: update web/server.js and web/public/app.js');
+  const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  assert.deepEqual([...app.match(/const NO_CDP_BANKS = new Set\(\[([^\]]*)\]\)/)[1].matchAll(/'([^']+)'/g)].map(m => m[1]).sort(), want);
 });
 
 test('an import passes --flip through, ignores a blank or unparsable balance, and reports a CLI or a disk failure', async () => {
@@ -377,7 +387,7 @@ test('the import runner refuses a second session while one is not DOWN, then rep
   const sent = [];
   const r = importRunner({ make, broadcast: (m) => sent.push(m) });
   r.start('HSBC');
-  assert.deepEqual(made[0].opts.args.slice(-4), ['import', '--browser', '--', 'HSBC']); assert.equal(made[0].opts.once, true);
+  assert.deepEqual(made[0].opts.args.slice(-4), ['--browser', '--no-cdp', '--', 'HSBC']); assert.equal(made[0].opts.once, true);
   for (const st of ['STARTING', 'WORKING', 'WAITING', 'QUESTION']) { made[0].session.state = st; assert.throws(() => r.start('Ally'), /still running/, st); }
   made[0].session.state = 'DOWN';
   r.start('Ally');
