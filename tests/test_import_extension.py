@@ -145,8 +145,6 @@ def test_hook_fails_closed_outside_the_session_and_on_garbage(home, monkeypatch,
 
 def paired(conn, home):
     store.set_state(conn, cli.EXTENSION_DEVICE, DEV)
-    (home / cli.CLAUDE_IMPORT_DIR).mkdir(exist_ok=True)
-    (home / cli.CLAUDE_IMPORT_DIR / ".claude.json").write_text(json.dumps({"oauthAccount": {"emailAddress": "x@example.com"}}))
 
 
 def test_routing_paired_claude_execs_the_extension_session(home, conn, monkeypatch):
@@ -172,13 +170,16 @@ def test_routing_paired_claude_execs_the_extension_session(home, conn, monkeypat
     cli.main(["import", "--browser", "hsbc"])
     argv, env = calls[-1]
     assert argv[1] == f"/import-extension hsbc --device {DEV}" and "--chrome" in argv and "--strict-mcp-config" in argv and argv[3:5] == ["--setting-sources", "project"]
-    assert env["CLAUDE_CONFIG_DIR"] == str(home / cli.CLAUDE_IMPORT_DIR) and env["FINNAMON_IMPORT_DEVICE"] == DEV and env["FINNAMON_IMPORT_BANK"] == "hsbc"
+    assert env.get("CLAUDE_CONFIG_DIR") == os.environ.get("CLAUDE_CONFIG_DIR")   # passed through, not replaced
+    assert env["FINNAMON_IMPORT_DEVICE"] == DEV
+    assert env["FINNAMON_IMPORT_BANK"] == "hsbc"
     assert env["CLAUDE_CHROME_PERMISSION_MODE"] == "ask" and "ANTHROPIC_API_KEY" not in env and env["FINNAMON_IMPORT_SESSION"] == "local"
     assert spawned == [(home / cli.EXTENSION_PROFILE, "https://www.us.hsbc.com/", False)], "the extension's profile at the bank's login, no debugging port"
     prefs = json.loads((home / cli.EXTENSION_PROFILE / "Default/Preferences").read_text())
     assert prefs["download"]["default_directory"] == str(home / "downloads"), "pin_downloads on that profile"
     assert re.fullmatch(r"[0-9a-f]{16}", env["FINNAMON_IMPORT_NONCE"]), "a guard state of the session's own"
     settings = json.loads(argv[argv.index("--settings") + 1])["hooks"]
+    assert "chrome-restore" in settings["SessionEnd"][0]["hooks"][0]["command"]
     assert settings["PreToolUse"][0]["matcher"] == "*" and settings["PostToolUse"][0]["matcher"] == M + ".*"
     allowed = argv[argv.index("--allowedTools") + 1:argv.index("--disallowedTools")]
     disallowed = argv[argv.index("--disallowedTools") + 1:]
@@ -215,11 +216,6 @@ def test_old_claude_code_is_refused(home, conn, monkeypatch, capsys):
 def test_pairing_stores_the_one_new_device(home, conn, monkeypatch, capsys):
     monkeypatch.setenv("FINNAMON_CHROME", sys.executable)
     monkeypatch.setattr("finnamon.claude_runner.binary", lambda: "/usr/bin/claude")
-    with pytest.raises(SystemExit):
-        cli.main(["import", "--pair-extension"])
-    assert "CLAUDE_CONFIG_DIR=~/.finnamon/claude-import claude" in capsys.readouterr().err, "the /login comes first"
-    assert (home / cli.CLAUDE_IMPORT_DIR).stat().st_mode & 0o777 == 0o700
-    (home / cli.CLAUDE_IMPORT_DIR / ".claude.json").write_text(json.dumps({"oauthAccount": {"emailAddress": "x"}}))
     seen = iter([{"dev-everyday"}, {"dev-everyday", DEV}])
     monkeypatch.setattr(cli, "connected_devices", lambda exe: next(seen))
     monkeypatch.setattr(cli, "chrome_spawn", lambda c, p, u, port, **k: port and pytest.fail("no port"))
@@ -281,3 +277,47 @@ def test_select_browser_that_failed_does_not_count(home, monkeypatch, capsys):
     monkeypatch.setenv("FINNAMON_IMPORT_DEVICE", DEV); monkeypatch.setenv("FINNAMON_IMPORT_BANK", "hsbc"); monkeypatch.setenv("FINNAMON_IMPORT_NONCE", NONCE)
     hook(monkeypatch, capsys, {"hook_event_name": "PostToolUse", "tool_name": M + "select_browser", "tool_response": "Error: browser not connected"})
     assert hook(monkeypatch, capsys, {"hook_event_name": "PreToolUse", "tool_name": M + "tabs_context_mcp", "tool_input": {}})[0] == 2
+
+
+@pytest.fixture(autouse=True)
+def scratch_claude_json(tmp_path, monkeypatch):
+    """The person's ~/.claude.json is never read or written by a test."""
+    f = tmp_path / "claude-home" / ".claude.json"
+    f.parent.mkdir()
+    monkeypatch.setattr(cli, "_claude_json", lambda: f)
+    return f
+
+
+def test_extension_problem_needs_no_separate_login(home, conn):
+    assert "not paired" in cli.extension_problem(conn)
+    store.set_state(conn, cli.EXTENSION_DEVICE, DEV)
+    assert cli.extension_problem(conn) is None
+
+
+def test_import_env_keeps_the_login_and_drops_the_keys(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k"); monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "t")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/own")
+    env = cli._import_env({"X": "1"})
+    assert env["CLAUDE_CONFIG_DIR"] == "/own" and "ANTHROPIC_API_KEY" not in env and "CLAUDE_CODE_OAUTH_TOKEN" not in env and env["X"] == "1"
+
+
+@pytest.mark.parametrize("prev", [None, "dev-everyday"])
+def test_restore_claude_pick(home, scratch_claude_json, prev):
+    f, nonce = scratch_claude_json, "0123456789abcdef"
+    cfg = {"keep": 1, **({"chromeExtension": {"pairedDeviceId": prev, "other": 2}} if prev else {})}
+    f.write_text(json.dumps(cfg)); f.chmod(0o600)
+    cli.remember_claude_pick(nonce, DEV)
+    f.write_text(json.dumps({"keep": 1, "chromeExtension": {"pairedDeviceId": DEV, "other": 2}})); f.chmod(0o600)   # select_browser's write
+    cli.restore_claude_pick(nonce)
+    got = json.loads(f.read_text())
+    assert got["keep"] == 1 and got["chromeExtension"].get("pairedDeviceId") == prev and got["chromeExtension"]["other"] == 2
+    assert f.stat().st_mode & 0o777 == 0o600 and not cli._pick_files()
+
+
+def test_restore_leaves_a_pick_the_person_made_since(home, scratch_claude_json):
+    f = scratch_claude_json
+    f.write_text("{}")
+    cli.remember_claude_pick("0123456789abcdef", DEV)
+    f.write_text(json.dumps({"chromeExtension": {"pairedDeviceId": "dev-new"}}))
+    cli.restore_claude_pick()   # the next start's sweep
+    assert json.loads(f.read_text())["chromeExtension"]["pairedDeviceId"] == "dev-new" and not cli._pick_files()
