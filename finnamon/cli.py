@@ -743,6 +743,10 @@ def cmd_hook(a) -> None:
         if decision:
             print(json.dumps(decision))
         return
+    if a.name == "chrome-restore":   # the extension session's SessionEnd (chrome_guard_settings)
+        if re.fullmatch(r"[0-9a-f]{16}", os.environ.get("FINNAMON_IMPORT_NONCE") or ""):
+            restore_claude_pick(os.environ["FINNAMON_IMPORT_NONCE"])
+        return
     if a.name == "chrome-guard":   # the extension session's every tool call (chrome_guard_settings); outside it, nothing is allowed
         try:
             device, bank = os.environ.get("FINNAMON_IMPORT_DEVICE"), os.environ.get("FINNAMON_IMPORT_BANK")
@@ -1124,17 +1128,21 @@ BANK_STEPS = {"hsbc": ["Log in.", "Click the account's tile on the dashboard to 
 WATCH_SECONDS, WATCH_POLL = 1800.0, 1.0   # how long --no-cdp waits for the export, and how often it looks
 
 
-def wait_for_csv(folder: Path, since: float) -> Path:
-    """The newest .csv in folder written after `since`, once its size has stopped changing (Chrome writes a .crdownload
+def wait_for_csv(folder: Path, since: float, *more: Path) -> Path:
+    """The newest .csv in folder (else in the first of `more` that has one) written after `since`, once its size has stopped changing (Chrome writes a .crdownload
     first and renames it, but a slow disk can still show a growing file), or die() after WATCH_SECONDS."""
     last: tuple[Path, int] | None = None
     for _ in range(int(WATCH_SECONDS / WATCH_POLL)):
-        try:   # a file renamed or removed between the listing and the stat is just not there yet
-            new = sorted(((f.stat().st_mtime, f) for f in folder.glob("*.csv")), key=lambda t: t[0])
-            new = [f for m, f in new if m >= since]
-            size = new[-1].stat().st_size if new else 0
-        except OSError:
-            new = []
+        new = []
+        for d in (folder, *more):
+            try:   # a file renamed or removed between the listing and the stat is just not there yet
+                new = sorted(((f.stat().st_mtime, f) for f in d.glob("*.csv")), key=lambda t: t[0])
+                new = [f for m, f in new if m >= since]
+                size = new[-1].stat().st_size if new else 0
+            except OSError:
+                new = []
+            if new:
+                break
         if new:
             f = new[-1]
             if last == (f, size) and size:
@@ -1388,7 +1396,6 @@ def browser_session_tools(to: str | None) -> tuple[list[str], list[str]]:
 # docs/research/hsbc-via-claude-in-chrome.md). Claude only: Codex has no equivalent, so a Codex household keeps --no-cdp.
 CHROME_MCP = "mcp__claude-in-chrome__"
 EXTENSION_PROFILE = "chrome-extension-test"   # under FINNAMON_HOME: the no-port profile with the extension installed and signed in
-CLAUDE_IMPORT_DIR = "claude-import"   # under FINNAMON_HOME: the session's own CLAUDE_CONFIG_DIR, so select_browser's pick never lands in ~/.claude.json
 EXTENSION_DEVICE = "extension_device"   # state key: the deviceId `import --pair-extension` found for that profile
 EXTENSION_STATE_FILE = "import-extension-{}.json"   # under FINNAMON_HOME, per session (FINNAMON_IMPORT_NONCE): what chrome-guard has seen ({selected, tab}; .tripped beside it)
 CHROME_MIN_VERSION = (2, 1, 292)   # the Claude Code the --chrome session was tested on
@@ -1541,22 +1548,50 @@ def chrome_guard_settings() -> dict:
     does not know is refused), and every browser call after it (the tab's address)."""
     guard = f"{shlex_quote(sys.executable)} -m finnamon.cli hook chrome-guard || exit 2"
     hook = [{"type": "command", "command": guard}]
-    return {"hooks": {"PreToolUse": [{"matcher": "*", "hooks": hook}], "PostToolUse": [{"matcher": CHROME_MCP + ".*", "hooks": hook}]}}
+    return {"hooks": {"PreToolUse": [{"matcher": "*", "hooks": hook}], "PostToolUse": [{"matcher": CHROME_MCP + ".*", "hooks": hook}],
+                      "SessionEnd": [{"hooks": [{"type": "command", "command": f"{shlex_quote(sys.executable)} -m finnamon.cli hook chrome-restore"}]}]}}
 
 
-def claude_import_dir() -> Path:
-    d = config.home() / CLAUDE_IMPORT_DIR
-    d.mkdir(mode=0o700, parents=True, exist_ok=True)
-    d.chmod(0o700)   # its own claude.ai login
-    return d
+def _pick_files(nonce: str = "*") -> list[Path]:
+    return sorted(config.home().glob(f"import-extension-{nonce}.pick.json"))
 
 
-def claude_import_logged_in() -> bool:
-    """A /login has run in the import config dir: Claude Code records the account in its .claude.json (the token itself is in the keychain)."""
+def _claude_json() -> Path:
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home()) / ".claude.json"
+
+
+def remember_claude_pick(nonce: str, device: str) -> None:
+    """select_browser writes chromeExtension.pairedDeviceId into the person's ~/.claude.json, and execve leaves no "after":
+    keep what it was (or that it was absent) beside the session's state, for restore_claude_pick."""
     try:
-        return bool(json.loads((config.home() / CLAUDE_IMPORT_DIR / ".claude.json").read_text()).get("oauthAccount"))
+        prev = json.loads(_claude_json().read_text()).get("chromeExtension", {}).get("pairedDeviceId")
     except (OSError, ValueError, AttributeError):
-        return False
+        prev = None
+    (config.home() / EXTENSION_STATE_FILE.format(nonce)).with_suffix(".pick.json").write_text(json.dumps({"device": device, "prev": prev}))
+
+
+def restore_claude_pick(nonce: str = "*") -> None:
+    """Put back the pairedDeviceId remember_claude_pick saw, only if it is still the paired device (a pick the person made since
+    stays). One key, read-modify-write, the file's mode kept. nonce: this session's (SessionEnd hook), or every leftover (next start)."""
+    f = _claude_json()
+    for pick in _pick_files(nonce):
+        try:
+            saved = json.loads(pick.read_text())
+            cfg = json.loads(f.read_text())
+            ext = cfg.setdefault("chromeExtension", {})
+            if ext.get("pairedDeviceId") == saved["device"]:
+                if saved["prev"] is None:
+                    ext.pop("pairedDeviceId")
+                else:
+                    ext["pairedDeviceId"] = saved["prev"]
+                tmp = f.with_name(f.name + ".finnamon-tmp")
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, f.stat().st_mode & 0o777)
+                with os.fdopen(fd, "w") as fh:
+                    fh.write(json.dumps(cfg, indent=2))
+                os.replace(tmp, f)
+            pick.unlink()
+        except (OSError, ValueError, KeyError, AttributeError):
+            pass   # no ~/.claude.json to fix, or a pick file that is not ours: the next start tries again
 
 
 def claude_version() -> tuple[int, ...]:
@@ -1569,17 +1604,10 @@ def claude_version() -> tuple[int, ...]:
     return tuple(map(int, m.groups())) if m else ()
 
 
-LOGIN_HINT = f"CLAUDE_CONFIG_DIR=~/.finnamon/{CLAUDE_IMPORT_DIR} claude, then /login once (the claude.ai account the extension is signed in to), then /exit"
-
-
 def extension_problem(conn) -> str | None:
     """Why Fetch by AI cannot go through the extension on this household, or None when it can."""
     if store.assistant_kind(conn) != "claude":
         return "the extension import is Claude Code's; this household runs Codex"
-    if not store.get_state(conn, EXTENSION_DEVICE):
-        return "the extension's browser is not paired: run finnamon import --pair-extension in a terminal"
-    if not claude_import_logged_in():
-        return f"the import session has no claude.ai login of its own: run {LOGIN_HINT}"
     return None
 
 
@@ -1599,17 +1627,16 @@ def chrome_session_tools() -> tuple[list[str], list[str]]:
 
 
 def _extension_profile(chrome: str, folder: Path, url: str = "about:blank") -> Path:
-    """The extension's profile, open with no debugging port. Running: reused as it is (never killed), but only once its
-    downloads point at folder, which can be set only while it is closed. Not running: downloads pinned, then opened at url."""
+    """The extension's profile, open with no debugging port. Running: reused as it is (never killed), and its
+    downloads point at folder (set only while it is closed; otherwise a note). Not running: downloads pinned, then opened at url."""
     profile = config.home() / EXTENSION_PROFILE
     if profile_in_use(profile):
         try:
             pinned = json.loads((profile / "Default" / "Preferences").read_text())["download"]["default_directory"] == str(folder)
         except (OSError, ValueError, KeyError, TypeError):
             pinned = False
-        if not pinned:
-            die(f"the extension's Chrome ({profile}) is open with its downloads going elsewhere: quit it once (Cmd-Q), so Finnamon "
-                f"can point them at {folder}, then start again")
+        if not pinned:   # Chrome rewrites Preferences from memory on exit, so writing the pin now would not last: --newest-download also reads ~/Downloads
+            print(f"Its downloads are not pinned to {folder}; the CSV will land wherever that window saves (~/Downloads is looked at too).", file=sys.stderr)
         print(f"The extension's Chrome is already open ({profile}): log in to the bank in that window.", file=sys.stderr)
         return profile
     profile.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -1619,32 +1646,29 @@ def _extension_profile(chrome: str, folder: Path, url: str = "about:blank") -> P
 
 
 def connected_devices(exe: str) -> set[str]:
-    """The deviceIds list_connected_browsers reports, from a one-tool `claude -p --chrome` in the import config dir."""
+    """The deviceIds list_connected_browsers reports, from a one-tool `claude -p --chrome`."""
     r = subprocess.run([exe, "-p", "Call list_connected_browsers once and print its result verbatim.", "--chrome", "--strict-mcp-config",
                         "--setting-sources", "project", "--allowedTools", CHROME_MCP + "list_connected_browsers",
                         "--disallowedTools", "Bash", "Read", "Edit", "Write", "WebFetch", "WebSearch", "--output-format", "stream-json", "--verbose"],
-                       capture_output=True, text=True, timeout=180, env=_import_env({}), cwd=str(claude_import_dir()))
+                       capture_output=True, text=True, timeout=180, env=_import_env({}), cwd=str(config.home()))
     if r.returncode:
-        die(f"claude --chrome failed ({(r.stderr or r.stdout).strip()[-300:]}); is the import dir logged in? {LOGIN_HINT}")
+        die(f"claude --chrome failed ({(r.stderr or r.stdout).strip()[-300:]}); is Claude Code logged in to the claude.ai account the extension uses?")
     return set(re.findall(r'deviceId\\*"\s*:\s*\\*"([^"\\]+)', r.stdout))
 
 
 def _import_env(extra: dict) -> dict:
-    """The extension session's environment: its own config dir and no API key (--chrome needs the claude.ai login), no agent-browser settings."""
+    """The extension session's environment: the person's own Claude login, no API key (--chrome needs the claude.ai login), no agent-browser settings."""
     drop = ("AGENT_BROWSER_", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CHROME_")
     return {**{k: v for k, v in os.environ.items() if not k.startswith(drop)},
-            "CLAUDE_CONFIG_DIR": str(config.home() / CLAUDE_IMPORT_DIR), "CLAUDE_CODE_ENABLE_CFC": "1", **extra}
+            "CLAUDE_CODE_ENABLE_CFC": "1", **extra}
 
 
 def pair_extension() -> None:
     """--pair-extension: list the connected browsers, have the person open the extension's profile, list them again, and
-    keep the one new deviceId. Also the one place that says how to /login the import config dir."""
+    keep the one new deviceId."""
     exe, chrome = claude_runner.binary(), chrome_path()
     if not exe or not chrome:
         die("needs claude and Google Chrome")
-    claude_import_dir()
-    if not claude_import_logged_in():
-        die(f"first, the import session's own claude.ai login: {LOGIN_HINT}")
     profile = config.home() / EXTENSION_PROFILE
     if profile_in_use(profile):
         die(f"the extension's Chrome ({profile}) is open: quit it (Cmd-Q), so its browser shows up as new, then pair again")
@@ -1671,19 +1695,32 @@ def pair_extension() -> None:
     out({"paired": store.get_state(conn, EXTENSION_DEVICE), "profile": str(profile), "next": "finnamon import --browser hsbc"})
 
 
-def fetch_by_extension(exe: str, chrome: str, bank: str, to: str, device: str) -> None:
-    """--extension: the extension's profile (no port) and a sealed `claude --chrome` on the import-extension skill."""
+def fetch_by_extension(exe: str, chrome: str, bank: str, to: str, device: str | None) -> str | None:
+    """--extension: the extension's profile (no port) and a sealed `claude --chrome` on the import-extension skill. With no
+    paired device it pairs by itself once the profile is open, if exactly one browser is connected; otherwise it returns
+    why not (the by-hand export's reason) and execs nothing."""
     folder = config.home() / "downloads"
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
     folder.chmod(0o700)
     _extension_profile(chrome, folder, BANK_LOGIN.get(bank.lower(), "about:blank"))
+    if not device:
+        found = connected_devices(exe)
+        if len(found) != 1:
+            return f"{len(found)} browsers are connected to the Claude extension, not one, so it cannot tell which is the bank's: run finnamon import --pair-extension"
+        conn = store.connect()
+        store.set_state(conn, EXTENSION_DEVICE, device := next(iter(found)))
+        conn.commit()
+        print(f"Paired the one connected browser ({device}) as the extension's.", file=sys.stderr)
     import secrets as _secrets
+    restore_claude_pick()   # a session that ended without its SessionEnd hook (killed): put its pick back first
     nonce = _secrets.token_hex(8)   # this session's own guard state: a second import cannot reset or inherit it
+    remember_claude_pick(nonce, device)
     allowed, disallowed = chrome_session_tools()
     prompt = f"/import-extension {bank} --device {device}" + (f" --to {to}" if to else "")
     os.chdir(assistant.dir())   # the skill lives in the assistant directory
     # The same seal as the CDP session (cmd_import below), plus: --chrome (the extension's MCP server, the one kept under
-    # --strict-mcp-config), CLAUDE_CONFIG_DIR of Finnamon's own (select_browser writes its pick there, not into ~/.claude.json),
+    # --strict-mcp-config), the person's own Claude login (select_browser's pick in ~/.claude.json is put back by the
+    # SessionEnd hook, restore_claude_pick),
     # the paired device as the extension's preference and as the guard's one allowed select_browser, and the extension's
     # own per-site prompt left on (ask). FINNAMON_IMPORT_SINCE: --newest-download takes only a file this session brought.
     os.execve(exe, [exe, prompt, "--chrome", "--setting-sources", "project", "--strict-mcp-config",
@@ -1736,9 +1773,11 @@ def cmd_import(a) -> None:
                     die("\n".join(problems))
                 if to and not _box_key(to):
                     die(f"--to {KEY_HINT}")
-                fetch_by_extension(exe, chrome, a.account, to, store.get_state(store.connect(), EXTENSION_DEVICE)); return
-            if a.extension:
+                why = fetch_by_extension(exe, chrome, a.account, to, store.get_state(store.connect(), EXTENSION_DEVICE))
+            if a.extension and why:
                 die(f"--extension: {why}")
+            if why:
+                print(f"Fetch by AI through the extension is not possible: {why}", file=sys.stderr)
         if not a.no_cdp and not a.attach and a.account.lower() in NO_CDP_BANKS:   # an explicit --attach still does what was typed
             print(f"{a.account} refuses a browser with a debugging port (reference: EAC), so this is the by-hand export: no AI, "
                   "you download the CSV and Finnamon imports it as it lands.")
@@ -1797,7 +1836,8 @@ def cmd_import(a) -> None:
         out({"on_disk": disk, "running": sorted(running), "builds": build_mismatch(chrome) if chrome else None, "eac": eac_message(a.account)}); return
     newest = None
     if a.newest_download and a.account and not a.file:   # the extension session's download; it never names a path
-        newest = wait_for_csv(config.home() / "downloads", float(os.environ.get("FINNAMON_IMPORT_SINCE") or 0))
+        # Finnamon's folder first; ~/Downloads too, for an extension Chrome left open with its downloads going there
+        newest = wait_for_csv(config.home() / "downloads", float(os.environ.get("FINNAMON_IMPORT_SINCE") or 0), Path.home() / "Downloads")
         a.file = str(newest)
     if not a.account or not a.file:
         die('usage: finnamon import "<account>" <file.csv> [--balance N] [--flip] [--dry-run] [--to <url>]   |   finnamon import --browser <bank> [--to <url>]')
@@ -1813,8 +1853,9 @@ def cmd_import(a) -> None:
             acct = imports.find_account(conn, a.account)
             out(imports.apply(conn, acct["account_id"], imports.parse(text), flip=a.flip, balance=a.balance, dry_run=a.dry_run))
         if newest and not a.dry_run:   # imported: out of the folder, so the next account's --newest-download cannot take it again
-            (newest.parent / "imported").mkdir(mode=0o700, exist_ok=True)
-            os.replace(newest, newest.parent / "imported" / f"{time.strftime('%Y%m%d-%H%M%S')}-{newest.name}")
+            done = config.home() / "downloads" / "imported"
+            done.mkdir(mode=0o700, parents=True, exist_ok=True)
+            shutil.move(str(newest), done / f"{time.strftime('%Y%m%d-%H%M%S')}-{newest.name}")
     except (ValueError, OSError) as e:
         die(str(e))
     except sqlite3.OperationalError as e:   # busy_timeout ran out: the daemon is mid-cycle
@@ -2190,12 +2231,12 @@ def cmd_doctor(a) -> None:
         if store.assistant_kind(conn) == "claude":   # Fetch by AI through the extension: banks that refuse a debugging port (NO_CDP_BANKS)
             v, why = claude_version(), extension_problem(conn)
             old = v < CHROME_MIN_VERSION
-            paired = bool(store.get_state(conn, EXTENSION_DEVICE))
+            paired = bool(store.get_state(conn, EXTENSION_DEVICE))   # not needed: the first import pairs by itself
             if old:
                 why = f"Claude Code {'.'.join(map(str, v)) or '(unknown)'} is older than {'.'.join(map(str, CHROME_MIN_VERSION))}, the first with --chrome tested here"
-            check(True if not why else (False if paired else "optional"), "Fetch by AI (extension)",
-                  why or f"paired, with its own claude.ai login in ~/.finnamon/{CLAUDE_IMPORT_DIR}",
-                  "claude update" if old else "" if not why else LOGIN_HINT if paired else "optional, for HSBC: finnamon import --pair-extension")
+            check((True if paired else "optional") if not why else (False if paired else "optional"), "Fetch by AI (extension)",
+                  why or ("paired" if paired else "pairs itself on the first Fetch by AI (HSBC)"),
+                  "claude update" if old else "" if not why else "")
     probs = assistant.problems()
     check(not probs, "Assistant directory", (probs[0] + (f" (and {len(probs) - 1} more)" if len(probs) > 1 else "")) if probs
           else f"{assistant.dir()} installed and trusted", "finnamon install")
@@ -2987,7 +3028,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--new-group", action="store_true", help="the code may come from a new group, which becomes the household chat"); s.set_defaults(fn=cmd_owner)
     s = sp.add_parser("channel", help="who answers Telegram: session (default: the dashboard's conversation), on (Claude Code's channel plugin) or off (legacy: the daemon's own session)",
                      description="session: the daemon polls Telegram and types each message into the dashboard's intercom session (the default for new installs, no plugin). on: Claude Code's Telegram channel plugin reads the chat. off: the legacy mode, the daemon answers with its own separate claude -p session."); s.add_argument("action", choices=["on", "session", "off", "status"]); s.set_defaults(fn=cmd_channel)
-    s = sp.add_parser("hook", help="Claude Code hooks (stdin: the hook event JSON)"); s.add_argument("name", choices=["reply-guard", "browser-guard", "chrome-guard", "permission", "secret-guard"]); s.set_defaults(fn=cmd_hook)
+    s = sp.add_parser("hook", help="Claude Code hooks (stdin: the hook event JSON)"); s.add_argument("name", choices=["reply-guard", "browser-guard", "chrome-guard", "chrome-restore", "permission", "secret-guard"]); s.set_defaults(fn=cmd_hook)
     s = sp.add_parser("property", help="stated assets a bank doesn't report (house, car), counted into net worth"); s.add_argument("action", choices=["list", "set", "remove"], nargs="?", default="list"); s.add_argument("name", nargs="?"); s.add_argument("value", nargs="?"); s.add_argument("--json", action="store_true", help="JSON even on a terminal"); s.set_defaults(fn=cmd_property)
     s = sp.add_parser("account", help="list | add \"<name>\" --institution <bank> (a manual account, fed by import) | remove \"<name>\" (a manual account and its transactions) | type <account_id> <type>|--clear | balance \"<name>\" <amount> (a manual account's balance now) | merge | unmerge | failover | owner"); s.add_argument("action", choices=["list", "add", "remove", "type", "kind", "balance", "merge", "unmerge", "failover", "owner"]); s.add_argument("new", nargs="?"); s.add_argument("existing", nargs="?")
     s.add_argument("--institution", help="add: the bank's name (default: the first word of the account name)"); s.add_argument("--type", choices=list(imports.KINDS), default="checking"); s.add_argument("--owner"); s.add_argument("--mask", help="last 4 digits"); s.add_argument("--yes", action="store_true", help="remove: don't ask"); s.add_argument("--clear", action="store_true", help="type: back to the bank's own type"); s.add_argument("--force", action="store_true", help="merge: even when the types or balances differ")
