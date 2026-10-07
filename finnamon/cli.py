@@ -1128,17 +1128,21 @@ BANK_STEPS = {"hsbc": ["Log in.", "Click the account's tile on the dashboard to 
 WATCH_SECONDS, WATCH_POLL = 1800.0, 1.0   # how long --no-cdp waits for the export, and how often it looks
 
 
-def wait_for_csv(folder: Path, since: float) -> Path:
-    """The newest .csv in folder written after `since`, once its size has stopped changing (Chrome writes a .crdownload
+def wait_for_csv(folder: Path, since: float, *more: Path) -> Path:
+    """The newest .csv in folder (else in the first of `more` that has one) written after `since`, once its size has stopped changing (Chrome writes a .crdownload
     first and renames it, but a slow disk can still show a growing file), or die() after WATCH_SECONDS."""
     last: tuple[Path, int] | None = None
     for _ in range(int(WATCH_SECONDS / WATCH_POLL)):
-        try:   # a file renamed or removed between the listing and the stat is just not there yet
-            new = sorted(((f.stat().st_mtime, f) for f in folder.glob("*.csv")), key=lambda t: t[0])
-            new = [f for m, f in new if m >= since]
-            size = new[-1].stat().st_size if new else 0
-        except OSError:
-            new = []
+        new = []
+        for d in (folder, *more):
+            try:   # a file renamed or removed between the listing and the stat is just not there yet
+                new = sorted(((f.stat().st_mtime, f) for f in d.glob("*.csv")), key=lambda t: t[0])
+                new = [f for m, f in new if m >= since]
+                size = new[-1].stat().st_size if new else 0
+            except OSError:
+                new = []
+            if new:
+                break
         if new:
             f = new[-1]
             if last == (f, size) and size:
@@ -1604,8 +1608,6 @@ def extension_problem(conn) -> str | None:
     """Why Fetch by AI cannot go through the extension on this household, or None when it can."""
     if store.assistant_kind(conn) != "claude":
         return "the extension import is Claude Code's; this household runs Codex"
-    if not store.get_state(conn, EXTENSION_DEVICE):
-        return "the extension's browser is not paired: run finnamon import --pair-extension in a terminal"
     return None
 
 
@@ -1625,17 +1627,16 @@ def chrome_session_tools() -> tuple[list[str], list[str]]:
 
 
 def _extension_profile(chrome: str, folder: Path, url: str = "about:blank") -> Path:
-    """The extension's profile, open with no debugging port. Running: reused as it is (never killed), but only once its
-    downloads point at folder, which can be set only while it is closed. Not running: downloads pinned, then opened at url."""
+    """The extension's profile, open with no debugging port. Running: reused as it is (never killed), and its
+    downloads point at folder (set only while it is closed; otherwise a note). Not running: downloads pinned, then opened at url."""
     profile = config.home() / EXTENSION_PROFILE
     if profile_in_use(profile):
         try:
             pinned = json.loads((profile / "Default" / "Preferences").read_text())["download"]["default_directory"] == str(folder)
         except (OSError, ValueError, KeyError, TypeError):
             pinned = False
-        if not pinned:
-            die(f"the extension's Chrome ({profile}) is open with its downloads going elsewhere: quit it once (Cmd-Q), so Finnamon "
-                f"can point them at {folder}, then start again")
+        if not pinned:   # Chrome rewrites Preferences from memory on exit, so writing the pin now would not last: --newest-download also reads ~/Downloads
+            print(f"Its downloads are not pinned to {folder}; the CSV will land wherever that window saves (~/Downloads is looked at too).", file=sys.stderr)
         print(f"The extension's Chrome is already open ({profile}): log in to the bank in that window.", file=sys.stderr)
         return profile
     profile.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -1694,12 +1695,22 @@ def pair_extension() -> None:
     out({"paired": store.get_state(conn, EXTENSION_DEVICE), "profile": str(profile), "next": "finnamon import --browser hsbc"})
 
 
-def fetch_by_extension(exe: str, chrome: str, bank: str, to: str, device: str) -> None:
-    """--extension: the extension's profile (no port) and a sealed `claude --chrome` on the import-extension skill."""
+def fetch_by_extension(exe: str, chrome: str, bank: str, to: str, device: str | None) -> str | None:
+    """--extension: the extension's profile (no port) and a sealed `claude --chrome` on the import-extension skill. With no
+    paired device it pairs by itself once the profile is open, if exactly one browser is connected; otherwise it returns
+    why not (the by-hand export's reason) and execs nothing."""
     folder = config.home() / "downloads"
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
     folder.chmod(0o700)
     _extension_profile(chrome, folder, BANK_LOGIN.get(bank.lower(), "about:blank"))
+    if not device:
+        found = connected_devices(exe)
+        if len(found) != 1:
+            return f"{len(found)} browsers are connected to the Claude extension, not one, so it cannot tell which is the bank's: run finnamon import --pair-extension"
+        conn = store.connect()
+        store.set_state(conn, EXTENSION_DEVICE, device := next(iter(found)))
+        conn.commit()
+        print(f"Paired the one connected browser ({device}) as the extension's.", file=sys.stderr)
     import secrets as _secrets
     restore_claude_pick()   # a session that ended without its SessionEnd hook (killed): put its pick back first
     nonce = _secrets.token_hex(8)   # this session's own guard state: a second import cannot reset or inherit it
@@ -1762,9 +1773,11 @@ def cmd_import(a) -> None:
                     die("\n".join(problems))
                 if to and not _box_key(to):
                     die(f"--to {KEY_HINT}")
-                fetch_by_extension(exe, chrome, a.account, to, store.get_state(store.connect(), EXTENSION_DEVICE)); return
-            if a.extension:
+                why = fetch_by_extension(exe, chrome, a.account, to, store.get_state(store.connect(), EXTENSION_DEVICE))
+            if a.extension and why:
                 die(f"--extension: {why}")
+            if why:
+                print(f"Fetch by AI through the extension is not possible: {why}", file=sys.stderr)
         if not a.no_cdp and not a.attach and a.account.lower() in NO_CDP_BANKS:   # an explicit --attach still does what was typed
             print(f"{a.account} refuses a browser with a debugging port (reference: EAC), so this is the by-hand export: no AI, "
                   "you download the CSV and Finnamon imports it as it lands.")
@@ -1823,7 +1836,8 @@ def cmd_import(a) -> None:
         out({"on_disk": disk, "running": sorted(running), "builds": build_mismatch(chrome) if chrome else None, "eac": eac_message(a.account)}); return
     newest = None
     if a.newest_download and a.account and not a.file:   # the extension session's download; it never names a path
-        newest = wait_for_csv(config.home() / "downloads", float(os.environ.get("FINNAMON_IMPORT_SINCE") or 0))
+        # Finnamon's folder first; ~/Downloads too, for an extension Chrome left open with its downloads going there
+        newest = wait_for_csv(config.home() / "downloads", float(os.environ.get("FINNAMON_IMPORT_SINCE") or 0), Path.home() / "Downloads")
         a.file = str(newest)
     if not a.account or not a.file:
         die('usage: finnamon import "<account>" <file.csv> [--balance N] [--flip] [--dry-run] [--to <url>]   |   finnamon import --browser <bank> [--to <url>]')
@@ -1839,8 +1853,9 @@ def cmd_import(a) -> None:
             acct = imports.find_account(conn, a.account)
             out(imports.apply(conn, acct["account_id"], imports.parse(text), flip=a.flip, balance=a.balance, dry_run=a.dry_run))
         if newest and not a.dry_run:   # imported: out of the folder, so the next account's --newest-download cannot take it again
-            (newest.parent / "imported").mkdir(mode=0o700, exist_ok=True)
-            os.replace(newest, newest.parent / "imported" / f"{time.strftime('%Y%m%d-%H%M%S')}-{newest.name}")
+            done = config.home() / "downloads" / "imported"
+            done.mkdir(mode=0o700, parents=True, exist_ok=True)
+            shutil.move(str(newest), done / f"{time.strftime('%Y%m%d-%H%M%S')}-{newest.name}")
     except (ValueError, OSError) as e:
         die(str(e))
     except sqlite3.OperationalError as e:   # busy_timeout ran out: the daemon is mid-cycle
@@ -2216,12 +2231,12 @@ def cmd_doctor(a) -> None:
         if store.assistant_kind(conn) == "claude":   # Fetch by AI through the extension: banks that refuse a debugging port (NO_CDP_BANKS)
             v, why = claude_version(), extension_problem(conn)
             old = v < CHROME_MIN_VERSION
-            paired = bool(store.get_state(conn, EXTENSION_DEVICE))
+            paired = bool(store.get_state(conn, EXTENSION_DEVICE))   # not needed: the first import pairs by itself
             if old:
                 why = f"Claude Code {'.'.join(map(str, v)) or '(unknown)'} is older than {'.'.join(map(str, CHROME_MIN_VERSION))}, the first with --chrome tested here"
-            check(True if not why else (False if paired else "optional"), "Fetch by AI (extension)",
-                  why or "paired",
-                  "claude update" if old else "" if not why else "optional, for HSBC: finnamon import --pair-extension")
+            check((True if paired else "optional") if not why else (False if paired else "optional"), "Fetch by AI (extension)",
+                  why or ("paired" if paired else "pairs itself on the first Fetch by AI (HSBC)"),
+                  "claude update" if old else "" if not why else "")
     probs = assistant.problems()
     check(not probs, "Assistant directory", (probs[0] + (f" (and {len(probs) - 1} more)" if len(probs) > 1 else "")) if probs
           else f"{assistant.dir()} installed and trusted", "finnamon install")

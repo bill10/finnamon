@@ -987,6 +987,7 @@ def test_fetch_by_ai_on_a_no_cdp_bank_is_the_by_hand_export(home, capsys, monkey
     monkeypatch.setattr("finnamon.cli.fetch_by_hand", lambda c, p, b, to: by_hand.append(b))
     monkeypatch.setattr("finnamon.cli.chrome_launch", lambda *a, **k: pytest.fail("no debuggable Chrome"))
     monkeypatch.setattr("os.execve", lambda *a: pytest.fail("no Claude session"))
+    monkeypatch.setattr(cli, "extension_problem", lambda c: "stub: not this test's route")
     cli.main(["import", "--browser", bank])
     assert by_hand == [bank] and "refuses a browser with a debugging port" in capsys.readouterr().out
     def attach(addr, url):

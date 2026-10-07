@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -158,12 +159,22 @@ def test_routing_paired_claude_execs_the_extension_session(home, conn, monkeypat
     monkeypatch.setattr(cli, "chrome_spawn", lambda c, p, u, port, **k: spawned.append((p, u, port)))
     monkeypatch.setattr(cli, "fetch_by_hand", lambda c, p, b, to: by_hand.append(b))
     monkeypatch.setattr("os.execve", lambda exe, argv, env: calls.append((argv, env)))
+    monkeypatch.setattr(cli, "connected_devices", lambda exe: set())
     cli.main(["import", "--browser", "hsbc"])
-    assert by_hand == ["hsbc"] and not calls, "unpaired: the by-hand export (#31)"
-    paired(conn, home)
+    assert by_hand == ["hsbc"] and not calls and store.get_state(conn, cli.EXTENSION_DEVICE) is None, "unpaired, none connected: the by-hand export"
+    monkeypatch.setattr(cli, "connected_devices", lambda exe: {"a", "b"})
+    cli.main(["import", "--browser", "hsbc"])
+    assert by_hand == ["hsbc", "hsbc"] and not calls and store.get_state(conn, cli.EXTENSION_DEVICE) is None, "several connected: never a guess"
+    with pytest.raises(SystemExit):
+        cli.main(["import", "--browser", "hsbc", "--extension"])
+    del by_hand[1:]; spawned.clear()
+    monkeypatch.setattr(cli, "connected_devices", lambda exe: {DEV})
+    cli.main(["import", "--browser", "hsbc"])
+    assert len(calls) == 1 and store.get_state(conn, cli.EXTENSION_DEVICE) == DEV, "exactly one connected: paired by itself, then the session"
+    by_hand.clear(); calls.clear(); spawned.clear()   # (the execve stub returns, so the by-hand route also ran)
     store.set_setting(conn, "assistant", "codex")
     cli.main(["import", "--browser", "hsbc"])
-    assert by_hand == ["hsbc", "hsbc"] and not calls, "Codex: the by-hand export"
+    assert by_hand == ["hsbc"] and not calls, "Codex: the by-hand export"
     with pytest.raises(SystemExit):
         cli.main(["import", "--browser", "hsbc", "--extension"])
     store.set_setting(conn, "assistant", "claude")
@@ -191,16 +202,19 @@ def test_routing_paired_claude_execs_the_extension_session(home, conn, monkeypat
     assert len(spawned) == 1 and len(calls) == 2
 
 
-def test_running_profile_with_unpinned_downloads_is_refused(home, conn, monkeypatch, capsys):
+def test_running_profile_with_unpinned_downloads_is_left_alone(home, conn, monkeypatch, capsys):
     seed(conn); paired(conn, home)
     monkeypatch.setenv("FINNAMON_CHROME", sys.executable)
     monkeypatch.setattr("finnamon.claude_runner.binary", lambda: "/usr/bin/claude")
     monkeypatch.setattr(cli, "claude_version", lambda: (2, 1, 300))
     monkeypatch.setattr(cli, "profile_in_use", lambda p: True)
     monkeypatch.setattr(cli, "chrome_spawn", lambda *a, **k: pytest.fail("never a second launch"))
+    monkeypatch.setattr("os.chdir", lambda p: None)
+    calls = []
+    monkeypatch.setattr("os.execve", lambda exe, argv, env: (calls.append(argv), sys.exit(0)))   # execve never returns
     with pytest.raises(SystemExit):
         cli.main(["import", "--browser", "hsbc", "--extension"])
-    assert "quit it once" in capsys.readouterr().err
+    assert len(calls) == 1 and "~/Downloads is looked at too" in capsys.readouterr().err
 
 
 def test_old_claude_code_is_refused(home, conn, monkeypatch, capsys):
@@ -284,14 +298,16 @@ def scratch_claude_json(tmp_path, monkeypatch):
     """The person's ~/.claude.json is never read or written by a test."""
     f = tmp_path / "claude-home" / ".claude.json"
     f.parent.mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path / "persons-home"))   # ~/Downloads is looked at too: never the real one
+    (tmp_path / "persons-home" / "Downloads").mkdir(parents=True)
     monkeypatch.setattr(cli, "_claude_json", lambda: f)
     return f
 
 
 def test_extension_problem_needs_no_separate_login(home, conn):
-    assert "not paired" in cli.extension_problem(conn)
-    store.set_state(conn, cli.EXTENSION_DEVICE, DEV)
-    assert cli.extension_problem(conn) is None
+    assert cli.extension_problem(conn) is None, "no stored device is not a problem: the first import pairs"
+    store.set_setting(conn, "assistant", "codex")
+    assert "Codex" in cli.extension_problem(conn)
 
 
 def test_import_env_keeps_the_login_and_drops_the_keys(monkeypatch):
@@ -321,3 +337,17 @@ def test_restore_leaves_a_pick_the_person_made_since(home, scratch_claude_json):
     f.write_text(json.dumps({"chromeExtension": {"pairedDeviceId": "dev-new"}}))
     cli.restore_claude_pick()   # the next start's sweep
     assert json.loads(f.read_text())["chromeExtension"]["pairedDeviceId"] == "dev-new" and not cli._pick_files()
+
+
+def test_newest_download_looks_in_the_persons_downloads_after_finnamons(home, conn, monkeypatch, scratch_claude_json):
+    seed(conn)
+    acct = imports.add_account(conn, "HSBC Checking", "HSBC", "checking", "bill")["account_id"]
+    theirs = Path.home() / "Downloads" / "TransactionHistory.csv"
+    theirs.write_text("Date,Description,Amount\n09/15/2026,COSTCO,-142.17\n")
+    monkeypatch.setattr(cli, "WATCH_POLL", 0.01)
+    monkeypatch.setenv("FINNAMON_IMPORT_SINCE", str(time.time() - 10))
+    cli.main(["import", "HSBC Checking", "--newest-download"])
+    assert conn.execute("SELECT count(*) FROM transactions WHERE account_id=?", (acct,)).fetchone()[0] == 1
+    assert not theirs.exists() and len(list((home / "downloads" / "imported").glob("*.csv")) ) == 1, "moved into Finnamon's folder, not left or written in ~/Downloads"
+    (home / "downloads" / "a.csv").write_text("x"); (Path.home() / "Downloads" / "b.csv").write_text("y")
+    assert cli.wait_for_csv(home / "downloads", time.time() - 10, Path.home() / "Downloads").name == "a.csv", "Finnamon's folder first"
