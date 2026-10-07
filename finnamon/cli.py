@@ -1448,7 +1448,7 @@ def chrome_call_ok(tool: str, inp: dict, state: dict, device: str, bank: str) ->
 
 def tab_urls(resp) -> dict[str, str]:
     """{tabId: url} from a tool's result: tabs_context_mcp's JSON (tabId ... url) and the "Tab Context" lines every result
-    carries (tabId N: "title" (url)). The last mention of a tab wins: the Tab Context block closes every result, so page
+    carries (tabId N: "title" ("url"), the url quoted or not). The last mention of a tab wins: the Tab Context block closes every result, so page
     text that imitates one (or a title holding a URL) comes before it and is overwritten."""
     text = _resp_text(resp)
     hits = [(m.start(), m.group(1), m.group(2)) for m in re.finditer(r'"tabId"\s*:\s*(\d+)[^{}]*?"url"\s*:\s*"([^"]*)"', text)]
@@ -1456,7 +1456,7 @@ def tab_urls(resp) -> dict[str, str]:
     # `tabId N: "title" (url)` with the url last on the line: the leftmost " (" whose rest is one space-free token up to
     # ")" at the end. A title cannot pose as it (the real url follows a space after the title), nor can a url that holds
     # "(https://bank)" in its path (the whole token is taken).
-    hits += [(m.start(), m.group(1), m.group(2)) for m in re.finditer(r'tabId\s+(\d+):[^\n]*? \((\S+)\)[ \t]*$', text, re.M)]
+    hits += [(m.start(), m.group(1), m.group(2)) for m in re.finditer(r'tabId\s+(\d+):[^\n]*? \("?(\S+?)"?\)[ \t]*$', text, re.M)]
     return {tab: url for _, tab, url in sorted(hits)}
 
 

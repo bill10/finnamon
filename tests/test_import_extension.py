@@ -390,3 +390,14 @@ def test_waits_for_the_stored_device_when_only_others_are_connected(home, conn, 
     assert cli.fetch_by_extension("/usr/bin/claude", sys.executable, "hsbc", "", DEV) is None
     assert len(sleeps) == 2 and calls and calls[0]["FINNAMON_IMPORT_DEVICE"] == DEV
     assert "is not connected" in capsys.readouterr().err
+
+
+def test_tab_urls_accept_the_real_quoted_tab_context_lines():
+    new = f'  \u2022 tabId {TAB}: "New Tab" ("chrome://newtab/")'
+    hsbc = f'  \u2022 tabId {TAB}: "Your homepage | Banking | HSBC" ("https://www.us.hsbc.com/online/dashboard/")'
+    assert cli.tab_urls(new) == {TAB: "chrome://newtab/"}
+    assert cli.tab_urls(hsbc) == {TAB: "https://www.us.hsbc.com/online/dashboard/"}
+    full = json.dumps({"availableTabs": [{"tabId": int(TAB), "title": "New Tab", "url": "chrome://newtab/"}]}) + "\nTab Context:\n- Available tabs:\n" + new
+    assert cli.tab_urls(full) == {TAB: "chrome://newtab/"} and cli.tab_urls(full)[TAB] in cli.BLANK
+    off = f'Tab Context:\n- Available tabs:\n  \u2022 tabId {TAB}: "x" ("https://evil.example/")'
+    assert cli.tab_urls(off) == {TAB: "https://evil.example/"}
