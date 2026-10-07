@@ -514,7 +514,7 @@ $('row-prop').addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.k
 // import: a bank's CSV export into a manual account (one Plaid can't reach); the server hands the file to `finnamon import`
 const ON_BOX = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);   // the browser window opens where the server runs
 const KINDS = { checking: 'Checking', savings: 'Savings', credit: 'Credit card', loan: 'Loan', investment: 'Investment' };   // labels for finnamon.imports.KINDS; a parity test holds web/server.js KINDS to it
-const NO_CDP_BANKS = new Set(['hsbc']);   // web/server.js NO_CDP_BANKS: Fetch by AI can never log in there, so only Fetch without AI shows
+const NO_CDP_BANKS = new Set(['hsbc']);   // web/server.js NO_CDP_BANKS: Fetch by AI can't open a debugging port there: it goes through the Claude extension when paired (status.extension_import), else only Fetch without AI shows
 const MAX_NAME = 80;   // web/server.js MAX_NAME, which /api/account enforces
 const ownerOptions = (members) => members.map(m => `<option value="${esc(m.owner)}">Owner: ${esc(m.display_name || m.owner)}</option>`).join('') + `<option value="joint">Owner: Joint</option>`;   // the select has no label of its own beside the other fields
 function renderImport(s) {
@@ -567,7 +567,8 @@ function renderImport(s) {
     if (!r.ok) { $('i-err').textContent = r.error; return; }
     toggleImport(false); showView('import'); openIntercom(true);
   };
-  $('i-fetch')?.addEventListener('click', fetchIt(null));
+  const noPort = () => NO_CDP_BANKS.has(($('i-acct').selectedOptions?.[0]?.dataset.bank || '').toLowerCase());
+  $('i-fetch')?.addEventListener('click', () => fetchIt(noPort() ? 'extension' : null)());
   $('i-hand')?.addEventListener('click', fetchIt('no-cdp'));
   $('i-reset')?.addEventListener('click', async () => {
     if (!confirm("Start Finnamon's browser on a fresh profile? The bank will treat it as a new device, and you log in from scratch.")) return;
@@ -597,7 +598,7 @@ function renderImport(s) {
     go.disabled = false;
   };
   $('i-file').addEventListener('change', () => { flip = false; preview(); });
-  const aiOk = () => { const f = $('i-fetch'); if (f) f.hidden = NO_CDP_BANKS.has(($('i-acct').selectedOptions?.[0]?.dataset.bank || '').toLowerCase()); };
+  const aiOk = () => { const f = $('i-fetch'); if (f) f.hidden = noPort() && !s.status?.extension_import; };
   aiOk();
   $('i-acct').addEventListener('change', preview); $('i-acct').addEventListener('change', aiOk);
   $('i-go')?.addEventListener('click', async () => {

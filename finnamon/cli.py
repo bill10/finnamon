@@ -19,6 +19,7 @@ import re
 import shutil
 import sys
 import time
+import urllib.parse
 import urllib.request
 import webbrowser
 from pathlib import Path
@@ -742,6 +743,25 @@ def cmd_hook(a) -> None:
         if decision:
             print(json.dumps(decision))
         return
+    if a.name == "chrome-guard":   # the extension session's every tool call (chrome_guard_settings); outside it, nothing is allowed
+        try:
+            device, bank = os.environ.get("FINNAMON_IMPORT_DEVICE"), os.environ.get("FINNAMON_IMPORT_BANK")
+            if not device or not bank:
+                die("blocked: chrome-guard runs only in the extension import session", 2)
+            raw = sys.stdin.read()
+            why = chrome_guard(json.loads(raw), device, bank)
+        except SystemExit:
+            raise
+        except Exception as e:  # noqa: BLE001 - a guard that cannot read the call blocks it; after a call, it stops the session
+            if '"PostToolUse"' in locals().get("raw", ""):
+                print(json.dumps({"continue": False, "stopReason": f"Finnamon stopped the import: its guard could not check the last call ({e})"}))
+                return
+            die(f"blocked: chrome-guard could not run ({e})", 2)
+        if isinstance(why, dict):
+            print(json.dumps(why))
+        elif why:
+            die(f"blocked: {why}", 2)
+        return
     try:   # a guard that crashes must still block (only exit 2 blocks; settings.json also maps any other failure to 2)
         event = json.load(sys.stdin)
         tool_input = event.get("tool_input") or {}
@@ -1364,6 +1384,315 @@ def browser_session_tools(to: str | None) -> tuple[list[str], list[str]]:
     return allowed, disallowed
 
 
+# --extension: Fetch by AI through the Claude in Chrome extension, with no debugging port anywhere (HSBC refuses one; see
+# docs/research/hsbc-via-claude-in-chrome.md). Claude only: Codex has no equivalent, so a Codex household keeps --no-cdp.
+CHROME_MCP = "mcp__claude-in-chrome__"
+EXTENSION_PROFILE = "chrome-extension-test"   # under FINNAMON_HOME: the no-port profile with the extension installed and signed in
+CLAUDE_IMPORT_DIR = "claude-import"   # under FINNAMON_HOME: the session's own CLAUDE_CONFIG_DIR, so select_browser's pick never lands in ~/.claude.json
+EXTENSION_DEVICE = "extension_device"   # state key: the deviceId `import --pair-extension` found for that profile
+EXTENSION_STATE_FILE = "import-extension-{}.json"   # under FINNAMON_HOME, per session (FINNAMON_IMPORT_NONCE): what chrome-guard has seen ({selected, tab}; .tripped beside it)
+CHROME_MIN_VERSION = (2, 1, 292)   # the Claude Code the --chrome session was tested on
+# The hosts a bank's tab may be on: the host itself or any subdomain of it, https only. HSBC US: www.us.hsbc.com, and the
+# logon and online-banking hosts it redirects through, all under us.hsbc.com (confirm on the first live run).
+BANK_HOSTS = {"hsbc": ("us.hsbc.com",)}
+CHROME_CLICKS = {"left_click", "scroll", "scroll_to", "screenshot", "zoom", "wait", "hover"}   # computer actions: no type, key or drag, typing is the person's
+CHROME_ON_TAB = {"computer", "find", "read_page", "get_page_text", "tabs_close_mcp"}   # read or click, on the bank's tab only
+BLANK = ("about:blank", "chrome://newtab/", "chrome://new-tab-page/", "")   # a fresh tab: nothing there to leave the bank for
+
+
+def bank_host_ok(bank: str, url: str) -> bool:
+    if re.search(r"[\\@\s\x00-\x1f\x7f]", url):   # Chrome reads \ as / and urlsplit does not; userinfo has no place in a bank URL
+        return False
+    u = urllib.parse.urlsplit(url)
+    host = (u.hostname or "").lower()
+    return u.scheme == "https" and any(host == h or host.endswith("." + h) for h in BANK_HOSTS.get(bank.lower(), ()))
+
+
+def chrome_call_ok(tool: str, inp: dict, state: dict, device: str, bank: str) -> str | None:
+    """None when the extension session may make this browser call; otherwise why not. Pure, so tests pin it. state is what
+    the hook recorded: selected (select_browser with the paired device ran), tab (the tab tabs_context_mcp reported),
+    tripped (a page left the bank). Allow-listed: a tool or action this does not know is refused."""
+    if state.get("tripped"):
+        return f"the session is stopped: {state['tripped']}"
+    if not tool.startswith(CHROME_MCP):
+        return f"{tool} is not a tool of this session"
+    t = tool[len(CHROME_MCP):]
+    if t == "select_browser":
+        return None if device and inp.get("deviceId") == device else "select_browser takes the paired device (FINNAMON_IMPORT_DEVICE) and no other"
+    if not state.get("selected"):
+        return "the first browser call is select_browser with the paired device"
+    if t == "tabs_context_mcp":
+        return None
+    tab = state.get("tab")
+    if not tab:
+        return "call tabs_context_mcp first: it names the one tab this session drives"
+    if t not in CHROME_ON_TAB | {"navigate"}:
+        return f"{t} is not allowed in this session"
+    if str(inp.get("tabId")) != str(tab):
+        return f"every call drives tab {tab}, the one tabs_context_mcp gave"
+    if t == "navigate":
+        url = str(inp.get("url") or "")
+        return None if url == "back" or bank_host_ok(bank, url) else f"navigate goes only to {bank}'s own site ({', '.join(BANK_HOSTS.get(bank.lower(), ()))}) or back"
+    if t == "computer" and inp.get("action") not in CHROME_CLICKS:
+        return f"computer {inp.get('action')} is not allowed: only {', '.join(sorted(CHROME_CLICKS))}; typing is the person's"
+    return None
+
+
+def tab_urls(resp) -> dict[str, str]:
+    """{tabId: url} from a tool's result: tabs_context_mcp's JSON (tabId ... url) and the "Tab Context" lines every result
+    carries (tabId N: "title" (url)). The last mention of a tab wins: the Tab Context block closes every result, so page
+    text that imitates one (or a title holding a URL) comes before it and is overwritten."""
+    text = _resp_text(resp)
+    hits = [(m.start(), m.group(1), m.group(2)) for m in re.finditer(r'"tabId"\s*:\s*(\d+)[^{}]*?"url"\s*:\s*"([^"]*)"', text)]
+    hits += [(m.start(), m.group(2), m.group(1)) for m in re.finditer(r'"url"\s*:\s*"([^"]*)"[^{}]*?"tabId"\s*:\s*(\d+)', text)]
+    # `tabId N: "title" (url)` with the url last on the line: the leftmost " (" whose rest is one space-free token up to
+    # ")" at the end. A title cannot pose as it (the real url follows a space after the title), nor can a url that holds
+    # "(https://bank)" in its path (the whole token is taken).
+    hits += [(m.start(), m.group(1), m.group(2)) for m in re.finditer(r'tabId\s+(\d+):[^\n]*? \((\S+)\)[ \t]*$', text, re.M)]
+    return {tab: url for _, tab, url in sorted(hits)}
+
+
+def _resp_text(resp) -> str:
+    """A tool result's text: MCP content blocks joined, so each block's own lines end where they end."""
+    if isinstance(resp, str):
+        return resp
+    if isinstance(resp, list):
+        return "\n".join(_resp_text(r) for r in resp)
+    if isinstance(resp, dict) and ("text" in resp or "content" in resp):
+        return _resp_text(resp["text"] if "text" in resp else resp["content"])
+    return json.dumps(resp)
+
+
+def extension_state_file() -> Path:
+    nonce = os.environ.get("FINNAMON_IMPORT_NONCE") or ""
+    if not re.fullmatch(r"[0-9a-f]{16}", nonce):
+        raise ValueError("no import session nonce")
+    return config.home() / EXTENSION_STATE_FILE.format(nonce)
+
+
+def chrome_guard(event: dict, device: str, bank: str) -> str | dict | None:
+    """The chrome-guard hook's decision for one event: a str blocks (PreToolUse), a dict is the hook's JSON reply (a
+    PostToolUse that stops the session), None lets it be. Records the selection and the tab in EXTENSION_STATE_FILE."""
+    f = extension_state_file()
+    trip = f.with_suffix(".tripped")   # its own file, only ever created: no concurrent write can clear a trip
+    try:
+        state = json.loads(f.read_text())
+    except (OSError, ValueError):
+        state = {}
+    if trip.exists():
+        state["tripped"] = trip.read_text() or "a page left the bank"
+    tool, inp = str(event.get("tool_name") or ""), event.get("tool_input") or {}
+    if event.get("hook_event_name") == "PostToolUse":
+        # ponytail: read-modify-write without a lock; parallel calls in one turn could lose a selected/tab update (a refusal
+        # later); a trip is written to its own file below, so it is never lost
+        if tool == CHROME_MCP + "select_browser" and "error" not in _resp_text(event.get("tool_response")).lower():
+            state["selected"] = True
+        urls = tab_urls(event.get("tool_response"))
+        if tool == CHROME_MCP + "tabs_context_mcp" and not state.get("tab"):
+            if len(urls) != 1:
+                state["tripped"] = f"tabs_context_mcp showed {len(urls)} tabs, not one"
+            else:
+                state["tab"] = next(iter(urls))
+        tab = state.get("tab")
+        if tab and not state.get("tripped") and tool.startswith(CHROME_MCP) and tool not in (CHROME_MCP + "select_browser", CHROME_MCP + "tabs_close_mcp"):   # a closed tab has no address left
+            url = urls.get(str(tab))
+            if url is None:
+                state["tripped"] = f"the result did not show tab {tab}'s address"
+            elif url not in BLANK and not bank_host_ok(bank, url):
+                state["tripped"] = f"the bank's tab went to {urllib.parse.urlsplit(url).hostname or url}, off {bank}'s site"
+        if state.get("tripped") and not trip.exists():
+            trip.write_text(state["tripped"])
+        f.write_text(json.dumps({k: v for k, v in state.items() if k != "tripped"}))
+        if state.get("tripped"):
+            return {"continue": False, "stopReason": f"Finnamon stopped the import: {state['tripped']}. Close the window; start again from the dashboard or a terminal."}
+        return None
+    if state.get("tripped"):
+        return f"the session is stopped: {state['tripped']}"
+    if tool == "Bash":
+        return import_command_ok(str(inp.get("command") or ""))
+    if tool == "ToolSearch":   # loading the browser tools' schemas; it runs nothing
+        return None
+    return chrome_call_ok(tool, inp, state, device, bank)
+
+
+def import_command_ok(cmd: str) -> str | None:
+    """The extension session's only Bash: finnamon import "<account>" --newest-download [--dry-run] [--flip] [--to <url>],
+    and finnamon account list [--to <url>]. One plain command."""
+    import shlex
+    if any(c in cmd for c in ";|&`$<>()#{}\n*?[~"):   # no lists, pipes, substitutions, or globs that bash would widen into a file name
+        return "one command at a time, no pipes, redirects or substitutions in the import session"
+    try:
+        argv = shlex.split(cmd)
+    except ValueError:
+        return "unreadable command"
+    rest = [x for x in argv[2:] if x != "--to"]
+    if argv[:3] == ["finnamon", "account", "list"]:
+        return None if len(argv) in (3, 5) and argv[3:4] in ([], ["--to"]) else "finnamon account list [--to <url>]"
+    if argv[:2] == ["finnamon", "import"] and "--newest-download" in argv:
+        flags = [x for x in rest if x.startswith("-")]
+        pos = [x for i, x in enumerate(argv[2:], 2) if not x.startswith("-") and argv[i - 1] != "--to"]
+        if set(flags) <= {"--newest-download", "--dry-run", "--flip"} and len(pos) == 1:
+            return None
+    return 'only finnamon import "<account>" --newest-download [--dry-run] [--flip] and finnamon account list'
+
+
+def chrome_guard_settings() -> dict:
+    """The extension session's hooks, on the launcher's command line: every tool call before it runs (anything the guard
+    does not know is refused), and every browser call after it (the tab's address)."""
+    guard = f"{shlex_quote(sys.executable)} -m finnamon.cli hook chrome-guard || exit 2"
+    hook = [{"type": "command", "command": guard}]
+    return {"hooks": {"PreToolUse": [{"matcher": "*", "hooks": hook}], "PostToolUse": [{"matcher": CHROME_MCP + ".*", "hooks": hook}]}}
+
+
+def claude_import_dir() -> Path:
+    d = config.home() / CLAUDE_IMPORT_DIR
+    d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    d.chmod(0o700)   # its own claude.ai login
+    return d
+
+
+def claude_import_logged_in() -> bool:
+    """A /login has run in the import config dir: Claude Code records the account in its .claude.json (the token itself is in the keychain)."""
+    try:
+        return bool(json.loads((config.home() / CLAUDE_IMPORT_DIR / ".claude.json").read_text()).get("oauthAccount"))
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def claude_version() -> tuple[int, ...]:
+    exe = claude_runner.binary()
+    try:
+        out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=CLAUDE_AUTH_TIMEOUT_S).stdout if exe else ""
+    except (OSError, subprocess.TimeoutExpired):
+        out = ""
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", out)
+    return tuple(map(int, m.groups())) if m else ()
+
+
+LOGIN_HINT = f"CLAUDE_CONFIG_DIR=~/.finnamon/{CLAUDE_IMPORT_DIR} claude, then /login once (the claude.ai account the extension is signed in to), then /exit"
+
+
+def extension_problem(conn) -> str | None:
+    """Why Fetch by AI cannot go through the extension on this household, or None when it can."""
+    if store.assistant_kind(conn) != "claude":
+        return "the extension import is Claude Code's; this household runs Codex"
+    if not store.get_state(conn, EXTENSION_DEVICE):
+        return "the extension's browser is not paired: run finnamon import --pair-extension in a terminal"
+    if not claude_import_logged_in():
+        return f"the import session has no claude.ai login of its own: run {LOGIN_HINT}"
+    return None
+
+
+def chrome_session_tools() -> tuple[list[str], list[str]]:
+    """(allowed, disallowed) for the extension session: the browser tools chrome_call_ok can pass and the two finnamon
+    commands; everything else the guard refuses anyway, and the household's allow list never leaks in."""
+    allowed = [CHROME_MCP + t for t in ("select_browser", "tabs_context_mcp", "navigate", *sorted(CHROME_ON_TAB))]
+    allowed += ["Bash(finnamon import *)", "Bash(finnamon account list *)", "Bash(finnamon account list)"]
+    try:
+        household = json.loads((assistant.dir() / ".claude/settings.json").read_text())["permissions"]["allow"]
+    except (OSError, ValueError, KeyError):
+        household = []
+    blocked = ("javascript_tool", "form_input", "file_upload", "upload_image", "switch_browser", "tabs_create_mcp", "read_network_requests",
+               "read_console_messages", "shortcuts_list", "shortcuts_execute", "browser_batch", "gif_creator", "resize_window", "list_connected_browsers")
+    disallowed = [t for t in household if t not in allowed] + [CHROME_MCP + t for t in blocked] + ["Read", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"]
+    return allowed, disallowed
+
+
+def _extension_profile(chrome: str, folder: Path, url: str = "about:blank") -> Path:
+    """The extension's profile, open with no debugging port. Running: reused as it is (never killed), but only once its
+    downloads point at folder, which can be set only while it is closed. Not running: downloads pinned, then opened at url."""
+    profile = config.home() / EXTENSION_PROFILE
+    if profile_in_use(profile):
+        try:
+            pinned = json.loads((profile / "Default" / "Preferences").read_text())["download"]["default_directory"] == str(folder)
+        except (OSError, ValueError, KeyError, TypeError):
+            pinned = False
+        if not pinned:
+            die(f"the extension's Chrome ({profile}) is open with its downloads going elsewhere: quit it once (Cmd-Q), so Finnamon "
+                f"can point them at {folder}, then start again")
+        print(f"The extension's Chrome is already open ({profile}): log in to the bank in that window.", file=sys.stderr)
+        return profile
+    profile.mkdir(mode=0o700, parents=True, exist_ok=True)
+    pin_downloads(profile, folder)
+    chrome_spawn(chrome, profile, url, port=False)
+    return profile
+
+
+def connected_devices(exe: str) -> set[str]:
+    """The deviceIds list_connected_browsers reports, from a one-tool `claude -p --chrome` in the import config dir."""
+    r = subprocess.run([exe, "-p", "Call list_connected_browsers once and print its result verbatim.", "--chrome", "--strict-mcp-config",
+                        "--setting-sources", "project", "--allowedTools", CHROME_MCP + "list_connected_browsers",
+                        "--disallowedTools", "Bash", "Read", "Edit", "Write", "WebFetch", "WebSearch", "--output-format", "stream-json", "--verbose"],
+                       capture_output=True, text=True, timeout=180, env=_import_env({}), cwd=str(claude_import_dir()))
+    if r.returncode:
+        die(f"claude --chrome failed ({(r.stderr or r.stdout).strip()[-300:]}); is the import dir logged in? {LOGIN_HINT}")
+    return set(re.findall(r'deviceId\\*"\s*:\s*\\*"([^"\\]+)', r.stdout))
+
+
+def _import_env(extra: dict) -> dict:
+    """The extension session's environment: its own config dir and no API key (--chrome needs the claude.ai login), no agent-browser settings."""
+    drop = ("AGENT_BROWSER_", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CHROME_")
+    return {**{k: v for k, v in os.environ.items() if not k.startswith(drop)},
+            "CLAUDE_CONFIG_DIR": str(config.home() / CLAUDE_IMPORT_DIR), "CLAUDE_CODE_ENABLE_CFC": "1", **extra}
+
+
+def pair_extension() -> None:
+    """--pair-extension: list the connected browsers, have the person open the extension's profile, list them again, and
+    keep the one new deviceId. Also the one place that says how to /login the import config dir."""
+    exe, chrome = claude_runner.binary(), chrome_path()
+    if not exe or not chrome:
+        die("needs claude and Google Chrome")
+    claude_import_dir()
+    if not claude_import_logged_in():
+        die(f"first, the import session's own claude.ai login: {LOGIN_HINT}")
+    profile = config.home() / EXTENSION_PROFILE
+    if profile_in_use(profile):
+        die(f"the extension's Chrome ({profile}) is open: quit it (Cmd-Q), so its browser shows up as new, then pair again")
+    before = connected_devices(exe)
+    folder = config.home() / "downloads"
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _extension_profile(chrome, folder)
+    print(f"Chrome is open on {profile}, with no debugging port. If the Claude extension is not installed there, install it from "
+          "the Chrome Web Store and sign in to the same claude.ai account. Leave the window open.")
+    try:
+        input("Press Enter once the extension's icon shows it is connected… ")
+    except EOFError:
+        pass
+    new = connected_devices(exe) - before
+    if len(new) != 1:
+        die(f"expected one new browser, saw {len(new)}; with every other Chrome left as it is, run --pair-extension again")
+    dev = new.pop()
+    if not _asked(f"One browser connected while that window opened ({dev}). Is the extension in that window showing connected, "
+                  "and did no other Chrome of yours start or wake meanwhile? [y/N] "):
+        die("not paired; quit the other Chrome windows you can spare, or wait a minute, and run --pair-extension again")
+    conn = store.connect()
+    store.set_state(conn, EXTENSION_DEVICE, dev)
+    conn.commit()
+    out({"paired": store.get_state(conn, EXTENSION_DEVICE), "profile": str(profile), "next": "finnamon import --browser hsbc"})
+
+
+def fetch_by_extension(exe: str, chrome: str, bank: str, to: str, device: str) -> None:
+    """--extension: the extension's profile (no port) and a sealed `claude --chrome` on the import-extension skill."""
+    folder = config.home() / "downloads"
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    folder.chmod(0o700)
+    _extension_profile(chrome, folder, BANK_LOGIN.get(bank.lower(), "about:blank"))
+    import secrets as _secrets
+    nonce = _secrets.token_hex(8)   # this session's own guard state: a second import cannot reset or inherit it
+    allowed, disallowed = chrome_session_tools()
+    prompt = f"/import-extension {bank} --device {device}" + (f" --to {to}" if to else "")
+    os.chdir(assistant.dir())   # the skill lives in the assistant directory
+    # The same seal as the CDP session (cmd_import below), plus: --chrome (the extension's MCP server, the one kept under
+    # --strict-mcp-config), CLAUDE_CONFIG_DIR of Finnamon's own (select_browser writes its pick there, not into ~/.claude.json),
+    # the paired device as the extension's preference and as the guard's one allowed select_browser, and the extension's
+    # own per-site prompt left on (ask). FINNAMON_IMPORT_SINCE: --newest-download takes only a file this session brought.
+    os.execve(exe, [exe, prompt, "--chrome", "--setting-sources", "project", "--strict-mcp-config",
+                    "--settings", json.dumps(chrome_guard_settings()),
+                    "--allowedTools", *allowed, "--disallowedTools", *disallowed],
+              _import_env({"FINNAMON_IMPORT_SESSION": to or "local", "FINNAMON_IMPORT_BANK": bank, "FINNAMON_IMPORT_DEVICE": device,
+                           "FINNAMON_IMPORT_SINCE": str(time.time()), "FINNAMON_IMPORT_NONCE": nonce, "CLAUDE_CHROME_PAIRED_DEVICE_ID": device, "CLAUDE_CHROME_PERMISSION_MODE": "ask"}))
+
+
 def _import_profile() -> Path:
     """Finnamon's own Chrome profile, ~/.finnamon/chrome, 0700."""
     profile = config.home() / "chrome"
@@ -1378,19 +1707,38 @@ def cmd_import(a) -> None:
     (the person logs in; see the import-browser skill in the assistant bundle)."""
     _triage_read_only()
     to = _box_url(a.to)
+    if a.pair_extension:   # once per household, at a terminal: it opens a Chrome and waits for the person
+        if _from_agent():
+            die("pairing is a person's step: run `finnamon import --pair-extension` in a terminal")
+        pair_extension(); return
     if a.browser:
         if _from_agent():
             die("the browser import is its own Claude session; run `finnamon import --browser <bank>` in a terminal")
         if a.reset_profile:   # no bank needed: the profile is one for every bank
             out(reset_profile()); return
         if not a.account:
-            die("usage: finnamon import --browser <bank> [--to <url>] [--attach [host:port] | --no-cdp | --diagnose]   |   finnamon import --browser --reset-profile"
+            die("usage: finnamon import --browser <bank> [--to <url>] [--attach [host:port] | --no-cdp | --extension | --diagnose]   |   finnamon import --browser --reset-profile   |   finnamon import --pair-extension"
                 + ("   (--attach takes the address that follows it: put the bank first, or write --attach=<host:port>)" if a.attach else ""))
         if a.diagnose:   # no Claude, no session: a person, two logins, and what they saw
             chrome = chrome_path()
             if not chrome:
                 die("Google Chrome not found; install it, or set FINNAMON_CHROME to its executable")
             chrome_diagnose(chrome, a.account); return
+        if a.extension or (not a.no_cdp and not a.attach and a.account.lower() in NO_CDP_BANKS):
+            why = extension_problem(store.connect()) or (None if a.account.lower() in BANK_HOSTS else f"no bank site is known for {a.account}")
+            if not why:
+                exe, chrome = claude_runner.binary(), chrome_path()
+                if not exe or not chrome:
+                    die("the extension import needs claude and Google Chrome")
+                if claude_version() < CHROME_MIN_VERSION:
+                    die(f"the extension import needs Claude Code {'.'.join(map(str, CHROME_MIN_VERSION))} or later: claude update")
+                if (problems := assistant.problems()):
+                    die("\n".join(problems))
+                if to and not _box_key(to):
+                    die(f"--to {KEY_HINT}")
+                fetch_by_extension(exe, chrome, a.account, to, store.get_state(store.connect(), EXTENSION_DEVICE)); return
+            if a.extension:
+                die(f"--extension: {why}")
         if not a.no_cdp and not a.attach and a.account.lower() in NO_CDP_BANKS:   # an explicit --attach still does what was typed
             print(f"{a.account} refuses a browser with a debugging port (reference: EAC), so this is the by-hand export: no AI, "
                   "you download the CSV and Finnamon imports it as it lands.")
@@ -1447,6 +1795,10 @@ def cmd_import(a) -> None:
         chrome = chrome_path()
         disk, running = chrome_builds(chrome) if chrome else (None, set())
         out({"on_disk": disk, "running": sorted(running), "builds": build_mismatch(chrome) if chrome else None, "eac": eac_message(a.account)}); return
+    newest = None
+    if a.newest_download and a.account and not a.file:   # the extension session's download; it never names a path
+        newest = wait_for_csv(config.home() / "downloads", float(os.environ.get("FINNAMON_IMPORT_SINCE") or 0))
+        a.file = str(newest)
     if not a.account or not a.file:
         die('usage: finnamon import "<account>" <file.csv> [--balance N] [--flip] [--dry-run] [--to <url>]   |   finnamon import --browser <bank> [--to <url>]')
     path = Path(a.file).expanduser()
@@ -1455,10 +1807,14 @@ def cmd_import(a) -> None:
     try:
         text = sys.stdin.read() if a.file == "-" else path.read_text(encoding="utf-8-sig", errors="replace")
         if to:   # the box does the parsing and the writing; this side only carries the file
-            out(_upload(to, a.account, text, flip=a.flip, dry_run=a.dry_run, balance=a.balance)); return
-        conn = store.connect()
-        acct = imports.find_account(conn, a.account)
-        out(imports.apply(conn, acct["account_id"], imports.parse(text), flip=a.flip, balance=a.balance, dry_run=a.dry_run))
+            out(_upload(to, a.account, text, flip=a.flip, dry_run=a.dry_run, balance=a.balance))
+        else:
+            conn = store.connect()
+            acct = imports.find_account(conn, a.account)
+            out(imports.apply(conn, acct["account_id"], imports.parse(text), flip=a.flip, balance=a.balance, dry_run=a.dry_run))
+        if newest and not a.dry_run:   # imported: out of the folder, so the next account's --newest-download cannot take it again
+            (newest.parent / "imported").mkdir(mode=0o700, exist_ok=True)
+            os.replace(newest, newest.parent / "imported" / f"{time.strftime('%Y%m%d-%H%M%S')}-{newest.name}")
     except (ValueError, OSError) as e:
         die(str(e))
     except sqlite3.OperationalError as e:   # busy_timeout ran out: the daemon is mid-cycle
@@ -1694,7 +2050,7 @@ def cmd_status(a) -> None:
          "items": [dict(r) for r in conn.execute("SELECT item_id, institution, owner, status, last_synced_at, last_error, "
                                                      "(SELECT group_concat(COALESCE(a.name, '') || COALESCE(' …' || a.mask, ''), ', ') FROM accounts a WHERE a.item_id=items.item_id) AS accounts FROM items")],
          "pending_alerts": conn.execute(f"SELECT count(*) FROM alerts WHERE {notify.SENDABLE}").fetchone()[0],
-         "untriaged": len(triage.untriaged(conn)), "agent": store.assistant_kind(conn), "assistant": str(assistant.dir()), "assistant_problems": claude_runner.harness_problems(),
+         "untriaged": len(triage.untriaged(conn)), "agent": store.assistant_kind(conn), "extension_import": extension_problem(conn) is None, "assistant": str(assistant.dir()), "assistant_problems": claude_runner.harness_problems(),
          "scheduler": scheduler.status(), "claude": shutil.which("claude"), "codex": codex.binary(), "codex_min_version": ".".join(map(str, codex.MIN_VERSION)), "finnamon": shutil.which("finnamon")}
         | _stray_plugin_report())
 
@@ -1831,6 +2187,15 @@ def cmd_doctor(a) -> None:
     if conn is not None:
         check(True, "Assistant", f"{store.assistant_kind(conn)} runs the household's chat, triage and dashboard session",
               "finnamon settings set assistant claude|codex")
+        if store.assistant_kind(conn) == "claude":   # Fetch by AI through the extension: banks that refuse a debugging port (NO_CDP_BANKS)
+            v, why = claude_version(), extension_problem(conn)
+            old = v < CHROME_MIN_VERSION
+            paired = bool(store.get_state(conn, EXTENSION_DEVICE))
+            if old:
+                why = f"Claude Code {'.'.join(map(str, v)) or '(unknown)'} is older than {'.'.join(map(str, CHROME_MIN_VERSION))}, the first with --chrome tested here"
+            check(True if not why else (False if paired else "optional"), "Fetch by AI (extension)",
+                  why or f"paired, with its own claude.ai login in ~/.finnamon/{CLAUDE_IMPORT_DIR}",
+                  "claude update" if old else "" if not why else LOGIN_HINT if paired else "optional, for HSBC: finnamon import --pair-extension")
     probs = assistant.problems()
     check(not probs, "Assistant directory", (probs[0] + (f" (and {len(probs) - 1} more)" if len(probs) > 1 else "")) if probs
           else f"{assistant.dir()} installed and trusted", "finnamon install")
@@ -2573,7 +2938,8 @@ Needs: Claude Code logged in on this box (finnamon doctor). Next: finnamon alert
     "settings": """The numbers that tune the detectors (list: each with what it does). `settings set <key> <value>` changes one;
 --account <account> makes it that account's own. Daemon timing (sync_interval_hours and friends) needs --ops at a terminal.
 Needs: nothing. Next: finnamon detect shows what the new values would catch; `finnamon threshold` is the friendlier way to set low-balance limits.""",
-    "import": """A bank's CSV export into a manual account (a bank Plaid doesn't reach). --browser <bank> fetches it through a browser you log into.
+    "import": """A bank's CSV export into a manual account (a bank Plaid doesn't reach). --browser <bank> fetches it through a browser you log into
+(HSBC: through the Claude in Chrome extension once paired with --pair-extension, else by hand).
 Needs: the account first (finnamon account add "<name>" --institution <bank>), and the bank's CSV file.
 Next: finnamon category --uncategorized lists rows with no category; weekly imports keep alerts and budgets current.""",
     "open": """Open the dashboard in a browser; the address carries its key once, so it is for a person at a terminal (--print shows it, --host a phone's address).
@@ -2621,7 +2987,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--new-group", action="store_true", help="the code may come from a new group, which becomes the household chat"); s.set_defaults(fn=cmd_owner)
     s = sp.add_parser("channel", help="who answers Telegram: session (default: the dashboard's conversation), on (Claude Code's channel plugin) or off (legacy: the daemon's own session)",
                      description="session: the daemon polls Telegram and types each message into the dashboard's intercom session (the default for new installs, no plugin). on: Claude Code's Telegram channel plugin reads the chat. off: the legacy mode, the daemon answers with its own separate claude -p session."); s.add_argument("action", choices=["on", "session", "off", "status"]); s.set_defaults(fn=cmd_channel)
-    s = sp.add_parser("hook", help="Claude Code hooks (stdin: the hook event JSON)"); s.add_argument("name", choices=["reply-guard", "browser-guard", "permission", "secret-guard"]); s.set_defaults(fn=cmd_hook)
+    s = sp.add_parser("hook", help="Claude Code hooks (stdin: the hook event JSON)"); s.add_argument("name", choices=["reply-guard", "browser-guard", "chrome-guard", "permission", "secret-guard"]); s.set_defaults(fn=cmd_hook)
     s = sp.add_parser("property", help="stated assets a bank doesn't report (house, car), counted into net worth"); s.add_argument("action", choices=["list", "set", "remove"], nargs="?", default="list"); s.add_argument("name", nargs="?"); s.add_argument("value", nargs="?"); s.add_argument("--json", action="store_true", help="JSON even on a terminal"); s.set_defaults(fn=cmd_property)
     s = sp.add_parser("account", help="list | add \"<name>\" --institution <bank> (a manual account, fed by import) | remove \"<name>\" (a manual account and its transactions) | type <account_id> <type>|--clear | balance \"<name>\" <amount> (a manual account's balance now) | merge | unmerge | failover | owner"); s.add_argument("action", choices=["list", "add", "remove", "type", "kind", "balance", "merge", "unmerge", "failover", "owner"]); s.add_argument("new", nargs="?"); s.add_argument("existing", nargs="?")
     s.add_argument("--institution", help="add: the bank's name (default: the first word of the account name)"); s.add_argument("--type", choices=list(imports.KINDS), default="checking"); s.add_argument("--owner"); s.add_argument("--mask", help="last 4 digits"); s.add_argument("--yes", action="store_true", help="remove: don't ask"); s.add_argument("--clear", action="store_true", help="type: back to the bank's own type"); s.add_argument("--force", action="store_true", help="merge: even when the types or balances differ")
@@ -2634,6 +3000,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-cdp", action="store_true", help="with --browser: no debugging port and no AI: Finnamon's Chrome opens at the bank, you export the CSV yourself, and the file is imported as it lands")
     s.add_argument("--reset-profile", action="store_true", help="with --browser: move Finnamon's Chrome profile aside and start a fresh one (HSBC may remember one that got 'reference: EAC')")
     s.add_argument("--diagnose", action="store_true", help="with --browser: log in by hand on fresh throwaway profiles, with the debugging port (started three ways) and without it, to tell what makes the bank refuse it (HSBC's 'reference: EAC')")
+    s.add_argument("--extension", action="store_true", help="with --browser: Fetch by AI through the Claude in Chrome extension, no debugging port (Claude only; pair once with --pair-extension)")
+    s.add_argument("--pair-extension", action="store_true", help="once: find the extension's browser in Finnamon's no-port Chrome profile and remember it for --extension")
+    s.add_argument("--newest-download", action="store_true", help="import the newest CSV in Finnamon's downloads folder (the extension session's file) instead of a named one")
     s.add_argument("--chrome-check", action="store_true", help="the Chrome builds on disk and running, and what is known about HSBC's 'reference: EAC'"); s.set_defaults(fn=cmd_import)
     s = sp.add_parser("sync"); s.add_argument("--item"); s.set_defaults(fn=cmd_sync)
     s = sp.add_parser("detect"); s.add_argument("--as-of"); s.add_argument("--only", nargs="*"); s.add_argument("--sql", metavar="NAME", help="print the assembled query"); s.add_argument("--prelude", action="store_true", help="print _prelude.sql, the CTEs every detector selects from")

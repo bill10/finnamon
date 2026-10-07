@@ -217,12 +217,13 @@ def denied_by(tool: str, inp: dict, deny: list[str]) -> str | None:
 # /Users/<name>, /home/<name>, this box's own home); a path assembled at run time (variables, globs, base64) gets past it,
 # and the person approving still sees the whole command.
 PROTECTED = (r"\.finnamon/secrets\.toml", r"\.finnamon/finnamon\.db", r"\.finnamon/web-token", r"\.finnamon/intercom\.json",
-             r"\.finnamon/imports(?![\w.-])", r"\.finnamon/chrome(?![\w.-])", r"\.claude/channels/telegram/\.env",
+             r"\.finnamon/imports(?![\w.-])", r"\.finnamon/chrome(?![\w.-])",
+             r"\.finnamon/chrome-extension-test(?![\w.-])", r"\.finnamon/claude-import(?![\w.-])", r"\.finnamon/downloads(?![\w.-])", r"\.claude/channels/telegram/\.env",
              r"\.agent-browser(?![\w.-])")
 _HOMES = r"(?:~|\$home|\$\{home\}|/users/[^/\s'\"]+|/home/[^/\s'\"]+)"
 _PROTECTED_RE = re.compile(rf"{_HOMES}/(?:{'|'.join(PROTECTED)})", re.IGNORECASE)
 # A Bash command that names the folder and, anywhere, one of its protected files (`cd ~/.finnamon && cat secrets.toml`).
-_IN_FOLDER_RE = re.compile(r"\.finnamon\b.*\b(?:secrets\.toml|finnamon\.db|web-token|intercom\.json|imports|chrome)\b"
+_IN_FOLDER_RE = re.compile(r"\.finnamon\b.*\b(?:secrets\.toml|finnamon\.db|web-token|intercom\.json|imports|chrome|claude-import|downloads)\b"
                            r"|\.claude/channels\b.*\.env\b", re.IGNORECASE | re.DOTALL)
 SAYS_ONLY = ("mcp__plugin_telegram_telegram__reply", "mcp__plugin_telegram_telegram__react")   # words to people, not file access
 FINNAMON_TOOL = "mcp__finnamon__finnamon"   # Codex's finnamon(argv) tool (finnamon/mcp_server.py)

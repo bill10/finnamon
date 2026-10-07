@@ -340,6 +340,9 @@ test('importCommand: the CLI launcher owns the claude argv; a bank name never be
   assert.ok(!importCommand('Chase').args.some((x) => x.startsWith('--attach')), 'Fetch by AI never attaches: a Chrome on 9222 may be another program\'s');
   assert.deepEqual(importCommand('Chase', { noCdp: true }).args.slice(-4), ['--browser', '--no-cdp', '--', 'Chase'], 'Fetch without AI: no port, no Claude, never --attach');
   assert.deepEqual(importCommand('HSBC').args.slice(-4), ['--browser', '--no-cdp', '--', 'HSBC'], 'HSBC refuses any debugging port: Fetch by AI is the by-hand export');
+  assert.deepEqual(importCommand('HSBC', { extension: true }).args.slice(-4), ['--browser', '--extension', '--', 'HSBC'], 'paired: Fetch by AI goes through the Claude extension, no port');
+  assert.deepEqual(importCommand('HSBC', { extension: true, noCdp: true }).args.slice(-4), ['--browser', '--no-cdp', '--', 'HSBC'], 'Fetch without AI stays by hand');
+  assert.ok(!importCommand('Chase', { extension: true }).args.includes('--extension'), 'only for banks that refuse a port');
 });
 
 test('NO_CDP_BANKS: the server and the page hold the CLI\'s list', async () => {

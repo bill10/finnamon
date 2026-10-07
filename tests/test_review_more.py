@@ -120,7 +120,7 @@ def test_daemon_exits_when_a_thread_dies_and_refuses_without_harness(conn, monke
     (tmp_path / "blocker").write_text("")   # a path nothing can create the directory under: the daemon's own write of the bundle fails too
     monkeypatch.setenv("FINNAMON_ASSISTANT", str(tmp_path / "blocker" / "assistant"))
     problems = claude_runner.harness_problems()
-    assert len(problems) == 10 and any("settings.json" in p for p in problems) and "finnamon install" in problems[0] and "not trusted" in problems[-1]
+    assert len(problems) == 11 and any("settings.json" in p for p in problems) and "finnamon install" in problems[0] and "not trusted" in problems[-1]
     exits.clear()
     daemon.Daemon(conn_factory=lambda: conn).start(exit=lambda code: exits.append(code))
     assert exits == [2] and len(json.loads(store.get_state(conn, "daemon_starts"))) == 2

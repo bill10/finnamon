@@ -159,3 +159,20 @@ def test_wsl_lines_only_on_wsl(home, units, fake_claude, capsys, monkeypatch):
     monkeypatch.setattr(cli, "_is_wsl", lambda: True)
     out = doctor(capsys)[1]
     assert line(out, "WSL systemd")[0] in "✓✗" and "vmIdleTimeout" in out and "localhost" in out
+
+
+def test_fetch_by_ai_extension_line(home, units, fake_claude, capsys, monkeypatch):
+    """Unpaired is optional; paired without the import dir's own login, or on a Claude Code without --chrome, is a fault."""
+    conn = store.connect(); seed(conn)
+    monkeypatch.setattr(cli, "claude_version", lambda: (2, 1, 292))
+    out = doctor(capsys)[1]
+    assert not line(out, "Fetch by AI (extension)").startswith(("✗", "✓")) and "finnamon import --pair-extension" in out
+    store.set_state(conn, cli.EXTENSION_DEVICE, "dev-1")
+    out = line(doctor(capsys)[1], "Fetch by AI (extension)")
+    assert out.startswith("✗") and "/login" in out
+    (home / cli.CLAUDE_IMPORT_DIR).mkdir()
+    (home / cli.CLAUDE_IMPORT_DIR / ".claude.json").write_text(json.dumps({"oauthAccount": {"emailAddress": "x"}}))
+    assert line(doctor(capsys)[1], "Fetch by AI (extension)").startswith("✓")
+    monkeypatch.setattr(cli, "claude_version", lambda: (2, 1, 100))
+    out = doctor(capsys)[1]
+    assert line(out, "Fetch by AI (extension)").startswith("✗") and "claude update" in out

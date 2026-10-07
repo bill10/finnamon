@@ -219,6 +219,7 @@ def test_files_skips_what_a_session_or_an_install_leaves_in_the_source(tmp_path,
     monkeypatch.setattr(assistant, "BUNDLE", src)
     names = set(assistant.files())
     assert names == {"CLAUDE.md", ".claude/settings.json", ".claude/skills/finnamon/SKILL.md", ".claude/skills/triage/SKILL.md", ".claude/skills/import-browser/SKILL.md",
+                     ".claude/skills/import-extension/SKILL.md",   # Claude only: no .agents copy (assistant.CLAUDE_ONLY_SKILLS)
                      "AGENTS.md", ".agents/skills/finnamon/SKILL.md", ".agents/skills/triage/SKILL.md", ".agents/skills/import-browser/SKILL.md"}
 
 
@@ -249,7 +250,7 @@ def test_install_warns_when_trust_cannot_be_written(own_dir, monkeypatch, capsys
 
 def test_problems_name_every_missing_file_and_the_fix(own_dir):
     problems = assistant.problems()
-    assert len(problems) == 10 and all("finnamon install" in p and str(own_dir) in p for p in problems)
+    assert len(problems) == 11 and all("finnamon install" in p and str(own_dir) in p for p in problems)
     assert any("import-browser" in p for p in problems), "every skill a session could be started on is required"
     assistant.install(); assistant.trust()
     assert assistant.problems() == [] and claude_runner.harness_problems() == []
