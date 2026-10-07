@@ -919,8 +919,8 @@ PORT_WAIT_SECONDS, POLL_SECONDS = 20.0, 0.2   # how long chrome_launch waits for
 def chrome_spawn(chrome: str, profile: Path, url: str, port: bool, method: str | None = None, env: dict | None = None) -> str:
     """Start Chrome on profile at url; returns how ("open" or "popen"). On macOS through LaunchServices, `open -na <app>
     --args ...`, so Chrome starts like one the person opened, in their session's environment, never as a child of the
-    dashboard's launchd job with its stripped one (not what HSBC's EAC was: that is the debugging port, NO_CDP_BANKS). Elsewhere, or with method="popen", a child process
-    with env (default: this one's). --no-first-run: no welcome page in front of the bank's; not an automation switch."""
+    dashboard's launchd job with its stripped one (not what HSBC's EAC was: that is the debugging port, NO_CDP_BANKS).
+    Elsewhere, or with method="popen", a child process with env (default: this one's). --no-first-run: no welcome page in front of the bank's; not an automation switch."""
     app = chrome.split(".app/")[0] + ".app" if ".app/" in chrome else None
     method = method or ("open" if app and shutil.which("open") else "popen")
     args = [f"--user-data-dir={profile}", *(["--remote-debugging-port=0"] if port else []), "--no-first-run", url]
