@@ -160,6 +160,7 @@ def test_routing_paired_claude_execs_the_extension_session(home, conn, monkeypat
     monkeypatch.setattr(cli, "fetch_by_hand", lambda c, p, b, to: by_hand.append(b))
     monkeypatch.setattr("os.execve", lambda exe, argv, env: calls.append((argv, env)))
     monkeypatch.setattr(cli, "connected_devices", lambda exe: set())
+    monkeypatch.setattr("time.sleep", lambda s: None)
     cli.main(["import", "--browser", "hsbc"])
     assert by_hand == ["hsbc"] and not calls and store.get_state(conn, cli.EXTENSION_DEVICE) is None, "unpaired, none connected: the by-hand export"
     monkeypatch.setattr(cli, "connected_devices", lambda exe: {"a", "b"})
@@ -208,6 +209,7 @@ def test_running_profile_with_unpinned_downloads_is_left_alone(home, conn, monke
     monkeypatch.setattr("finnamon.claude_runner.binary", lambda: "/usr/bin/claude")
     monkeypatch.setattr(cli, "claude_version", lambda: (2, 1, 300))
     monkeypatch.setattr(cli, "profile_in_use", lambda p: True)
+    monkeypatch.setattr(cli, "connected_devices", lambda exe: {DEV})
     monkeypatch.setattr(cli, "chrome_spawn", lambda *a, **k: pytest.fail("never a second launch"))
     monkeypatch.setattr("os.chdir", lambda p: None)
     calls = []
@@ -351,3 +353,40 @@ def test_newest_download_looks_in_the_persons_downloads_after_finnamons(home, co
     assert not theirs.exists() and len(list((home / "downloads" / "imported").glob("*.csv")) ) == 1, "moved into Finnamon's folder, not left or written in ~/Downloads"
     (home / "downloads" / "a.csv").write_text("x"); (Path.home() / "Downloads" / "b.csv").write_text("y")
     assert cli.wait_for_csv(home / "downloads", time.time() - 10, Path.home() / "Downloads").name == "a.csv", "Finnamon's folder first"
+
+
+def _wait_setup(home, conn, monkeypatch):
+    monkeypatch.setenv("FINNAMON_CHROME", sys.executable)
+    monkeypatch.setattr(cli, "chrome_spawn", lambda *a, **k: None)
+    sleeps = []
+    monkeypatch.setattr("time.sleep", sleeps.append)
+    calls = []
+    monkeypatch.setattr("os.chdir", lambda p: None)
+    monkeypatch.setattr("os.execve", lambda exe, argv, env: calls.append(env))
+    return sleeps, calls
+
+
+def test_waits_for_the_extension_to_connect(home, conn, monkeypatch, capsys):
+    sleeps, calls = _wait_setup(home, conn, monkeypatch)
+    seen = iter([set(), set(), {DEV}])
+    monkeypatch.setattr(cli, "connected_devices", lambda exe: next(seen))
+    assert cli.fetch_by_extension("/usr/bin/claude", sys.executable, "hsbc", "", None) is None
+    assert len(sleeps) == 2 and store.get_state(conn, cli.EXTENSION_DEVICE) == DEV and calls
+    assert "Click the Claude extension's icon" in capsys.readouterr().err
+
+
+def test_gives_up_when_the_extension_never_connects(home, conn, monkeypatch):
+    sleeps, calls = _wait_setup(home, conn, monkeypatch)
+    monkeypatch.setattr(cli, "connected_devices", lambda exe: set())
+    why = cli.fetch_by_extension("/usr/bin/claude", sys.executable, "hsbc", "", None)
+    assert "never connected" in why and "pair-extension" not in why and not calls
+    assert len(sleeps) == cli.EXTENSION_WAIT_POLLS
+
+
+def test_waits_for_the_stored_device_when_only_others_are_connected(home, conn, monkeypatch, capsys):
+    sleeps, calls = _wait_setup(home, conn, monkeypatch)
+    seen = iter([{"other"}, {"other"}, {"other", DEV}])
+    monkeypatch.setattr(cli, "connected_devices", lambda exe: next(seen))
+    assert cli.fetch_by_extension("/usr/bin/claude", sys.executable, "hsbc", "", DEV) is None
+    assert len(sleeps) == 2 and calls and calls[0]["FINNAMON_IMPORT_DEVICE"] == DEV
+    assert "is not connected" in capsys.readouterr().err
