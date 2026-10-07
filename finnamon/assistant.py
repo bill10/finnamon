@@ -68,6 +68,9 @@ def _items(text: str) -> list[list[str]]:
     return out
 
 
+CLAUDE_ONLY_SKILLS = (".claude/skills/import-extension/",)   # drives the Claude in Chrome extension (`claude --chrome`); Codex has no equivalent
+
+
 def to_codex(text: str, skills: list[str]) -> str:
     text = "\n".join(l for item in _items(text) if not CHANNEL_ONLY.search(" ".join(item)) for l in item)
     for a, b in SWAPS:
@@ -88,7 +91,7 @@ def codex_bundle(claude: dict[str, bytes]) -> dict[str, bytes]:
             raise ValueError(f"AGENTS.md is {len(agents)} bytes; Codex reads only {AGENTS_MD_MAX}")
         out["AGENTS.md"] = agents
     for rel, data in claude.items():
-        if rel.startswith(".claude/skills/"):
+        if rel.startswith(".claude/skills/") and not rel.startswith(CLAUDE_ONLY_SKILLS):
             out[".agents/" + rel[len(".claude/"):]] = to_codex(data.decode(), names).encode()
     return out
 
@@ -96,6 +99,7 @@ def codex_bundle(claude: dict[str, bytes]) -> dict[str, bytes]:
 # The harness check demands every file the bundle ships, and never less than this floor: a wheel that lost the bundle
 # would otherwise pass the check with an empty directory and start every household session with no allow list.
 FLOOR = ("CLAUDE.md", ".claude/settings.json", ".claude/skills/finnamon/SKILL.md", ".claude/skills/triage/SKILL.md", ".claude/skills/import-browser/SKILL.md",
+         ".claude/skills/import-extension/SKILL.md",
          "AGENTS.md", ".agents/skills/finnamon/SKILL.md", ".agents/skills/triage/SKILL.md", ".agents/skills/import-browser/SKILL.md")
 REQUIRED = tuple(dict.fromkeys(FLOOR + tuple(files())))
 

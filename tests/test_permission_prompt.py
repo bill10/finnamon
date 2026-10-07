@@ -364,6 +364,7 @@ def test_a_question_for_the_screen_never_goes_to_the_phone(home, conn, tmp_path,
 
 PROTECTED_FILES = [".finnamon/secrets.toml", ".finnamon/finnamon.db", ".finnamon/finnamon.db-wal", ".finnamon/web-token",
                    ".finnamon/intercom.json", ".finnamon/imports/2026-10-01T00-00-00-hsbc.csv", ".finnamon/chrome/Default/Cookies",
+                   ".finnamon/chrome-extension-test/Default/Cookies", ".finnamon/claude-import/.claude.json", ".finnamon/downloads/TransactionHistory.csv",
                    ".claude/channels/telegram/.env", ".agent-browser/session.json"]
 HOME_FORMS = ["~/", "$HOME/", "${HOME}/", "/Users/bill/", "/home/jane/", "/USERS/Bill/", "~/"]
 

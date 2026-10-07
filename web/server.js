@@ -393,12 +393,14 @@ export async function restartNotice({ inbound, intercom, send, now = Date.now() 
 // may be another program's (an automation browser), and the bank login would land in its profile; Finnamon's own window.
 // noCdp (Fetch without AI): no debugging port and no Claude; the person exports, the CLI watches the folder and imports.
 // NO_CDP_BANKS: finnamon/cli.py NO_CDP_BANKS (a parity test holds them together), banks that refuse any Chrome with a
-// debugging port, so Fetch by AI is the by-hand export there (the CLI would route it so anyway; this keeps the argv honest).
+// debugging port, so Fetch by AI there goes through the Claude in Chrome extension (extension: the page saw status.extension_import,
+// a paired Claude household) or else is the by-hand export (the CLI would route it so anyway; this keeps the argv honest).
 export const NO_CDP_BANKS = new Set(['hsbc']);
-export function importCommand(bank, { noCdp = false } = {}) {
-  noCdp ||= NO_CDP_BANKS.has(bank.toLowerCase());
+export function importCommand(bank, { noCdp = false, extension = false } = {}) {
+  const noPort = NO_CDP_BANKS.has(bank.toLowerCase());
+  const mode = noCdp || (noPort && !extension) ? ['--no-cdp'] : noPort ? ['--extension'] : [];
   const [bin, ...pre] = config.finnamon;
-  return { cmd: bin, args: [...pre, 'import', '--browser', ...(noCdp ? ['--no-cdp'] : []), '--', bank] };
+  return { cmd: bin, args: [...pre, 'import', '--browser', ...mode, '--', bank] };
 }
 
 // once: a session that ends when the process exits (the import), instead of one kept alive for the household (the intercom)
@@ -779,7 +781,7 @@ export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon',
     const bank = String(req.body?.bank ?? '').trim();   // the account's institution, as `finnamon account add` accepted it (up to MAX_NAME); it becomes a prompt, never a shell string
     if (!BANK_NAME.test(bank)) return res.status(400).json({ error: `a bank name is letters, digits, spaces and .&'- up to ${MAX_NAME} characters` });
     if (!startImport) return res.status(503).json({ error: 'this server has no session runner' });
-    try { startImport(bank, { noCdp: req.body?.mode === 'no-cdp' }); res.json({ ok: true }); } catch (e) { res.status(409).json({ error: e.message }); }
+    try { startImport(bank, { noCdp: req.body?.mode === 'no-cdp', extension: req.body?.mode === 'extension' }); res.json({ ok: true }); } catch (e) { res.status(409).json({ error: e.message }); }
   });
 
   // Reset browser profile: Finnamon's Chrome profile moved aside for a fresh one (HSBC may remember one that got "reference: EAC").
