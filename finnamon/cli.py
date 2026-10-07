@@ -1396,6 +1396,7 @@ def browser_session_tools(to: str | None) -> tuple[list[str], list[str]]:
 # docs/research/hsbc-via-claude-in-chrome.md). Claude only: Codex has no equivalent, so a Codex household keeps --no-cdp.
 CHROME_MCP = "mcp__claude-in-chrome__"
 EXTENSION_PROFILE = "chrome-extension-test"   # under FINNAMON_HOME: the no-port profile with the extension installed and signed in
+EXTENSION_WAIT_S, EXTENSION_WAIT_POLLS = 5, 24   # poll every 5 s; each poll is itself a short claude run
 EXTENSION_DEVICE = "extension_device"   # state key: the deviceId `import --pair-extension` found for that profile
 EXTENSION_STATE_FILE = "import-extension-{}.json"   # under FINNAMON_HOME, per session (FINNAMON_IMPORT_NONCE): what chrome-guard has seen ({selected, tab}; .tripped beside it)
 CHROME_MIN_VERSION = (2, 1, 292)   # the Claude Code the --chrome session was tested on
@@ -1447,7 +1448,7 @@ def chrome_call_ok(tool: str, inp: dict, state: dict, device: str, bank: str) ->
 
 def tab_urls(resp) -> dict[str, str]:
     """{tabId: url} from a tool's result: tabs_context_mcp's JSON (tabId ... url) and the "Tab Context" lines every result
-    carries (tabId N: "title" (url)). The last mention of a tab wins: the Tab Context block closes every result, so page
+    carries (tabId N: "title" ("url"), the url quoted or not). The last mention of a tab wins: the Tab Context block closes every result, so page
     text that imitates one (or a title holding a URL) comes before it and is overwritten."""
     text = _resp_text(resp)
     hits = [(m.start(), m.group(1), m.group(2)) for m in re.finditer(r'"tabId"\s*:\s*(\d+)[^{}]*?"url"\s*:\s*"([^"]*)"', text)]
@@ -1455,7 +1456,7 @@ def tab_urls(resp) -> dict[str, str]:
     # `tabId N: "title" (url)` with the url last on the line: the leftmost " (" whose rest is one space-free token up to
     # ")" at the end. A title cannot pose as it (the real url follows a space after the title), nor can a url that holds
     # "(https://bank)" in its path (the whole token is taken).
-    hits += [(m.start(), m.group(1), m.group(2)) for m in re.finditer(r'tabId\s+(\d+):[^\n]*? \((\S+)\)[ \t]*$', text, re.M)]
+    hits += [(m.start(), m.group(1), m.group(2)) for m in re.finditer(r'tabId\s+(\d+):[^\n]*? \("?(\S+?)"?\)[ \t]*$', text, re.M)]
     return {tab: url for _, tab, url in sorted(hits)}
 
 
@@ -1703,8 +1704,19 @@ def fetch_by_extension(exe: str, chrome: str, bank: str, to: str, device: str | 
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
     folder.chmod(0o700)
     _extension_profile(chrome, folder, BANK_LOGIN.get(bank.lower(), "about:blank"))
+    found = connected_devices(exe)
+    if not found or (device and device not in found):   # the extension may sit idle until its icon is clicked: wait for it
+        print("Click the Claude extension's icon in the Finnamon Chrome window (sign in if it asks); waiting for it to connect…"
+              if not found else f"The paired browser ({device}) is not connected, though {len(found)} other(s) are: click the Claude extension's icon in "
+              "the Finnamon Chrome window (sign in if it asks); waiting for it to connect…", file=sys.stderr, flush=True)
+        for _ in range(EXTENSION_WAIT_POLLS):
+            time.sleep(EXTENSION_WAIT_S)
+            found = connected_devices(exe)
+            if device in found or (not device and len(found) == 1):
+                break
+        else:
+            return "the Claude extension never connected (waited about two minutes); is it installed and signed in, in the Finnamon Chrome window?"
     if not device:
-        found = connected_devices(exe)
         if len(found) != 1:
             return f"{len(found)} browsers are connected to the Claude extension, not one, so it cannot tell which is the bank's: run finnamon import --pair-extension"
         conn = store.connect()
