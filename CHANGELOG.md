@@ -3,6 +3,11 @@
 All notable changes to Finnamon are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.55.0.0] - 2026-10-07
+
+### Added
+- **HSBC: Fetch by AI works again, through the Claude in Chrome extension.** HSBC refuses any Chrome with a debugging port, but a no-port Chrome with the Claude extension logs in fine. `finnamon import --browser hsbc --extension` (and the dashboard's Fetch by AI on a paired Claude household) opens Finnamon's no-port profile `~/.finnamon/chrome-extension-test`, you log in, and a sealed `claude --chrome` session clicks Download → Spreadsheet CSV and imports it with the new `finnamon import "<account>" --newest-download`. A guard hook holds it to the paired browser, one tab, HSBC's own site, and clicks only (no typing, no scripts), and stops the session if the tab leaves the bank. It runs on its own Claude config in `~/.finnamon/claude-import`, so your own Claude sessions never pick that browser. One-time setup: `CLAUDE_CONFIG_DIR=~/.finnamon/claude-import claude` and `/login`, then `finnamon import --pair-extension`. Unpaired, or on Codex, HSBC keeps the by-hand export. `finnamon doctor` checks the Claude Code version (2.1.292+), the pairing and that login.
+
 ## [0.54.0.0] - 2026-10-07
 
 ### Changed
