@@ -806,9 +806,20 @@ def test_import_browser_attach_opens_one_tab_in_the_persons_running_chrome(home,
         cli.main(["import", "--browser", "hsbc", "--attach"])
     err = capsys.readouterr().err
     assert "--remote-debugging-port=9222" in err and "--user-data-dir" in err and len(calls) == n
-    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u: (CDP, TAB))   # the dashboard's auto: no port, Finnamon's own window
-    cli.main(["import", "--browser", "hsbc", "--attach=auto"])
+    with pytest.raises(SystemExit):   # no guessing: a Chrome on 9222 may be another program's (2026-10-06: an automation browser got the bank login)
+        cli.main(["import", "--browser", "hsbc", "--attach=auto"])
+    assert "loopback" in capsys.readouterr().err and len(calls) == n
+
+
+def test_import_browser_without_attach_never_probes_9222(home, monkeypatch):
+    """The dashboard's Fetch by AI passes no --attach: Finnamon's own window, even with a foreign Chrome answering on 9222."""
+    calls, seen = [], []
+    _launcher(monkeypatch, calls)
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen_answering("127.0.0.1", seen=seen))   # someone else's Chrome on 9222
+    monkeypatch.setattr("finnamon.cli.chrome_launch", lambda c, p, u: (CDP, TAB))
+    cli.main(["import", "--browser", "hsbc"])
     assert calls[-1][1]["FINNAMON_IMPORT_CDP"] == CDP and "--attach" not in calls[-1][0][1]
+    assert not any(":9222" in u for _, u in seen), "nothing knocks on 9222 unless the person named it"
 
 
 def _guard(cmd, monkeypatch):

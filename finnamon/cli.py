@@ -984,11 +984,12 @@ ATTACH_HOW = ('quit Chrome and relaunch it with the port: open -a "Google Chrome
               "(Chrome 136 and later ignore the port on its default profile folder, so add --user-data-dir=<the folder you browse in> if yours is the default)")
 
 
-def chrome_attach(addr: str, url: str, required: bool = True) -> tuple[str, str] | None:
+def chrome_attach(addr: str, url: str) -> tuple[str, str]:
     """Open the bank's page in ONE new tab of a Chrome the person already runs with a debugging port, and return that
     browser's CDP address and the new tab's target id. Loopback only. Plain HTTP (/json/version, then PUT /json/new):
-    nothing attaches to any tab here, the session does that later and the guard pins it to this tab. required=False is
-    the dashboard's `--attach auto`: no Chrome answering is None (launch Finnamon's own) rather than an error."""
+    nothing attaches to any tab here, the session does that later and the guard pins it to this tab. Only ever an address
+    the person typed: a port says nothing about whose Chrome answers on it (automation tools sit on 9222 too), so nothing
+    probes for one, and no Chrome answering is an error, never a fall back."""
     host, _, port = addr.rpartition(":")
     hosts = [host] if host else ["127.0.0.1", "[::1]"]
     if not port.isdigit() or any(h not in LOOPBACK for h in hosts):
@@ -1008,9 +1009,7 @@ def chrome_attach(addr: str, url: str, required: bool = True) -> tuple[str, str]
               "Log in there yourself. If no tab appeared in your window, that port is another program's Chrome: stop the import "
               "(Ctrl-C, or Stop in the dashboard) and close that tab.", file=sys.stderr)
         return cdp, tab
-    if required:
-        die(f"no Chrome answers on {addr if host else '127.0.0.1:' + port}. For --attach, {ATTACH_HOW}.")
-    return None
+    die(f"no Chrome answers on {addr if host else '127.0.0.1:' + port}. For --attach, {ATTACH_HOW}.")
 
 
 def _chrome_profile_on(port: str) -> str | None:
@@ -1397,7 +1396,7 @@ def cmd_import(a) -> None:
         if not exe:
             die("claude is not on PATH")
         chrome = chrome_path()
-        if not chrome and a.attach in (None, "auto"):   # an explicit --attach drives the person's Chrome, wherever it is installed
+        if not chrome and not a.attach:   # an explicit --attach drives the person's Chrome, wherever it is installed
             die("Google Chrome not found; install it, or set FINNAMON_CHROME to its executable" + (f" (not an executable: {os.environ['FINNAMON_CHROME']})" if os.environ.get("FINNAMON_CHROME") else ""))
         if (problems := assistant.problems()):   # before the window opens: a die() after chrome_launch leaves the bank browser up with nothing driving it
             die("\n".join(problems))
@@ -1405,7 +1404,7 @@ def cmd_import(a) -> None:
         if to and not _box_key(to):   # the sealed session could only meet the 401, and cannot set an env var, so refuse before a bank login is spent
             die(f"--to {KEY_HINT}")
         url = BANK_LOGIN.get(a.account.lower(), "about:blank")
-        attached = chrome_attach(ATTACH_PORT if a.attach == "auto" else a.attach, url, required=a.attach != "auto") if a.attach else None
+        attached = chrome_attach(a.attach, url) if a.attach else None
         cdp, tab = attached or chrome_launch(chrome, profile, url)
         (config.home() / IMPORT_TAB_FILE).unlink(missing_ok=True)   # bound again by this session's own `tab <id>`, never by the last one's
         prompt = f"/import-browser {a.account}" + (f" --to {to}" if to else "") + f" --cdp {cdp} --tab {tab}" + (" --attach" if attached else "")
@@ -2620,7 +2619,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("file", nargs="?", help="the CSV (- for stdin)"); s.add_argument("--balance", type=float, help="the account's balance now, when the file has no balance column")
     s.add_argument("--flip", action="store_true", help="the file shows money out as positive (some card exports); default: negative, as banks do"); s.add_argument("--dry-run", action="store_true", help="parse and report, write nothing")
     s.add_argument("--browser", action="store_true", help="open a Claude session that drives a visible browser: you log in, it downloads and imports"); s.add_argument("--to", metavar="URL", help="on another computer: the Finnamon box's dashboard URL; the file (or the browser session's result) is uploaded there, with FINNAMON_WEB_TOKEN set to the box's `finnamon web token`")
-    s.add_argument("--attach", nargs="?", const=ATTACH_PORT, metavar="HOST:PORT", help="with --browser: open one new tab in the Chrome you already run with --remote-debugging-port (default 9222, loopback only) instead of Finnamon's own window; auto: that if one answers, else Finnamon's")
+    s.add_argument("--attach", nargs="?", const=ATTACH_PORT, metavar="HOST:PORT", help="with --browser: open one new tab in the Chrome you already run with --remote-debugging-port (default 9222, loopback only) instead of Finnamon's own window")
     s.add_argument("--no-cdp", action="store_true", help="with --browser: no debugging port and no AI: Finnamon's Chrome opens at the bank, you export the CSV yourself, and the file is imported as it lands")
     s.add_argument("--reset-profile", action="store_true", help="with --browser: move Finnamon's Chrome profile aside and start a fresh one (HSBC may remember one that got 'reference: EAC')")
     s.add_argument("--diagnose", action="store_true", help="with --browser: log in by hand three times (Finnamon's profile without and with the debugging port, then a fresh profile with a DevTools client attached) to tell what makes the bank refuse it (HSBC's 'reference: EAC')")
