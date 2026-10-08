@@ -1638,7 +1638,7 @@ def _extension_profile(chrome: str, folder: Path, url: str = "about:blank") -> P
             pinned = False
         if not pinned:   # Chrome rewrites Preferences from memory on exit, so writing the pin now would not last: --newest-download also reads ~/Downloads
             print(f"Its downloads are not pinned to {folder}; the CSV will land wherever that window saves (~/Downloads is looked at too).", file=sys.stderr)
-        print(f"The extension's Chrome is already open ({profile}): log in to the bank in that window.", file=sys.stderr)
+        print(f"The extension's Chrome is already open ({profile}): the AI opens the bank's login in a tab of its own there.", file=sys.stderr)
         return profile
     profile.mkdir(mode=0o700, parents=True, exist_ok=True)
     pin_downloads(profile, folder)
@@ -1703,7 +1703,7 @@ def fetch_by_extension(exe: str, chrome: str, bank: str, to: str, device: str | 
     folder = config.home() / "downloads"
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
     folder.chmod(0o700)
-    _extension_profile(chrome, folder, BANK_LOGIN.get(bank.lower(), "about:blank"))
+    _extension_profile(chrome, folder)   # blank: the AI opens the bank in its own tab (the extension drives only tabs in its group)
     found = connected_devices(exe)
     if not found or (device and device not in found):   # the extension may sit idle until its icon is clicked: wait for it
         print("Click the Claude extension's icon in the Finnamon Chrome window (sign in if it asks); waiting for it to connect…"
