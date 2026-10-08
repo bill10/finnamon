@@ -186,7 +186,7 @@ def test_routing_paired_claude_execs_the_extension_session(home, conn, monkeypat
     assert env["FINNAMON_IMPORT_DEVICE"] == DEV
     assert env["FINNAMON_IMPORT_BANK"] == "hsbc"
     assert env["CLAUDE_CHROME_PERMISSION_MODE"] == "ask" and "ANTHROPIC_API_KEY" not in env and env["FINNAMON_IMPORT_SESSION"] == "local"
-    assert spawned == [(home / cli.EXTENSION_PROFILE, "https://www.us.hsbc.com/", False)], "the extension's profile at the bank's login, no debugging port"
+    assert spawned == [(home / cli.EXTENSION_PROFILE, "about:blank", False)], "the extension's profile blank (the AI opens the login in its own tab), no debugging port"
     prefs = json.loads((home / cli.EXTENSION_PROFILE / "Default/Preferences").read_text())
     assert prefs["download"]["default_directory"] == str(home / "downloads"), "pin_downloads on that profile"
     assert re.fullmatch(r"[0-9a-f]{16}", env["FINNAMON_IMPORT_NONCE"]), "a guard state of the session's own"
@@ -408,3 +408,19 @@ def test_tab_urls_on_the_owners_real_tabs_context_result():
               {"type": "text", "text": 'Tab Context:\n- Available tabs:\n  \u2022 tabId 411189896: "New Tab" ("chrome://newtab/")'},
               {"type": "text", "text": "<system-reminder>Prefer browser_batch to run several actions at once.</system-reminder>"}]
     assert cli.tab_urls(blocks) == {"411189896": "chrome://newtab/"}
+
+
+def test_login_in_the_ais_own_tab_passes_the_guard(home, monkeypatch, capsys):
+    """select_browser, a blank new tab, navigate to the login, then HSBC's auth redirect as the Tab Context shows it."""
+    monkeypatch.setenv("FINNAMON_IMPORT_DEVICE", DEV); monkeypatch.setenv("FINNAMON_IMPORT_BANK", "hsbc"); monkeypatch.setenv("FINNAMON_IMPORT_NONCE", NONCE)
+    pre = lambda t, i: hook(monkeypatch, capsys, {"hook_event_name": "PreToolUse", "tool_name": M + t, "tool_input": i})
+    post = lambda t, i, r: hook(monkeypatch, capsys, {"hook_event_name": "PostToolUse", "tool_name": M + t, "tool_input": i, "tool_response": r})
+    auth = "https://www.us.hsbc.com/auth/?returnUrl=https://www.us.hsbc.com/bin/epep/postback.html?url=/online/dashboard/"
+    assert pre("select_browser", {"deviceId": DEV})[0] == 0 and post("select_browser", {"deviceId": DEV}, "ok")[0] == 0
+    assert pre("tabs_context_mcp", {"createIfEmpty": True})[0] == 0
+    assert post("tabs_context_mcp", {}, ctx(TAB, "chrome://newtab/"))[0] == 0
+    assert pre("navigate", {"tabId": TAB, "url": "https://www.us.hsbc.com/"})[0] == 0
+    r = [{"type": "text", "text": f'Navigated\n\nTab Context:\n- Executed on tabId: {TAB}\n- Available tabs:\n  • tabId {TAB}: "Log on method | Log on | HSBC" ({auth})'}]
+    code, out = post("navigate", {"tabId": TAB}, r)
+    assert code == 0 and out.out == "", "the auth redirect is still the bank"
+    assert pre("get_page_text", {"tabId": TAB})[0] == 0

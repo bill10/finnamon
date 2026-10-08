@@ -5,13 +5,14 @@ description: Fetch a bank's CSV export through the Claude in Chrome extension in
 
 # /import-extension <bank> --device <id> [--to <url>]
 
-A Chrome window of Finnamon's own is **already open** (its profile `~/.finnamon/chrome-extension-test`, with no debugging
+A blank Chrome window of Finnamon's own is **already open** (its profile `~/.finnamon/chrome-extension-test`, with no debugging
 port), with the Claude extension in it. You drive it through the `mcp__claude-in-chrome__*` tools. The person is sitting at
 this computer and does the login. You never see, type, or store a credential.
 
-**Make no browser call until they say they are logged in.** Not even `select_browser` or `tabs_context_mcp`: a bank's risk
-engine can refuse a login while anything drives the window, and never checks again once they are through. Ask, wait for
-their answer, then start. Without `--to`, this computer is the Finnamon box; with `--to <url>`, add `--to <url>` to every
+**The login happens in a tab you open.** The extension can only drive tabs in its own tab group, so you open the bank's
+login page in a tab of that group and the person logs in there (the extension attached did not stop HSBC accepting a
+login on 2026-10-06; the block is the debugging port). After you have opened it, make no further browser call until they
+say they are logged in, and never type, click or read during the login itself. Without `--to`, this computer is the Finnamon box; with `--to <url>`, add `--to <url>` to every
 `finnamon` command and the file is uploaded to the box's dashboard (a 401 means the box's key changed: stop and tell the
 person to run `finnamon web token` on the box, export it here and start again).
 
@@ -39,13 +40,15 @@ person to run `finnamon web token` on the box, export it here and start again).
 
 1. **Which account.** `finnamon account list`; keep rows with `source` = `manual` at this bank. None: say so, give the
    command (`finnamon account add "<bank> Checking" --institution <bank>`), stop.
-2. **Ask them to log in.** One line: "A Chrome window is open; log in to <bank> there and tell me when you're through."
-   Then **stop and wait for their answer**. No browser call, no polling.
-3. **Attach.** Once they are in: `select_browser` with the `--device` id, then `tabs_context_mcp` (`createIfEmpty: true`),
-   then `navigate` that tab to the bank's logged-in page (`https://www.us.hsbc.com/online/dashboard/` for HSBC; it opens logged in: same window, same cookies), and `screenshot` or
-   `get_page_text` to confirm the account overview (a "Log off" control, account names with balances). Still the login
-   page: say so and stop; ask them to log in again at most once. HSBC's "reference: EAC": say it plainly and point them to
-   **Fetch without AI** in the dashboard's Import CSV window (`finnamon import --browser <bank> --no-cdp` in a terminal).
+2. **Open the login.** `select_browser` with the `--device` id, `tabs_context_mcp` (`createIfEmpty: true`), then
+   `navigate` that tab to the bank's login page (HSBC: `https://www.us.hsbc.com/auth/?returnUrl=https://www.us.hsbc.com/bin/epep/postback.html?url=/online/dashboard/`, titled "Log on method | Log on | HSBC"; the bare home page is marketing, not the login). Tell the
+   person: "Log in to <bank> in the tab I just opened (in the Claude tab group); tell me when you're in." Then **stop and
+   wait for their answer**. No further browser call, no polling.
+3. **Continue.** Once they are in: `navigate` the same tab to the bank's logged-in page (`https://www.us.hsbc.com/online/dashboard/`
+   for HSBC), and `screenshot` or `get_page_text` to confirm the account overview (a "Log off" control, account names
+   with balances). Still the login page: say so and stop; ask them to log in again at most once. HSBC's "reference: EAC":
+   say it plainly and point them to **Fetch without AI** in the dashboard's Import CSV window
+   (`finnamon import --browser <bank> --no-cdp` in a terminal).
 4. **Download the CSV** for each manual account at this bank, by reading the page (`find`, `read_page`) and clicking.
    HSBC US: the account's tile -> its transaction list -> **"Show more transactions"** until the row count stops growing
    (the export takes only what is loaded) -> **"Download"** -> **"Spreadsheet CSV file"** -> its **"Download"** button.
