@@ -3,6 +3,11 @@
 All notable changes to Finnamon are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.56.2.0] - 2026-10-08
+
+### Changed
+- **Fetch by AI (extension) logs in to the bank in the AI's own tab.** Chrome opens blank; the AI opens the bank's login in a tab of the extension's group and you log in there, so no second tab appears afterwards.
+
 ## [0.56.1.0] - 2026-10-07
 
 ### Fixed
