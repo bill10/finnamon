@@ -41,7 +41,7 @@ person to run `finnamon web token` on the box, export it here and start again).
 1. **Which account.** `finnamon account list`; keep rows with `source` = `manual` at this bank. None: say so, give the
    command (`finnamon account add "<bank> Checking" --institution <bank>`), stop.
 2. **Open the login.** `select_browser` with the `--device` id, `tabs_context_mcp` (`createIfEmpty: true`), then
-   `navigate` that tab to the bank's login page (`https://www.us.hsbc.com/` for HSBC; it lands on Log on). Tell the
+   `navigate` that tab to the bank's login page (HSBC: `https://www.us.hsbc.com/auth/?returnUrl=https://www.us.hsbc.com/bin/epep/postback.html?url=/online/dashboard/`, titled "Log on method | Log on | HSBC"; the bare home page is marketing, not the login). Tell the
    person: "Log in to <bank> in the tab I just opened (in the Claude tab group); tell me when you're in." Then **stop and
    wait for their answer**. No further browser call, no polling.
 3. **Continue.** Once they are in: `navigate` the same tab to the bank's logged-in page (`https://www.us.hsbc.com/online/dashboard/`
