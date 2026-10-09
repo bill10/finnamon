@@ -1,4 +1,7 @@
-# HSBC import through the Claude in Chrome extension (research, 2026-10-06)
+# Importing from a bank that blocks automation, through the Claude in Chrome extension (research, 2026-10-06)
+
+Some banks refuse a browser they can tell is automated. The case studied here is HSBC US, picked because it is a clear
+example of the pattern, not as a list of banks Finnamon supports; the same reasoning applies to any bank that does this.
 
 Question: HSBC US refuses login ("reference: EAC") in any Chrome with `--remote-debugging-port`, but accepts a
 no-port Chrome with the Claude in Chrome extension driving it. Can `finnamon import --browser hsbc` drive the browser
@@ -6,7 +9,7 @@ through the extension instead of CDP, sealed and guarded as today? Desk research
 example.com and iana.org only. No bank pages, no credentials. Claude Code 2.1.292, codex-cli 0.157.0.
 
 **Recommendation: go, Claude-only, as a new mode beside `--no-cdp` (which stays the fallback and the only path for
-Codex).** Before the build, run a one-hour pairing and guarded-run spike with the owner (see "Open risks").
+Codex).** Before the build, run a one-hour pairing and guarded-run spike with a real account (see "Open risks").
 
 ## 1. Can the sealed session use it? Yes (verified)
 
@@ -19,7 +22,7 @@ Codex).** Before the build, run a one-hour pairing and guarded-run spike with th
 - It needs a claude.ai `/login` (OAuth). With an API key or a `setup-token`, `--chrome` is silently off. The extension
   must be signed in to the same claude.ai account. Tool calls go through Anthropic's relay
   (`wss://bridge.claudeusercontent.com`), not native messaging. That is why a fresh `--user-data-dir` with no
-  NativeMessagingHosts manifest works, as the owner's test showed.
+  NativeMessagingHosts manifest works, as a manual test showed.
 - Tools: `navigate, read_page, get_page_text, find, computer (left_click, right_click, type, key, scroll, scroll_to,
   screenshot, wait, hover, zoom, drag, double/triple_click), form_input, javascript_tool, browser_batch,
   tabs_context_mcp, tabs_create_mcp, tabs_close_mcp, read_console_messages, read_network_requests, resize_window,
@@ -41,10 +44,10 @@ Codex).** Before the build, run a one-hour pairing and guarded-run spike with th
 - The persisted device is `~/.claude.json` → `chromeExtension.pairedDeviceId`, falling back to the env var
   `CLAUDE_CHROME_PAIRED_DEVICE_ID`. **The global file wins over the env var.**
 - **Verified:** with `CLAUDE_CHROME_PAIRED_DEVICE_ID` set to an id that doesn't exist, the session bound to the only
-  connected browser, which is the owner's everyday Chrome (`inUse: true`). The env var is a preference, not a fence.
+  connected browser, which was the tester's everyday Chrome (`inUse: true`). The env var is a preference, not a fence.
 - **Verified:** `select_browser {deviceId}` binds exactly that device and errors if it isn't connected. But it also
   **writes the pick into the global `~/.claude.json`**, so every later `claude` the person runs would prefer Finnamon's
-  Chrome, which holds the bank cookies. My experiment wrote that key; I removed it again (it was unset before).
+  Chrome, which holds the bank cookies. The experiment wrote that key; it was removed again (it was unset before).
 - If the selected browser disappears mid-session (Chrome quits, or the service worker idles), the selection is cleared
   and the next call runs discovery again, which can pick the everyday Chrome.
 - Fix: run the import session with its own `CLAUDE_CONFIG_DIR` (for example `~/.finnamon/claude-import`). Then the
@@ -110,12 +113,12 @@ Plugins). Its domain allow and block lists live in the app's Settings → Comput
 | Dashboard "Fetch by AI" picks the mode; Codex households only get "Fetch without AI" | `web/` | small |
 | Tests: `chrome_call_ok` table (unbound, wrong device, wrong tab, off-host navigate, `type`/`javascript_tool`, tripped), Post URL parse, launcher argv/env with a stub claude; evals rerun (prompt files touched) | `tests/` | ~150 lines |
 
-Don't touch Ember's `--no-cdp` files beyond reusing `chrome_open`, `pin_downloads` and `wait_for_csv`.
+Don't touch the `--no-cdp` code beyond reusing `chrome_open`, `pin_downloads` and `wait_for_csv`.
 
 ## Open risks
 
 1. **HSBC may start flagging the extension.** The extension attaches `chrome.debugger` for clicks and screenshots.
-   The owner's single test passed, but Transmit could change. Keep the rule from today's skill: no browser call at all
+   One manual test passed, but Transmit could change. Keep the rule from today's skill: no browser call at all
    until the person says they are logged in. `--no-cdp` stays one click away.
 2. **Binding to the wrong browser** (section 2): mitigated by a separate `CLAUDE_CONFIG_DIR`, the forced first
    `select_browser`, the tab pin, and the PostToolUse URL check. Remaining case: a mid-session disconnect followed by
