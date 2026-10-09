@@ -2,6 +2,7 @@
 (finnamon/approval.py, `finnamon hook permission`, the daemon's callback_query). Telegram and Claude are both stubbed."""
 import io
 import json
+import re
 
 import pytest
 
@@ -365,7 +366,10 @@ def test_a_question_for_the_screen_never_goes_to_the_phone(home, conn, tmp_path,
 PROTECTED_FILES = [".finnamon/secrets.toml", ".finnamon/finnamon.db", ".finnamon/finnamon.db-wal", ".finnamon/web-token",
                    ".finnamon/intercom.json", ".finnamon/imports/2026-10-01T00-00-00-hsbc.csv", ".finnamon/chrome/Default/Cookies",
                    ".finnamon/chrome-extension-test/Default/Cookies", ".finnamon/claude-import/.claude.json", ".finnamon/downloads/TransactionHistory.csv",
-                   ".claude/channels/telegram/.env", ".agent-browser/session.json"]
+                   ".finnamon/backups/finnamon-2026-10-01.db", ".finnamon/secrets.toml.bak", ".claude/channels/telegram/.env",
+                   ".agent-browser/session.json", ".claude/projects/-Users-jane-.finnamon-assistant/abc.jsonl", ".ssh/id_ed25519",
+                   ".aws/credentials", ".gnupg/private-keys-v1.d", ".netrc", ".config/gh/hosts.yml", ".kube/config",
+                   ".claude/.credentials.json", ".claude.json", "Library/Keychains/login.keychain-db"]
 HOME_FORMS = ["~/", "$HOME/", "${HOME}/", "/Users/bill/", "/home/jane/", "/USERS/Bill/", "~/"]
 
 
@@ -391,6 +395,15 @@ def test_what_stays_reachable():
                       ("Read", {"file_path": "~/.finnamon/assistant/CLAUDE.md"}), ("Bash", {"command": "agent-browser --session finnamon-import snapshot -i"}),
                       ("mcp__plugin_telegram_telegram__reply", {"chat_id": 1, "text": "I can't read ~/.finnamon/secrets.toml"})):
         assert approval.protected_path(tool, inp, home="/nonexistent") is None, inp
+
+
+def test_the_assistant_s_own_memory_is_the_one_project_folder_it_may_use(home):
+    # Value: protects=the household assistant's auto memory (Write under ~/.claude/projects/<its slug>/memory) while every other transcript and memory stays guarded; fails_when=the carve-out goes, widens, or lets `..` out; seam=none
+    slug = re.sub(r"[^A-Za-z0-9]", "-", str(assistant.dir()))
+    mem = f"/nonexistent/.claude/projects/{slug}/memory"
+    assert approval.protected_path("Write", {"file_path": f"{mem}/household.md"}, home="/nonexistent") is None
+    for path in (f"/nonexistent/.claude/projects/{slug}/abc.jsonl", f"{mem}/../abc.jsonl", "/nonexistent/.claude/projects/-Users-jane-code/memory/x.md"):
+        assert approval.protected_path("Read", {"file_path": path}, home="/nonexistent"), path
 
 
 def test_the_guard_hook_blocks_before_any_prompt(home, monkeypatch, capsys):

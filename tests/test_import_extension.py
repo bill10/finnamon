@@ -274,6 +274,24 @@ def test_newest_download_imports_the_newest_csv_since_the_session_began(home, co
         cli.main(["import", "HSBC Checking", "--newest-download"])   # nothing new since the session began: no reuse of the last file
 
 
+def test_an_import_prunes_imported_csvs_past_the_keep_window(home, conn, monkeypatch, capsys):
+    # Value: protects=bank statements not piling up in downloads/imported/ forever (the documented 30 days); fails_when=the prune goes or takes the fresh file; seam=none
+    seed(conn)
+    imports.add_account(conn, "HSBC Checking", "HSBC", "checking", "alex")
+    done = home / "downloads" / "imported"; done.mkdir(parents=True)
+    stale, recent = done / "20260101-000000-old.csv", done / "20261001-000000-recent.csv"
+    for f, age in ((stale, cli.IMPORTED_KEEP_DAYS + 1), (recent, cli.IMPORTED_KEEP_DAYS - 1)):
+        f.write_text("Date,Description,Amount\n")
+        os.utime(f, (time.time() - age * 86400,) * 2)
+    csv = home / "downloads" / "TransactionHistory.csv"
+    csv.write_text("Date,Description,Amount\n09/15/2026,COSTCO,-142.17\n")
+    os.utime(csv, (time.time() - 60 * 86400,) * 2)   # downloaded long ago: imported today, so not pruned on the spot
+    monkeypatch.setattr(cli, "WATCH_POLL", 0.01)
+    monkeypatch.setenv("FINNAMON_IMPORT_SINCE", str(time.time() - 90 * 86400))
+    cli.main(["import", "HSBC Checking", "--newest-download"])
+    assert not stale.exists() and recent.exists() and len(list(done.glob("*.csv"))) == 2, "the stale one goes; the recent one and today's stay"
+
+
 def test_a_trip_survives_a_concurrent_write_and_a_post_crash_stops(home, monkeypatch, capsys):
     """Two Post hooks in one turn: the one that trips cannot be undone by the other's write; and a Post the guard cannot
     read stops the session rather than letting it run on."""

@@ -122,7 +122,7 @@ the daemon answers with its own separate session (the legacy `daemon` mode). The
 2. **`finnamon init`** sees `codex` at step 3 and asks which runs the assistant; answer Codex. It writes the same
    bundle as `AGENTS.md` and `.agents/skills/` in `~/.finnamon/assistant/`, and Finnamon's own Codex home,
    `~/.finnamon/codex/`: a `config.toml` with a permission profile that keeps the shell away from your keys and the
-   database, the secret guard and the phone's permission prompt as hooks (their trust pinned), no web search, no
+   database, the secret guard and the phone's permission prompt as hooks (their trust pinned), no network for its tools, no web search, no
    ChatGPT apps, and the `finnamon` MCP tool, which is how the assistant runs `finnamon` commands (the same allow list as
    Claude's). Your own `~/.codex` config, MCP servers and skills never reach the household's assistant.
 3. **The login is shared, not repeated.** `~/.finnamon/codex/auth.json` is a link to your `~/.codex/auth.json`, so a
@@ -244,7 +244,9 @@ first if you want to keep your history: step 5 deletes it and its backups.
    ```
    python3 -c 'import json,os,pathlib; p=pathlib.Path.home()/".claude.json"; d=json.loads(p.read_text()); d.get("projects",{}).pop(os.path.realpath(os.path.expanduser("~/.finnamon/assistant")),None); p.write_text(json.dumps(d,indent=2))'
    ```
-   (Use `$CLAUDE_CONFIG_DIR/.claude.json` instead if you set `CLAUDE_CONFIG_DIR`.)
+   (Use `$CLAUDE_CONFIG_DIR/.claude.json` instead if you set `CLAUDE_CONFIG_DIR`.) The assistant's conversations,
+   including any bank pages Fetch by AI read, are Claude Code transcripts under `~/.claude/projects/`, in the folder
+   named after the assistant directory (for example `-Users-you--finnamon-assistant`): delete that folder too.
 8. **The command and the checkout**: `uv tool uninstall finnamon`, then `rm -rf ~/finnamon`.
 9. **Outside services**: delete the bot with [@BotFather](https://t.me/BotFather) (`/deletebot`), and your Plaid
    account or keys at [dashboard.plaid.com](https://dashboard.plaid.com). If `finnamon voice setup` installed

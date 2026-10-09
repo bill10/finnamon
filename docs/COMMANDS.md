@@ -111,6 +111,12 @@ everyday profile stays out of it. You always log in yourself; the AI never types
   household the dashboard shows only Fetch without AI for an HSBC account. `finnamon doctor` checks the
   Claude Code version and shows the pairing.
 
+**What Fetch by AI keeps on the box.** The bank pages' text and the screenshots the session takes stay in the
+assistant's Claude transcripts, under `~/.claude/projects/<the assistant directory's slug>/` (for example
+`-Users-you--finnamon-assistant`; delete a session's `.jsonl` there to drop it). Each imported CSV is moved to
+`~/.finnamon/downloads/imported/`, where any older than 30 days is deleted at the end of the next import (the rows
+themselves stay in the database).
+
 **When the bank refuses the login.** **Reset browser profile** in the same window (or `finnamon import --browser
 --reset-profile`) moves Finnamon's profile aside so the next fetch starts fresh; the bank sees a new device, and the old
 folder (`~/.finnamon/chrome.old-…`) can go once that works. `finnamon import --browser <bank> --diagnose` has you log in

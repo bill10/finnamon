@@ -29,7 +29,7 @@ import unicodedata
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import config, store, telegram
+from . import assistant, config, store, telegram
 from .telegram import esc
 
 WAIT_S = 600   # the hook's own "timeout" in settings.json sits above this, so the deny is ours and the chat hears it
@@ -216,14 +216,14 @@ def denied_by(tool: str, inp: dict, deny: list[str]) -> str | None:
 # ponytail: a string guard over the call's input, case-insensitive, for the forms a path is written in (~, $HOME, ${HOME},
 # /Users/<name>, /home/<name>, this box's own home); a path assembled at run time (variables, globs, base64) gets past it,
 # and the person approving still sees the whole command.
-PROTECTED = (r"\.finnamon/secrets\.toml", r"\.finnamon/finnamon\.db", r"\.finnamon/web-token", r"\.finnamon/intercom\.json",
-             r"\.finnamon/imports(?![\w.-])", r"\.finnamon/chrome(?![\w.-])",
-             r"\.finnamon/chrome-extension-test(?![\w.-])", r"\.finnamon/claude-import(?![\w.-])", r"\.finnamon/downloads(?![\w.-])", r"\.claude/channels/telegram/\.env",
-             r"\.agent-browser(?![\w.-])")
+# A name ends at anything but a word character or a dash (`secrets.toml.bak` is caught, `chrome-old` is not), except
+# finnamon.db, whose -wal / -shm / -journal are the database too.
+PROTECTED = (*(r"\.finnamon/" + re.escape(p) + ("" if p == "finnamon.db" else r"(?![\w-])") for p in config.PROTECTED_HOUSEHOLD),
+             *(re.escape(p) + r"(?![\w-])" for p in config.PROTECTED_PERSONAL))
 _HOMES = r"(?:~|\$home|\$\{home\}|/users/[^/\s'\"]+|/home/[^/\s'\"]+)"
 _PROTECTED_RE = re.compile(rf"{_HOMES}/(?:{'|'.join(PROTECTED)})", re.IGNORECASE)
 # A Bash command that names the folder and, anywhere, one of its protected files (`cd ~/.finnamon && cat secrets.toml`).
-_IN_FOLDER_RE = re.compile(r"\.finnamon\b.*\b(?:secrets\.toml|finnamon\.db|web-token|intercom\.json|imports|chrome|claude-import|downloads)\b"
+_IN_FOLDER_RE = re.compile(r"\.finnamon\b.*\b(?:secrets\.toml|finnamon\.db|web-token|intercom\.json|imports|backups|chrome|claude-import|downloads)\b"
                            r"|\.claude/channels\b.*\.env\b", re.IGNORECASE | re.DOTALL)
 SAYS_ONLY = ("mcp__plugin_telegram_telegram__reply", "mcp__plugin_telegram_telegram__react")   # words to people, not file access
 FINNAMON_TOOL = "mcp__finnamon__finnamon"   # Codex's finnamon(argv) tool (finnamon/mcp_server.py)
@@ -260,6 +260,10 @@ def protected_path(tool: str, inp, home: str | None = None, cwd: str | None = No
     home = (home or str(Path.home())).rstrip("/")
     if home:   # this box's own home, whatever its root (/var/root, /private/...)
         text = re.sub(re.escape(home) + r"(?=/)", "~", text, flags=re.IGNORECASE)
+    # the assistant's own auto memory is the one folder under ~/.claude/projects it may use (Claude Code names it by the
+    # cwd with every other character a dash); a `..` after it goes back to the guard
+    own = "~/.claude/projects/" + re.sub(r"[^A-Za-z0-9]", "-", str(assistant.dir())) + "/memory"
+    text = re.sub(re.escape(own) + r"(?![\w-])(?![^\s'\"]*\.\.)", "~/assistant-memory", text, flags=re.IGNORECASE)
     cmd = _argv_command(inp) if tool == FINNAMON_TOOL else str(inp.get("command") or "") if tool == "Bash" and isinstance(inp, dict) else ""
     m = _PROTECTED_RE.search(text) or (cmd and _IN_FOLDER_RE.search(cmd))
     return m.group(0) if m else None

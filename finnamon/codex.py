@@ -7,7 +7,7 @@
 - FINNAMON_HOME/codex is Codex's own home for these sessions (CODEX_HOME), so the person's ~/.codex config, MCP servers
   and skills never reach the household's assistant. Its config.toml is generated from .claude/settings.json: a permission
   profile (never `sandbox_mode`: under it an allow rule escapes the sandbox, spike finding 1), the hooks with their trust
-  pinned by hash, no web search, no ChatGPT-apps server. Pinned like settings.json: a release always wins, an edited
+  pinned by hash, the network off, no web search, no ChatGPT-apps server. Pinned like settings.json: a release always wins, an edited
   copy goes to .bak;
 - the login is shared, not repeated: CODEX_HOME/auth.json is a symlink to ~/.codex/auth.json, and a token refresh writes
   through it (spike finding 6). Only when there is no such file does `init` run `codex login` under Finnamon's home.
@@ -76,13 +76,13 @@ def denied() -> list[str]:
     """What the profile keeps every tool (shell, apply_patch, view_image) from reading or writing: the household's secrets
     and data, which the assistant reaches only through `finnamon`, and the login the sealed home shares."""
     h, real = config.home(), Path.home()
-    paths = [h / "secrets.toml", h / "finnamon.db", h / "finnamon.db-wal", h / "finnamon.db-shm", h / "finnamon.db-journal",
-             h / "backups", config.web_token_path(), h / "web-hosts", h / config.INTERCOM_FILE, h / "imports", h / "chrome",
-             home() / "sessions", home() / "auth.json", user_auth(), real / ".agent-browser", real / ".claude" / "channels",
-             # the person's own keys and logins: the dashboard's Codex session reads without asking inside its profile, and a
-             # phone turn's reply would carry whatever it read (the whole home, with tools granted back, is TODOS.md)
-             real / ".ssh", real / ".aws", real / ".gnupg", real / ".netrc", real / ".config" / "gh", real / ".kube",
-             real / ".claude" / ".credentials.json", real / ".claude.json", real / "Library" / "Keychains"]
+    # the shared lists (config.PROTECTED_*), as the secret guard has them, plus what only a Codex session could reach: its
+    # own transcripts and login, the whole Telegram channel folder, the dashboard's allowed hosts. The person's own keys and
+    # logins matter here because the dashboard's Codex session reads without asking inside its profile, and a phone turn's
+    # reply would carry whatever it read (the whole home, with tools granted back, is TODOS.md)
+    paths = [*(h / p for p in config.PROTECTED_HOUSEHOLD), *(h / f"finnamon.db-{x}" for x in ("wal", "shm", "journal")),
+             config.web_token_path(), h / "web-hosts", *(real / p for p in config.PROTECTED_PERSONAL),
+             home() / "sessions", home() / "auth.json", user_auth(), real / ".claude" / "channels"]
     return list(dict.fromkeys(str(p) for p in paths))
 
 
@@ -126,6 +126,9 @@ def render_config(d: Path | None = None, state: dict[str, str] | None = None) ->
              '":workspace_roots" = "read"',
              f"{_q(str(d))} = \"read\"",
              *(f"{_q(p)} = \"deny\"" for p in denied()),
+             "",
+             f"[permissions.{PROFILE}.network]   # stated, not left to Codex's default: no tool command reaches the network",
+             "enabled = false",
              "",
              "[mcp_servers.finnamon]   # finnamon(argv): the CLI outside the sandbox, on the bundle's allow list (mcp_server.py)",
              'command = "finnamon"',
@@ -344,6 +347,8 @@ def config_problems() -> list[str]:
     fs = ((cfg.get("permissions") or {}).get(PROFILE) or {}).get("filesystem") or {}
     if (missing := [p for p in denied() if fs.get(p) != "deny"]):
         out.append(f"the {PROFILE} profile no longer denies {missing[0]}" + (f" (and {len(missing) - 1} more)" if len(missing) > 1 else ""))
+    if (((cfg.get("permissions") or {}).get(PROFILE) or {}).get("network") or {}).get("enabled") is not False:
+        out.append(f"the {PROFILE} profile does not turn the network off")
     if (assistant.dir() / ".codex").exists():   # a trusted project's own layer, which the command-line lock does not cover
         out.append(f"{assistant.dir() / '.codex'} exists: a project config there would apply over the sealed one")
     if ((cfg.get("projects") or {}).get(str(assistant.dir())) or {}).get("trust_level") != "trusted":
