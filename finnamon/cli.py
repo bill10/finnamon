@@ -397,10 +397,14 @@ def _agent_logged_in(kind: str) -> bool | None:
     The dashboard holds its session back on False only: a logged-out claude opens on its first-run setup screens."""
     if kind == "codex":
         exe = codex.binary()
-        return codex.logged_in(exe)[0] if exe else None
+        if not exe:
+            return None
+        ok, msg = codex.logged_in(exe)
+        return None if msg.startswith("could not run") else ok   # a hung or failed check is not a sign-out
     exe = claude_runner.binary()
     try:
-        return bool(_claude_auth(exe).get("loggedIn")) if exe else None
+        v = _claude_auth(exe).get("loggedIn") if exe else None
+        return v if isinstance(v, bool) else None   # an auth method that reports no loggedIn must not hold the chat back
     except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, ValueError):
         return None
 
@@ -2086,6 +2090,8 @@ def cmd_notify(a) -> None:
     if a.restarted:   # the dashboard, after a restart cut a channel-mode turn short (web/server.js restartNotice)
         chat = store.get_state(conn, "chat_id")
         out({"sent": telegram.send_message(chat, notify.RESTARTED) if chat else None}); return
+    if not store.get_state(conn, "chat_id") and notify.pending(conn):
+        die("notify: no household chat recorded yet, so nothing can be sent; finnamon init gives you a code to send the bot")
     notify.last_error = None
     n = notify.send_pending(conn)
     r = notify.send_roundup(conn, store.now_local(), force=a.roundup)
@@ -2855,7 +2861,7 @@ def cmd_alerts(a) -> None:
           "telegram_message_id": r["telegram_message_id"], "verdict": r["verdict"], "confidence": r["confidence"], "reason": r["reason"],
           "resolved_at": r["resolved_at"], "resolution": r["resolution"], "suppression_id": r["suppression_id"],
           "folded": [f["id"] for f in fam if f["id"] != r["id"]],
-          "text": notify.render(r), "payload": json.loads(r["payload_json"]),
+          "text": notify.render(r, cue=False), "payload": json.loads(r["payload_json"]),
           **({"reconnect": item, "page_text": notify.render(r, page=True)} if (item := notify.relogin_item(r)) else {})} for r, fam in shown])
     print(render.alerts(rows)) if _human(a) else out(rows)
 

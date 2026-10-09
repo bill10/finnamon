@@ -28,7 +28,10 @@ JOBS = ("daemon", "heartbeat", "web")
 def real_home() -> Path:
     """The login's home from the password database, not $HOME: launchd labels and systemd user units are per user, so a
     shell with HOME pointed at a scratch directory is still installing into the one user's job namespace."""
-    return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    try:
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except KeyError:   # a uid with no passwd entry (a container's --user N)
+        return Path.home()
 
 
 def _unit_home(text: str, darwin: bool) -> str | None:
@@ -63,6 +66,9 @@ def foreign_home(os_name: str | None = None) -> str | None:
     """Why this home must not touch its job names: one of them is installed for a different FINNAMON_HOME. None if not."""
     os_name = os_name or platform.system()
     darwin = os_name == "Darwin"
+    if _same_home(config.home(), real_home() / ".finnamon") and not _same_home(Path.home(), real_home()):
+        return (f"this is the household's home ({config.home()}), but HOME is {Path.home()}, not your login's {real_home()}: "
+                "its jobs would run with the wrong HOME and replace the real ones. Run it from your normal shell, or re-run with --force")
     for name in (f"{label(n, os_name)}.plist" for n in JOBS) if darwin else (unit(n, os_name=os_name) for n in JOBS):
         try:
             theirs = _unit_home((unit_dir(os_name) / name).read_text(), darwin)
@@ -219,7 +225,9 @@ def services_for(paths) -> list[str]:
 
 def unit_dir(os_name: str | None = None) -> Path:
     os_name = os_name or platform.system()
-    return real_home() / "Library" / "LaunchAgents" if os_name == "Darwin" else real_home() / ".config" / "systemd" / "user"
+    # $HOME's, not real_home(): a scratch HOME's jobs must not land in the login's LaunchAgents and load at every login.
+    # The names are what keeps them apart (suffix), and the files under a person's own HOME are what foreign_home reads.
+    return Path.home() / "Library" / "LaunchAgents" if os_name == "Darwin" else Path.home() / ".config" / "systemd" / "user"
 
 
 def installed(name: str, os_name: str | None = None) -> bool:

@@ -1149,7 +1149,11 @@ def test_status_login_says_whether_the_assistant_is_signed_in(home, fake_claude,
     assert json.loads(run_cli(capsys, "status", "--login"))["logged_in"] is True
     monkeypatch.setenv("CLAUDE_FAKE_RESULT", "not json")
     assert json.loads(run_cli(capsys, "status", "--login"))["logged_in"] is None, "a check that fails holds nothing back"
+    monkeypatch.setenv("CLAUDE_FAKE_RESULT", json.dumps({"authMethod": "apiKey"}))
+    assert json.loads(run_cli(capsys, "status", "--login"))["logged_in"] is None, "no loggedIn key is not a sign-out"
     store.set_setting(store.connect(), "assistant", "codex")
     monkeypatch.setattr(codex, "binary", lambda: "/x/codex")
     monkeypatch.setattr(codex, "logged_in", lambda exe: (False, "Not logged in"))
     assert json.loads(run_cli(capsys, "status", "--login"))["logged_in"] is False
+    monkeypatch.setattr(codex, "logged_in", lambda exe: (False, "could not run `codex login status`: timed out"))
+    assert json.loads(run_cli(capsys, "status", "--login"))["logged_in"] is None

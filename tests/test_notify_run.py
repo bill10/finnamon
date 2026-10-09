@@ -529,8 +529,12 @@ def test_cli_notify_exits_non_zero_when_telegram_refuses(home, monkeypatch, caps
     """QA: a bad token printed {"sent": 0}, logged a warning and exited 0."""
     import pytest
     from finnamon import cli, store, telegram
-    conn = store.connect(); store.set_state(conn, "chat_id", 1)
+    conn = store.connect()
     conn.execute("INSERT INTO alerts (kind, tier, key, payload_json, as_of) VALUES ('low_balance','rule','k','{}','2026-10-01')")
+    with pytest.raises(SystemExit):   # no chat yet: the most common fresh-install reason nothing arrives
+        cli.main(["notify"])
+    assert "no household chat recorded yet" in capsys.readouterr().err
+    store.set_state(conn, "chat_id", 1)
     monkeypatch.setattr(telegram, "send_message", lambda *a, **k: (_ for _ in ()).throw(telegram.TelegramError(401, "Unauthorized")))
     for argv in (["notify"], ["notify", "--roundup"]):
         with pytest.raises(SystemExit) as e:

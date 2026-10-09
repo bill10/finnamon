@@ -57,7 +57,7 @@ def why(e: TelegramError) -> str:
         return f"Telegram rejected the bot token ({e}); check it with @BotFather, then run finnamon init"
     if e.code == 0:
         return f"could not reach Telegram ({e.description})"
-    return f"Telegram refused the message ({e})"
+    return f"Telegram answered with an error ({e})"
 
 
 def get_me(token: str | None = None) -> dict:
