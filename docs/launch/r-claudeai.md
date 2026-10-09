@@ -1,7 +1,10 @@
 # r/ClaudeAI draft ("Built with Claude" flair)
 
-The flair's rules, as of this writing: say what you built, how Claude helped build it, and that it is free to try,
-with no referral links. Re-check the sidebar on the day. Post from the owner's account.
+The flair's rules, as noted 2026-10-05: say what you built, how Claude helped build it, and that it is free to try,
+with no referral links. Re-check on 2026-10-08: Reddit refuses this agent's fetches (403), so the live sidebar was
+**not** read; other projects' notes say "Built with Claude" posts were mod-approved as recently as 2026-07-21, and the
+2025 contest under that flair also asked for screenshots or a demo and one prompt you used. Read the sidebar on the
+day, and add a prompt if it asks for one. Post from the owner's account.
 
 ---
 
@@ -27,13 +30,20 @@ budgets and mark things normal but can't touch anything else. SQL detectors find
 resume a Claude session; the dashboard embeds the same session as an "intercom". Every spawn is sealed
 (`--strict-mcp-config`, `--setting-sources project`) so your own Claude Code settings never leak in.
 
+**Banks Plaid can't reach, through Claude in Chrome:** HSBC US isn't on Plaid and refuses any Chrome with a debugging
+port. So "Fetch by AI" opens a Chrome of Finnamon's own with the Claude in Chrome extension and no port, you log in to
+the bank yourself, and a sealed `claude --chrome` session (your normal Claude login) clicks Download → CSV and imports
+it. A guard hook (PreToolUse and PostToolUse) holds it to one tab on the bank's own site, clicks and reads only (no typing, no scripts, no new
+tabs), and ends the session if the tab leaves the bank. Works on my real HSBC account.
+
 **How Claude helped build it:** most of the code was written with Claude Code under my direction and review, with
 unit tests and evals (real Claude over a fixture household) required after any prompt change.
 
 **Free to try:** `finnamon demo` runs a made-up household and its dashboard with no keys. Using it for real needs a
-Claude Pro or Max subscription you already have, plus Plaid's free Trial plan (US/Canada). Licence: MIT.
+Claude Pro or Max subscription you already have, plus Plaid's free Trial plan (US/Canada) or Fetch by AI for banks
+Plaid can't reach. Licence: MIT.
 
-What leaves your machine is spelled out in the README: Plaid, what Claude reads (go turn off "Help improve Claude"),
-and Telegram.
+What leaves your machine is spelled out in the README: Plaid, what Claude reads, the bank pages included when it
+fetches (go turn off "Help improve Claude"), and Telegram.
 
-Repo + 1-minute demo: `<repo>`
+Repo + 1-minute demo: https://github.com/bill10/finnamon

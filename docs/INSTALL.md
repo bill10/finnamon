@@ -27,7 +27,7 @@ one that fails. Run it whenever something seems off.
 ## 1. Install
 
 ```
-git clone <repo> ~/finnamon && cd ~/finnamon
+git clone https://github.com/bill10/finnamon ~/finnamon && cd ~/finnamon
 uv tool install -e .          # puts `finnamon` on PATH; -e so `finnamon update` can pull new releases into this checkout
 finnamon doctor               # expect a list of ✗: nothing is set up yet, each line says what fixes it
 ```
@@ -158,7 +158,13 @@ link to your phone).
 
 Then click the intercom button in the corner and ask it to "set up my budgets".
 
-Banks Plaid can't reach (HSBC US personal banking): **Add account → Import CSV**, see [COMMANDS.md](COMMANDS.md).
+Banks Plaid can't reach (HSBC US personal banking): **Add account → Import CSV**, then **Fetch by AI** (you log in to
+the bank in a Chrome window of Finnamon's own, Claude downloads the CSV and imports it; Claude Code only) or pick the
+file yourself; see [COMMANDS.md](COMMANDS.md#banks-plaid-doesnt-reach). For HSBC, Fetch by AI goes through the Claude in Chrome extension: Claude
+Code 2.1.292 or later, and the extension installed from the Chrome Web Store in Finnamon's Chrome profile
+(`~/.finnamon/chrome-extension-test`, the window Fetch by AI opens) and signed in to the same claude.ai account. The first run pairs it by itself when it is the only connected browser (otherwise `finnamon import --pair-extension`);
+`finnamon doctor` shows the version and pairing. Fetch by AI for other banks drives Chrome through the `agent-browser`
+CLI, which has to be on your PATH.
 
 ## 5. Your phone (optional, Tailscale)
 
@@ -213,6 +219,39 @@ finnamon install                        # start them again (it asks before start
 The next sync fills in the transactions since the backup, and alerts raised since then may arrive a second time. A bank
 linked after the backup was taken is not in it: link that one again. On a Mac the logs in `~/Library/Logs/finnamon` are rotated at 5 MB, three old copies kept.
 
+## 8. Uninstalling
+
+Each step undoes one thing Finnamon set up; skip the ones you never set up. Copy `~/.finnamon/finnamon.db` somewhere
+first if you want to keep your history: step 5 deletes it and its backups.
+
+1. **Unlink your banks at Plaid**, so their access ends there too: `finnamon link --remove <item_id>` for each bank
+   (`finnamon status` lists the item ids). It calls Plaid's `/item/remove`.
+2. **Phone access**, if you ran `finnamon remote`: `finnamon remote --off`.
+3. **The always-on jobs**: `finnamon install --uninstall` stops and removes the daemon, heartbeat and dashboard jobs
+   (LaunchAgents on a Mac, systemd user units on Linux). It prints `removed`. Don't add `--dry-run`: it is ignored there
+   and the jobs are removed anyway.
+4. **Channel mode**, if you turned it on (`finnamon channel on`): `cd ~/.finnamon/assistant && claude plugin uninstall
+   telegram@claude-plugins-official --scope local`, then delete `~/.claude/channels/telegram/` unless you use the
+   Telegram plugin for something else (it holds the bot token).
+5. **Finnamon's data**: `rm -rf ~/.finnamon`. That is the database, `secrets.toml` (Plaid keys, bot token), backups,
+   the assistant directory, Finnamon's Chrome profiles (`chrome/`, `chrome-extension-test/`), downloads and imports,
+   the voice model, and the Codex home (`codex/`, whose login is a link to yours: removing the folder is fine, but never
+   run `codex logout` with `CODEX_HOME=~/.finnamon/codex`). If you tried the demo: `finnamon demo --stop`, then
+   `rm -rf ~/.finnamon-demo`.
+6. **Logs** (Mac only; Linux logs go to journald): `rm -rf ~/Library/Logs/finnamon`.
+7. **The trust entry in `~/.claude.json`**: `init` marked `~/.finnamon/assistant` trusted there (`projects` →
+   that folder's real path → `hasTrustDialogAccepted`). With no `claude` running, remove it:
+   ```
+   python3 -c 'import json,os,pathlib; p=pathlib.Path.home()/".claude.json"; d=json.loads(p.read_text()); d.get("projects",{}).pop(os.path.realpath(os.path.expanduser("~/.finnamon/assistant")),None); p.write_text(json.dumps(d,indent=2))'
+   ```
+   (Use `$CLAUDE_CONFIG_DIR/.claude.json` instead if you set `CLAUDE_CONFIG_DIR`.) The assistant's conversations,
+   including any bank pages Fetch by AI read, are Claude Code transcripts under `~/.claude/projects/`, in the folder
+   named after the assistant directory (for example `-Users-you--finnamon-assistant`): delete that folder too.
+8. **The command and the checkout**: `uv tool uninstall finnamon`, then `rm -rf ~/finnamon`.
+9. **Outside services**: delete the bot with [@BotFather](https://t.me/BotFather) (`/deletebot`), and your Plaid
+   account or keys at [dashboard.plaid.com](https://dashboard.plaid.com). If `finnamon voice setup` installed
+   whisper.cpp with Homebrew: `brew uninstall whisper-cpp`.
+
 ## Windows (WSL2)
 
 There is no native Windows Finnamon: it runs in Ubuntu inside Windows (WSL2), as the Linux install above. The
@@ -233,7 +272,7 @@ tests, `finnamon demo`, and `finnamon install`'s systemd units with the dashboar
    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs   # Node 20
    curl -fsSL https://claude.ai/install.sh | bash                                    # Claude Code; run `claude` once to sign in
    ```
-4. **Clone into the Linux home**, `git clone <repo> ~/finnamon`, never under `/mnt/c/`: Windows' drives cannot keep
+4. **Clone into the Linux home**, `git clone https://github.com/bill10/finnamon ~/finnamon`, never under `/mnt/c/`: Windows' drives cannot keep
    the 0600 permissions on the keys and the database, and they are slow. Then [section 1](#1-install) on.
 5. **Linger**: `sudo loginctl enable-linger $USER`, as on any Linux.
 6. **Keep the PC and WSL running.** The daemon only watches while Ubuntu runs, and Windows stops a WSL distribution

@@ -3,6 +3,22 @@
 All notable changes to Finnamon are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.56.3.1] - 2026-10-09
+
+### Changed
+- **README and launch kit brought up to v0.56.** The README, INSTALL, COMMANDS and `docs/launch/` now cover Fetch by AI for banks Plaid can't reach (HSBC through the Claude in Chrome extension, on your normal Claude login), what it sends to Anthropic, and that it is Claude Code only. `docs/launch/checklist.md` gives the launch-day order and who does each step.
+- **Try it in 30 seconds.** The README opens with `finnamon demo` (first free port from 8890, `--print` to only print the address), and every clone command uses https://github.com/bill10/finnamon.
+- **Uninstalling is documented** (INSTALL section 8): Plaid items, the jobs, channel mode, `~/.finnamon`, logs, the `~/.claude.json` trust entry, the command and the checkout.
+- **COMMANDS: "Banks Plaid doesn't reach" is its own section**, and the README's sample alerts use the alerts' real wording.
+
+## [0.56.3.0] - 2026-10-09
+
+### Changed
+- **Codex's tools never reach the network, by an explicit setting.** The generated `config.toml` now sets `[permissions.finnamon.network] enabled = false` instead of relying on Codex's default, and `finnamon doctor` (and every Codex start) refuses a config where it is missing or turned on.
+- **One deny list for Claude and Codex.** The secret guard and Codex's permission profile are now built from the same list: Codex's tools can no longer reach `downloads/`, `chrome-extension-test/`, `claude-import/` or `~/.claude/projects`, and Claude's tools can no longer reach `backups/`, `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.config/gh`, `~/.kube`, Claude's own login files or the macOS keychains.
+- **Imported statements don't pile up.** At the end of a Fetch by AI import, CSVs in `~/.finnamon/downloads/imported/` older than 30 days are deleted; the docs say where bank page text and screenshots are kept (the assistant's Claude transcripts).
+- Docs and test fixtures no longer carry personal names, paths or bot handles; `THIRD_PARTY_NOTICES.md` lists xterm.js, Vega and the Geist fonts loaded from CDNs.
+
 ## [0.56.2.0] - 2026-10-08
 
 ### Changed
