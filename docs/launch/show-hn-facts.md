@@ -47,12 +47,14 @@ Suggested title shape (owner's call): `Show HN: Finnamon – turn Claude or Code
   **Claude-only for now:** web lookups (none on Codex), Telegram channel mode (Codex uses the daemon's relay, which is
   the default anyway), and the "Fetch by AI" import. Evals run on both CLIs.
 - **Banks Plaid can't reach: Fetch by AI.** You log in to the bank's own site yourself in a Chrome window of
-  Finnamon's own; a sealed Claude Code session then clicks through to the bank's CSV export and imports it. The AI
-  makes no browser call while you log in and never types anything (a guard hook refuses typing, scripts, new tabs and
-  any site but the bank's, and stops the session if the tab leaves the bank). HSBC US (not on Plaid) goes through the
-  Claude in Chrome extension, because HSBC refuses any Chrome with a debugging port; it runs on your normal Claude
-  login and pairs by itself on first use (Claude Code 2.1.292+). The owner ran it on a real HSBC account on
-  2026-10-08. It runs when you start it (dashboard button or `finnamon import --browser <bank>`), not on a schedule.
+  Finnamon's own; a sealed Claude Code session then clicks through to the bank's CSV export and imports it. It is
+  told to wait, with no browser call, until you say you're in, and it can never type text into the page. HSBC US (not
+  on Plaid) goes through the Claude in Chrome extension, because HSBC refuses any Chrome with a debugging port: there
+  a guard hook refuses typing, scripts, new tabs and any site but the bank's, and stops the session if the tab leaves
+  the bank. It needs Claude Code 2.1.292+ and a claude.ai (Pro/Max) login, not an API key, and pairs the extension by
+  itself when it is the only connected browser. Other banks run over a debugging port under a fixed command list (one
+  tab; clicks, scrolls and a few keys like Enter and Tab; no typing text, no scripts). The owner ran it on a real HSBC
+  account on 2026-10-08. It runs when you start it (dashboard button or `finnamon import --browser <bank>`), not on a schedule.
   Claude Code only. Without AI: "Fetch without AI" opens the bank and imports the CSV you download, or plain CSV import.
 - **Try it without keys:** `finnamon demo` (four banks, six months of made-up transactions, budgets, alerts and the
   dashboard on a spare port; nothing touches Plaid, Telegram or a real household). `finnamon demo --stop` to stop.
@@ -84,10 +86,11 @@ without screen-scraping, and it's your own Plaid keys and account, not a shared 
 Finnamon never sees bank passwords. For a bank Plaid can't reach, or one you'd rather not give Plaid: Fetch by AI (you
 log in, Claude downloads the bank's own CSV export) or plain CSV import.
 
-**You let an AI click around your bank?** Only after you've logged in yourself, only on the bank's own site, only
-clicks and reads: a hook checks every browser call and refuses typing, JavaScript, new tabs and other sites, and ends
-the session if the tab leaves the bank. Its shell runs exactly two `finnamon` commands (list accounts, import the
-newest download). What it reads on those pages goes to Anthropic under your Claude account's terms, like any other
+**You let an AI click around your bank?** Only after you've logged in yourself, and it can never type text or run
+scripts. On HSBC, through the Claude in Chrome extension: only on the bank's own site, only clicks and reads; a hook
+checks every browser call, refuses typing, JavaScript, new tabs and other sites, and ends the session if the tab leaves
+the bank, and its shell runs exactly two `finnamon` commands (list accounts, import the newest download). Other banks:
+one tab and a fixed command list (clicks, scrolls, a few keys like Enter and Tab), checked by a hook on every call. What it reads on those pages goes to Anthropic under your Claude account's terms, like any other
 Claude session. If you'd rather not, "Fetch without AI" opens the bank with nothing attached and imports the file you
 download.
 

@@ -18,7 +18,7 @@ On your own computer (Mac, Linux or Windows via WSL2), with no ads and no data s
 3. **Yours to keep.** Your data lives on your machine, with your own keys.
 
 **Bank not on Plaid, or rather not hand Plaid your login?** Fetch by AI: you log in to your bank's own site yourself,
-then Claude clicks through to the CSV export and imports it. It never types or sees your password. Tested on HSBC US,
+then Claude clicks through to the CSV export and imports it. It never types into the page or sees your password. Tested on HSBC US,
 which Plaid doesn't support, through the Claude in Chrome extension. Claude Code only for now.
 
 ## Why I built this
@@ -69,8 +69,9 @@ over the demo data). Nothing touches Plaid, Telegram or a real household.
   (`claude`) or OpenAI's Codex CLI (`codex`, 0.157 or newer): triage, chat and the dashboard's intercom all run the one you
   pick (`finnamon init` asks; `finnamon settings set assistant codex|claude` switches). A few features are Claude-only for
   now: [what Codex doesn't do yet](docs/INSTALL.md#codex-what-v1-does-not-do).
-- **Banks in the US or Canada**, for Plaid's free Trial plan. For a bank Plaid can't reach, **Fetch by AI** (Claude Code
-  2.1.292+ and Google Chrome) opens the bank for you to log in, then downloads and imports its CSV export, or you import the CSV yourself
+- **Banks in the US or Canada**, for Plaid's free Trial plan. For a bank Plaid can't reach, **Fetch by AI** (Claude Code and
+  Google Chrome; for HSBC, Claude Code 2.1.292+ and the Claude in Chrome extension) opens a Chrome window for you to log
+  in to the bank, then downloads and imports its CSV export, or you import the CSV yourself
   ([how](docs/COMMANDS.md)). These imports happen when you run them; only Plaid banks sync on their own.
 
 ## What it costs
@@ -95,8 +96,9 @@ Your data lives in one SQLite file on your own computer. Some of it still travel
   model for everyone"** (ChatGPT → Settings → Data controls): with it on, OpenAI may use what Codex sends to train its
   models. With an OpenAI API key, API data is not used for training by default. Nothing goes to Anthropic then.
 - **Anthropic, through Fetch by AI**: when Claude fetches a bank's export, what it reads on the bank's pages after you
-  log in (account names, balances, transactions, as screenshots and page text) goes to Anthropic the same way. It makes
-  no browser call while you log in, so your password is never on its screen.
+  log in (account names, balances, transactions, as screenshots and page text) goes to Anthropic the same way. It opens
+  the login page, then is told to wait without a browser call until you say you're in, and it can never type, so your
+  password is not on its screen.
 - **Telegram**: alerts and your chat with the bot pass through Telegram's servers. Bot chats are not end-to-end
   encrypted.
 - **Nothing goes to a Finnamon company or server.** There isn't one. No telemetry, no account.

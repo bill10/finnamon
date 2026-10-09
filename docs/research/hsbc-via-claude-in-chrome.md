@@ -1,5 +1,9 @@
 # HSBC import through the Claude in Chrome extension (research, 2026-10-06)
 
+> Superseded in part: v0.56.0 dropped the separate `CLAUDE_CONFIG_DIR` and second `/login` proposed here (the session
+> runs on your normal Claude login), and the profile is `~/.finnamon/chrome-extension-test`. Current behaviour:
+> [COMMANDS.md](../COMMANDS.md) and [DEVELOPMENT.md](../DEVELOPMENT.md).
+
 Question: HSBC US refuses login ("reference: EAC") in any Chrome with `--remote-debugging-port`, but accepts a
 no-port Chrome with the Claude in Chrome extension driving it. Can `finnamon import --browser hsbc` drive the browser
 through the extension instead of CDP, sealed and guarded as today? Desk research plus local experiments against

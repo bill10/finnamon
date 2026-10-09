@@ -16,6 +16,6 @@ import, Codex) on 2026-10-08; live pages re-checked that day are listed in each 
 
 Words: never "watchdog"; privacy is "your data lives on your machine", never "never leaves your machine" (it doesn't:
 Plaid, the assistant's provider, Telegram, and the bank pages Fetch by AI reads all leave it).
-Fetch by AI: "you log in yourself", "it never types or sees your password", "Claude Code only"; it is on demand, so never
+Fetch by AI: "you log in yourself", "it never types into the page or sees your password", "Claude Code only"; it is on demand, so never
 call it a sync. Platforms:
 Mac, Linux or Windows via WSL2 (verified in CI by #120). Say "via WSL2": there is no native Windows build.

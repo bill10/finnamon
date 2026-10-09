@@ -162,7 +162,9 @@ Banks Plaid can't reach (HSBC US personal banking): **Add account → Import CSV
 the bank in a Chrome window of Finnamon's own, Claude downloads the CSV and imports it; Claude Code only) or pick the
 file yourself; see [COMMANDS.md](COMMANDS.md). For HSBC, Fetch by AI goes through the Claude in Chrome extension: Claude
 Code 2.1.292 or later, and the extension installed from the Chrome Web Store in Finnamon's Chrome profile
-(`~/.finnamon/chrome-extension-test`, the window Fetch by AI opens) and signed in to the same claude.ai account. The first run pairs it by itself; `finnamon doctor` shows the version and pairing.
+(`~/.finnamon/chrome-extension-test`, the window Fetch by AI opens) and signed in to the same claude.ai account. The first run pairs it by itself when it is the only connected browser (otherwise `finnamon import --pair-extension`);
+`finnamon doctor` shows the version and pairing. Fetch by AI for other banks drives Chrome through the `agent-browser`
+CLI, which has to be on your PATH.
 
 ## 5. Your phone (optional, Tailscale)
 

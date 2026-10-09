@@ -28,8 +28,8 @@ recategorized a lot by hand. Now the AI does it, and I can just ask how we're do
 - **Yours to keep.** Your data lives on your machine, in one SQLite file, with your own keys (your Plaid keys, your
   Claude or Codex login). No Finnamon server, no telemetry, no account.
 - **Bank not on Plaid?** "Fetch by AI": you log in to the bank yourself in a Chrome window of Finnamon's own, and Claude
-  clicks through to the CSV export and imports it. It only clicks and reads, on the bank's site only, and never sees
-  your password. I use it for HSBC US, which Plaid doesn't support. Or import the CSV by hand.
+  clicks through to the CSV export and imports it. It never types into the page or runs scripts, and never sees
+  your password; on HSBC a guard also holds it to the bank's own site. I use it for HSBC US, which Plaid doesn't support. Or import the CSV by hand.
 
 **Stack:** Python daemon (launchd on Mac, systemd on Linux and WSL2), SQLite, detectors are plain `.sql` files, Node dashboard,
 Telegram bot, Claude Code or OpenAI's Codex CLI as the assistant (web lookups and "Fetch by AI" are Claude-only for now). Phone access over Tailscale.
@@ -39,8 +39,8 @@ and its dashboard on a spare port.
 
 **What leaves your machine** (I'd rather you hear it from me): transactions come from your banks through Plaid on
 your keys; whatever the assistant reads to triage or answer goes to Anthropic under your Claude account's terms (turn off
-"Help improve Claude"), or to OpenAI on Codex (turn off ChatGPT's "Improve the model for everyone"), and so do the bank
-pages Fetch by AI reads after you log in; Telegram carries the alerts. Bank passwords, full account numbers and keys stay local.
+"Help improve Claude"), or to OpenAI on Codex (turn off ChatGPT's "Improve the model for everyone"). Fetch by AI is
+Claude-only, so the bank pages it reads after you log in go to Anthropic; Telegram carries the alerts. Bank passwords, full account numbers and keys stay local.
 
 **Requirements and limits:** Mac, Linux or Windows via WSL2 (no native Windows), a computer that stays on, a Claude Pro or Max subscription or a ChatGPT Plus plan or higher (Codex), banks in the
 US or Canada for Plaid's free Trial plan (10 bank logins; Fetch by AI or CSV import for the rest). It's for people comfortable in a

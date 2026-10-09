@@ -33,7 +33,7 @@ resume a Claude session; the dashboard embeds the same session as an "intercom".
 **Banks Plaid can't reach, through Claude in Chrome:** HSBC US isn't on Plaid and refuses any Chrome with a debugging
 port. So "Fetch by AI" opens a Chrome of Finnamon's own with the Claude in Chrome extension and no port, you log in to
 the bank yourself, and a sealed `claude --chrome` session (your normal Claude login) clicks Download → CSV and imports
-it. A PreToolUse hook holds it to one tab on the bank's own site, clicks and reads only (no typing, no scripts, no new
+it. A guard hook (PreToolUse and PostToolUse) holds it to one tab on the bank's own site, clicks and reads only (no typing, no scripts, no new
 tabs), and ends the session if the tab leaves the bank. Works on my real HSBC account.
 
 **How Claude helped build it:** most of the code was written with Claude Code under my direction and review, with

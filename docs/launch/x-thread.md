@@ -22,11 +22,11 @@ budget about to go over.
 And a dashboard that's yours: ask "dining by month" or "everything over $500" and your assistant draws it.
 
 5/
-Bank not on Plaid? Fetch by AI: you log in to your bank yourself, and Claude clicks through to the CSV export and imports it. It never types or sees your password.
+Bank not on Plaid? Fetch by AI: you log in to your bank yourself, and Claude clicks through to the CSV export and imports it. It never types into the page or sees your password.
 
 6/
 Yours to keep: your data lives on your machine, with your own keys. No ads, no data selling.
 
-Mac, Linux or Windows (WSL2); needs Claude Pro/Max or ChatGPT Plus+. Try it with no keys: `finnamon demo`
+Mac, Linux or Windows via WSL2; needs Claude Pro/Max or ChatGPT Plus+. Try it with no keys: `finnamon demo`
 
 <repo> (MIT)
