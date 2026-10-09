@@ -35,7 +35,7 @@ Suggested title shape (owner's call): `Show HN: Finnamon – turn Claude or Code
 - **Alerts:** rules (duplicate charge, new recurring charge, low balance, budget pace, sync health) are plain SQL,
   zero tokens. Anomaly candidates (first-ever merchant, amount outlier, new category, unmatched transfer, recurring
   charge changed, …) are found by SQL; Claude decides which are worth a message now, in Sunday's roundup, or never.
-  It can only promote or suppress what SQL found; the triage run is read-only.
+  It can only promote or suppress what SQL found; the triage run is read-only apart from `finnamon triage set`.
 - **Talking to it:** reply in Telegram in plain words ("it's normal", "set dining 400", "how much did we spend on the
   dog this year"), or ask the dashboard. Claude draws charts on request ("dining by month", "everything over $500").
 - **Household:** one chat, one set of budgets, joint accounts counted once.
