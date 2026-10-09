@@ -8,7 +8,7 @@ their first public commit or post) go only in the pinned **New Project Megathrea
 launch day, so expect this to be a megathread entry, not a standalone post: use the text below as the entry, trimmed
 if the megathread asks for a template. Post from the owner's account, answer comments personally.
 
-Flair: the new-project flair the rules name. Link: `<repo>`.
+Flair: the new-project flair the rules name. Link: https://github.com/bill10/finnamon.
 
 ---
 
@@ -51,4 +51,4 @@ Claude under my direction and review, with a test suite (unit tests plus evals t
 household) gating every change. At runtime, the assistant itself is Claude Code (or Codex, if you pick it); the alert rules are plain SQL and
 use no AI.
 
-Repo and 1-minute demo video: `<repo>`
+Repo and 1-minute demo video: https://github.com/bill10/finnamon

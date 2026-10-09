@@ -2,7 +2,7 @@
 
 Copy for the launch, all on the pitch settled 2026-10-03 ([market research](../market-research-2026-10.md#positioning-decided-2026-10-03)).
 Claims are dated; re-check them on launch day. Brought up to v0.56.2 (Fetch by AI, the Claude in Chrome extension
-import, Codex) on 2026-10-08; live pages re-checked that day are listed in each file. `<repo>` is the public clone URL, set when the public repo exists (#113).
+import, Codex) on 2026-10-08; live pages re-checked that day are listed in each file. Clone commands and links use https://github.com/bill10/finnamon, the URL the repo keeps once public (#113).
 
 | File | For |
 |---|---|

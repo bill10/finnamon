@@ -29,4 +29,4 @@ Yours to keep: your data lives on your machine, with your own keys. No ads, no d
 
 Mac, Linux or Windows via WSL2; needs Claude Pro/Max or ChatGPT Plus+. Try it with no keys: `finnamon demo`
 
-<repo> (MIT)
+https://github.com/bill10/finnamon (MIT)

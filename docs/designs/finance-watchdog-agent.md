@@ -92,7 +92,7 @@ What distinguishes this design: push-first (no place to go), the agent notices w
 ### Step 1: Install, keys, bot, schedule (reviewed)
 
 ```
-$ git clone <repo> ~/finnamon && cd ~/finnamon
+$ git clone https://github.com/bill10/finnamon ~/finnamon && cd ~/finnamon
 $ uv tool install -e .        # puts `finnamon` on PATH for the terminal, Claude Code, and the daemon alike
 $ finnamon init
 

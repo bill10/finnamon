@@ -60,9 +60,67 @@ page directly). Within a minute of the login the daemon syncs that bank and says
 | switch the assistant to Codex (or back) | `finnamon settings set assistant codex` (refused until `finnamon init` has set Codex up and `finnamon doctor`'s Codex lines are clear; `claude` switches back; the dashboard restarts onto it). Triage then runs `$triage` through `codex exec`, and in the dashboard's Codex session you can type `$triage` yourself |
 | change daemon timing (sync interval, 1 to 12 hours; Claude timeout) | `finnamon settings set sync_interval_hours 8 --ops` |
 | tell it what the house is worth | `finnamon property set "House on Elm St" 850000` (or ask the assistant; it's counted into net worth) |
-| a bank Plaid doesn't reach (HSBC US personal banking shows in Plaid's search and then says "not supported") | **Add account → Import CSV** on the dashboard opens a window that adds the account (a name, the bank, and what kind it is; one row per account, so HSBC Checking and HSBC Savings both sit under the one HSBC) and then takes the bank's CSV export. In a terminal that first step is `finnamon account add "HSBC Checking" --institution HSBC` (or ask the assistant). Feeding it the export: pick the file in that window, or **Fetch by AI** (a separate Claude session opens a browser window, you log in, it downloads and imports, and you watch it in the panel's Import tab, and its Stop button ends it; it needs the page open on the box itself, elsewhere the panel says what to run instead), `finnamon import "HSBC Checking" <file.csv>`, or `finnamon import --browser hsbc` in a terminal (on another computer with a checkout, add `--to https://<the box's dashboard>` to either form, with `FINNAMON_WEB_TOKEN` set to what `finnamon web token` prints on the box, and the file is uploaded there). The browser fetch needs Google Chrome installed (set `FINNAMON_CHROME` to its executable if it lives somewhere unusual); it runs on a Chrome profile of Finnamon's own, `~/.finnamon/chrome/`, so the bank remembers the device between runs and your everyday profile stays out of it, and you log in yourself with nothing attached to the window until you say you're in. **HSBC: "reference: EAC".** HSBC refuses a browser with a debugging port open, which Fetch by AI needs (the owner's tests on 2026-10-06: every launch with the port got EAC, however Chrome was started; the same fresh profile without the port logged in). So for HSBC, Fetch by AI and `finnamon import --browser hsbc` never open a port: on a Claude household that has paired the Claude in Chrome extension they go through it (below), otherwise (Codex, or no single connected browser to pair) straight to the by-hand export below, and the dashboard then shows only Fetch without AI for an HSBC account. **Fetch by AI through the extension** (`finnamon import --browser hsbc --extension`, Claude Code 2.1.292 or later): Finnamon's no-port Chrome profile `~/.finnamon/chrome-extension-test` (the extension installed there and signed in) opens blank, or is reused if it is already open (never killed or restarted; if its downloads are not pinned to `~/.finnamon/downloads` it is left as it is, and `--newest-download` also looks in `~/Downloads`, Finnamon's folder first); Finnamon waits up to about two minutes (longer if each check is slow) for the extension to connect (a fresh window may leave it idle until you click its icon); then a sealed `claude --chrome` session, on your normal Claude login (the one `select_browser` pick it writes into `~/.claude.json` is put back when the session ends, or at the next start), opens HSBC's login in a tab of the extension's tab group, and is told to make no browser call until you have logged in there and said so; then it drives that one tab on HSBC's own site only (no typing, no scripts; a guard stops the session if the tab leaves the bank), clicks Download → Spreadsheet CSV, and runs `finnamon import "<account>" --newest-download`. Setup: update finnamon and claude, then Fetch by AI on HSBC. The first run pairs by itself: with the profile open it lists the connected browsers and, if exactly one is connected, keeps it (zero or several fall back to the by-hand export, with a line naming `finnamon import --pair-extension`, which stays as the optional by-hand pairing: with that Chrome profile closed it opens the profile and keeps the one browser that newly connects). `finnamon doctor` checks the version and shows the pairing. **Fetch without AI** next to Fetch by AI (or `finnamon import --browser hsbc --no-cdp`): Finnamon's Chrome opens at HSBC with no debugging port and nothing attached, the steps to export are shown, you download the CSV yourself, and it is imported as it lands in `~/.finnamon/downloads`, after a preview you confirm. **Reset browser profile** in the same window (or `finnamon import --browser --reset-profile`) moves the profile aside so the next fetch starts fresh (the bank sees a new device; delete the old folder, `~/.finnamon/chrome.old-…`, once that works); it did not fix EAC in the owner's test. `finnamon import --browser hsbc --diagnose` tells the causes apart: logins by hand on throwaway profiles, three with the debugging port (Chrome started as the dashboard's job starts it, from this terminal, and through LaunchServices) and one without, and it records what each launch saw and which way your answers point (the port, or a bank that refuses every launch, likely after repeated attempts: wait a day, or use your everyday Chrome). Or use your everyday browser: download the CSV and run `finnamon import "HSBC Checking" <file.csv>`, or start Chrome with a debugging port (`open -a "Google Chrome" --args --remote-debugging-port=9222`; Chrome 136 and later ignore the port on the default profile folder, so it has to run on its own `--user-data-dir`) and run `finnamon import --browser <bank> --attach` (HSBC refuses this one too, port and all; only ever when you type `--attach`: Fetch by AI always opens Finnamon's own window, since a Chrome on 9222 may be another program's): it opens one tab in that browser, you log in there, and the session drives that tab only and closes it at the end; the trade-off is a debugging port open on the browser that holds all your cookies. Removing one account is its trash icon in that window or `finnamon account remove "HSBC Checking"` (the bank goes with its last account; remove each account the same way). Detectors look at the last week by transaction date, so import weekly if you want its alerts and not only its budgets and net worth. HSBC US only shows about the last six months of transactions online, whatever date range you ask it for, and the export only takes rows the page has already loaded, so "Show more transactions" is what decides how far back a first import reaches; anything older exists only as statement PDFs, which `finnamon import` cannot read |
+| a bank Plaid doesn't reach (HSBC US personal banking shows in Plaid's search and then says "not supported") | **Add account → Import CSV** on the dashboard, then Fetch by AI, Fetch without AI or the CSV file: see [Banks Plaid doesn't reach](#banks-plaid-doesnt-reach) below |
 | pick up new code after `git pull` | `finnamon update` (pulls, applies migrations, rewrites `~/.finnamon/assistant/` from the release, restarts only what went stale, and the assistant carries on: it resumes its session by id rather than starting a new one. `--no-pull` adopts a tree you pulled yourself, `--dry-run` says what it would restart, `--check` prints what a pull would bring as JSON). The dashboard shows "Update available" in its header when there is something to pull, and its Update button runs the same `finnamon update` |
 | reprovision the services | `finnamon install` (rewrites the unit files and reloads every job, and retires the household's conversation so the assistant starts fresh; it asks first, and `finnamon update` is the one that keeps it. Needed when a release changes the units, which `update` detects and tells you.) |
 
 Household, not personal: one bot, one chat, one memory, one set of budgets. Everyone in the chat
 sees everything. Joint accounts linked from two logins are detected and counted once.
+
+## Banks Plaid doesn't reach
+
+**Add the account.** **Add account → Import CSV** on the dashboard opens a window that adds the account (a name, the
+bank, and what kind it is; one row per account, so HSBC Checking and HSBC Savings both sit under the one HSBC) and then
+takes the bank's CSV export. In a terminal: `finnamon account add "HSBC Checking" --institution HSBC` (or ask the
+assistant).
+
+**Feed it the export**, one of four ways:
+
+- **Pick the file** in that window, or `finnamon import "HSBC Checking" <file.csv>`.
+- **Fetch by AI** (Claude Code only): a separate Claude session opens a Chrome window, you log in to the bank, and it
+  downloads the CSV export and imports it. You watch it in the intercom's Import tab, whose Stop button ends it. It needs
+  the dashboard open on the Finnamon box itself; elsewhere the panel says what to run instead. In a terminal:
+  `finnamon import --browser <bank>`.
+- **Fetch without AI**, the button next to it (or `finnamon import --browser <bank> --no-cdp`): Finnamon's Chrome
+  opens at the bank with nothing attached, the export steps are shown, you download the CSV yourself, and it is
+  imported as it lands in `~/.finnamon/downloads`, after a preview you confirm.
+- **Your everyday browser**: download the CSV and import the file as above.
+
+On another computer with a checkout, add `--to https://<the box's dashboard>` to `finnamon import`, with
+`FINNAMON_WEB_TOKEN` set to what `finnamon web token` prints on the box, and the file is uploaded there.
+
+**What Fetch by AI needs.** Google Chrome (set `FINNAMON_CHROME` to its executable if it lives somewhere unusual). It
+runs on Chrome profiles of Finnamon's own under `~/.finnamon/`, so the bank remembers the device between runs and your
+everyday profile stays out of it. You always log in yourself; the AI never types into the page.
+
+- **Most banks**: Chrome opens with a debugging port, and the session drives it through the `agent-browser` CLI (on
+  your PATH) after you say you're in: one tab, a fixed list of commands (clicks, scrolls, a few keys such as Enter and
+  Tab; no typing text, no scripts). A window that opens blank: go to your bank's login yourself.
+- **HSBC US** refuses any Chrome with a debugging port ("reference: EAC"), so it goes through the **Claude in Chrome
+  extension** instead (`finnamon import --browser hsbc --extension`). It needs Claude Code 2.1.292 or later and your
+  normal claude.ai login (not an API key), and the extension installed from the Chrome Web Store in Finnamon's
+  extension profile, `~/.finnamon/chrome-extension-test`, signed in to the same account.
+  1. That profile opens blank (or is reused if it is already open). Finnamon waits up to about two minutes for the
+     extension to connect; if it stays idle, click its icon.
+  2. The session opens HSBC's login in a tab of the extension's tab group. Log in there, then tell it you're in.
+  3. It clicks through to Download → Spreadsheet CSV on HSBC's own site only (a guard refuses typing, scripts, new tabs
+     and other sites, and stops the session if the tab leaves the bank), then imports the file.
+
+  The first run pairs the extension by itself when exactly one browser is connected; otherwise it falls back to the
+  by-hand export and names `finnamon import --pair-extension` (run it with that Chrome profile closed). On a Codex
+  household the dashboard shows only Fetch without AI for an HSBC account. `finnamon doctor` checks the
+  Claude Code version and shows the pairing.
+
+**When the bank refuses the login.** **Reset browser profile** in the same window (or `finnamon import --browser
+--reset-profile`) moves Finnamon's profile aside so the next fetch starts fresh; the bank sees a new device, and the old
+folder (`~/.finnamon/chrome.old-…`) can go once that works. `finnamon import --browser <bank> --diagnose` has you log in
+by hand on throwaway profiles, with and without a debugging port, and says which way your answers point: the port, or a
+bank that refuses every login for now (wait a day, or use your everyday browser). To use a Chrome you already run with
+a debugging port, `finnamon import --browser <bank> --attach` opens one tab there and drives only that tab (only when
+you type `--attach`; it puts a debugging port on the browser that holds all your cookies, and HSBC refuses it too).
+
+**Good to know.** Remove an account with its trash icon in that window or `finnamon account remove "HSBC Checking"`
+(the bank goes with its last account). Detectors look at the last week by transaction date, so import weekly if you
+want alerts from it and not only budgets and net worth. HSBC US shows only about the last six months online, and its
+export takes only the rows the page has loaded, so "Show more transactions" decides how far back a first import
+reaches; anything older exists only as statement PDFs, which `finnamon import` cannot read.

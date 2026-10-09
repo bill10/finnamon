@@ -8,7 +8,7 @@ has no category, licence or tags field; those go in the description. Re-check it
 - **Publication:** Self-Host Weekly (Newsletter)
 - **Category:** Project Launch
 - **Project Name:** Finnamon
-- **Link:** `<repo>`
+- **Link:** https://github.com/bill10/finnamon
 - **Does the project leverage AI to assist with development?** Yes
 - **Description:**
 

@@ -46,4 +46,4 @@ Plaid can't reach. Licence: MIT.
 What leaves your machine is spelled out in the README: Plaid, what Claude reads, the bank pages included when it
 fetches (go turn off "Help improve Claude"), and Telegram.
 
-Repo + 1-minute demo: `<repo>`
+Repo + 1-minute demo: https://github.com/bill10/finnamon

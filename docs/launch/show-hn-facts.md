@@ -8,7 +8,7 @@ Suggested title shape (owner's call): `Show HN: Finnamon – turn Claude or Code
 
 ## Links
 
-- Repo: `<repo>` (README is the landing page)
+- Repo: https://github.com/bill10/finnamon (README is the landing page)
 - 1-minute demo video: https://github.com/bill10/finnamon/releases/download/pr-assets/finnamon-demo.mp4 (demo
   household, made-up data, sped up, AI voices)
 - Install guide: `docs/INSTALL.md`; how it works: README "How it works"; positioning and sources:
