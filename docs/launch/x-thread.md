@@ -1,7 +1,7 @@
-# X thread (5 posts)
+# X thread (6 posts)
 
 Attach the teaser GIF (`docs/finnamon-teaser.gif`) or the 1-minute demo video to post 1, a dashboard screenshot
-(`docs/screenshots/demo/demo-1280-light.png`) to post 4.
+(`docs/screenshots/demo/demo-1280-light.png`) to post 4. Check each post is 280 characters or fewer in the composer.
 
 1/
 Your money. Your financial AI.
@@ -22,6 +22,9 @@ budget about to go over.
 And a dashboard that's yours: ask "dining by month" or "everything over $500" and your assistant draws it.
 
 5/
+Bank not on Plaid? Fetch by AI: you log in to your bank yourself, and Claude clicks through to the CSV export and imports it. It never types or sees your password.
+
+6/
 Yours to keep: your data lives on your machine, with your own keys. No ads, no data selling.
 
 Mac, Linux or Windows (WSL2); needs Claude Pro/Max or ChatGPT Plus+. Try it with no keys: `finnamon demo`

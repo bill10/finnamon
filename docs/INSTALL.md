@@ -158,7 +158,11 @@ link to your phone).
 
 Then click the intercom button in the corner and ask it to "set up my budgets".
 
-Banks Plaid can't reach (HSBC US personal banking): **Add account → Import CSV**, see [COMMANDS.md](COMMANDS.md).
+Banks Plaid can't reach (HSBC US personal banking): **Add account → Import CSV**, then **Fetch by AI** (you log in to
+the bank in a Chrome window of Finnamon's own, Claude downloads the CSV and imports it; Claude Code only) or pick the
+file yourself; see [COMMANDS.md](COMMANDS.md). For HSBC, Fetch by AI goes through the Claude in Chrome extension: Claude
+Code 2.1.292 or later, and the extension installed from the Chrome Web Store in Finnamon's Chrome profile
+(`~/.finnamon/chrome-extension-test`, the window Fetch by AI opens) and signed in to the same claude.ai account. The first run pairs it by itself; `finnamon doctor` shows the version and pairing.
 
 ## 5. Your phone (optional, Tailscale)
 
