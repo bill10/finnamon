@@ -96,6 +96,9 @@
       "Read(~/.finnamon/imports/**)",
       "Read(//Users/*/.finnamon/imports/**)",
       "Read(//home/*/.finnamon/imports/**)",
+      "Read(~/.finnamon/backups/**)",
+      "Read(//Users/*/.finnamon/backups/**)",
+      "Read(//home/*/.finnamon/backups/**)",
       "Edit(~/.finnamon/secrets.toml)",
       "Edit(./**)",
       "Edit(~/.finnamon/assistant/**)",
@@ -112,6 +115,7 @@
       "Bash(*.finnamon/web-token*)",
       "Bash(*.finnamon/intercom.json*)",
       "Bash(*.finnamon/imports*)",
+      "Bash(*.finnamon/backups*)",
       "Bash(*.finnamon/chrome*)",
       "Bash(*.claude/channels/telegram/.env*)",
       "Bash(*.agent-browser*)"

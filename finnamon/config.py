@@ -22,6 +22,14 @@ def home() -> Path:
 
 
 INTERCOM_FILE = "intercom.json"   # the dashboard's Claude session id; web/server.js writes it, `install` retires it
+# What no assistant tool may touch, Claude's or Codex's: the secret guard (approval.PROTECTED) and Codex's permission
+# profile (codex.denied()) are both built from these. Under FINNAMON_HOME: the secrets, the database (and its -wal/-shm),
+# the dashboard's key and session id, statements, backups and the browser profiles holding bank cookies.
+PROTECTED_HOUSEHOLD = ("secrets.toml", "finnamon.db", "web-token", INTERCOM_FILE, "imports", "backups", "chrome",
+                       "chrome-extension-test", "claude-import", "downloads")
+# Under the person's home: the bot's token, the agent-browser profile, every Claude transcript, their own keys and logins.
+PROTECTED_PERSONAL = (".claude/channels/telegram/.env", ".agent-browser", ".claude/projects", ".claude/.credentials.json",
+                      ".claude.json", ".ssh", ".aws", ".gnupg", ".netrc", ".config/gh", ".kube", "Library/Keychains")
 DASHBOARD_PORT = 8888   # the dashboard's default port; web/server.js DEFAULT_PORT is the same number (a test holds them together)
 WEB_PORT_FILE = "web-port"   # the port the household last was told; `install`/`update` announce a move once
 WEB_TOKEN_FILE = "web-token"   # the dashboard's key; web/server.js reads the same file on every request (and makes it on a fresh box)

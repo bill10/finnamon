@@ -84,8 +84,12 @@ def test_config_toml_is_generated_from_settings_json(home):
     fs = cfg["permissions"]["finnamon"]["filesystem"]
     assert fs[":workspace_roots"] == "read" and fs[str(assistant.dir())] == "read", "the assistant directory is read-only"
     for p in (config.secrets_path(), config.db_path(), home / "backups", config.web_token_path(), home / "imports", home / "codex" / "sessions",
-              home / "codex" / "auth.json", Path.home() / ".agent-browser", Path.home() / ".claude" / "channels"):
+              home / "codex" / "auth.json", Path.home() / ".agent-browser", Path.home() / ".claude" / "channels",
+              home / "downloads", home / "chrome-extension-test", home / "claude-import", Path.home() / ".claude" / "projects"):
         assert fs[str(p)] == "deny", p
+    assert {str(config.home() / p) for p in config.PROTECTED_HOUSEHOLD} | {str(Path.home() / p) for p in config.PROTECTED_PERSONAL} <= set(fs), \
+        "every path the secret guard protects is denied to Codex's tools too"
+    assert cfg["permissions"]["finnamon"]["network"] == {"enabled": False}, "no tool command reaches the network, whatever Codex's default"
     assert cfg["web_search"] == "disabled" and cfg["approval_policy"] == "on-request" and cfg["cli_auth_credentials_store"] == "file"
     assert cfg["features"]["apps"] is False and cfg["features"]["hooks"] is True
     assert cfg["shell_environment_policy"]["set"]["FINNAMON_FROM_AGENT"] == "1" and cfg["mcp_servers"]["finnamon"]["env"]["FINNAMON_FROM_AGENT"] == "1"
@@ -110,6 +114,8 @@ def test_config_problems_flag_what_would_unseal_the_session(home, stub):
     (lambda t: t + '\n[mcp_servers.extra]\ncommand = "x"\n', "other than finnamon"),
     (lambda t: t.replace("[shell_environment_policy]", '[shell_environment_policy]\ninclude_only = ["PATH"]'), "FINNAMON_FROM_AGENT"),
     (lambda t: t.replace(f'"{Path.home() / ".ssh"}" = "deny"', ""), ".ssh"),
+    (lambda t: t.replace("enabled = false", "enabled = true"), "network"),
+    (lambda t: t.replace("[permissions.finnamon.network]", "[permissions.finnamon.unused]"), "network"),
 ])
 def test_config_problems_catch_an_edit_the_command_line_does_not_pin(home, stub, edit, says):
     # Value: protects=the harness check (daemon, triage, every dashboard (re)start) refusing a config.toml that drops a hook, adds an unsealed MCP server, strips the agent marker or a deny; fails_when=one of those checks is removed; why_new=only sandbox_mode/danger were tested; seam=none
