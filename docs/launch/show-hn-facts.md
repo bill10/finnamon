@@ -8,7 +8,7 @@ Suggested title shape (owner's call): `Show HN: Finnamon – turn Claude or Code
 
 ## Links
 
-- Repo: `<repo>` (README is the landing page)
+- Repo: https://github.com/bill10/finnamon (README is the landing page)
 - 1-minute demo video: https://github.com/bill10/finnamon/releases/download/pr-assets/finnamon-demo.mp4 (demo
   household, made-up data, sped up, AI voices)
 - Install guide: `docs/INSTALL.md`; how it works: README "How it works"; positioning and sources:
@@ -35,7 +35,7 @@ Suggested title shape (owner's call): `Show HN: Finnamon – turn Claude or Code
 - **Alerts:** rules (duplicate charge, new recurring charge, low balance, budget pace, sync health) are plain SQL,
   zero tokens. Anomaly candidates (first-ever merchant, amount outlier, new category, unmatched transfer, recurring
   charge changed, …) are found by SQL; Claude decides which are worth a message now, in Sunday's roundup, or never.
-  It can only promote or suppress what SQL found; the triage run is read-only.
+  It can only promote or suppress what SQL found; the triage run is read-only apart from `finnamon triage set`.
 - **Talking to it:** reply in Telegram in plain words ("it's normal", "set dining 400", "how much did we spend on the
   dog this year"), or ask the dashboard. Claude draws charts on request ("dining by month", "everything over $500").
 - **Household:** one chat, one set of budgets, joint accounts counted once.
@@ -46,7 +46,16 @@ Suggested title shape (owner's call): `Show HN: Finnamon – turn Claude or Code
   assistant reaches `finnamon` only through an MCP tool, under a sealed Codex home that shares your existing Codex login.
   **Claude-only for now:** web lookups (none on Codex), Telegram channel mode (Codex uses the daemon's relay, which is
   the default anyway), and the "Fetch by AI" import. Evals run on both CLIs.
-- **Banks Plaid can't reach:** CSV import, or "Fetch by AI" (a Claude session drives a browser while you log in; Claude only).
+- **Banks Plaid can't reach: Fetch by AI.** You log in to the bank's own site yourself in a Chrome window of
+  Finnamon's own; a sealed Claude Code session then clicks through to the bank's CSV export and imports it. It is
+  told to wait, with no browser call, until you say you're in, and it can never type text into the page. HSBC US (not
+  on Plaid) goes through the Claude in Chrome extension, because HSBC refuses any Chrome with a debugging port: there
+  a guard hook refuses typing, scripts, new tabs and any site but the bank's, and stops the session if the tab leaves
+  the bank. It needs Claude Code 2.1.292+ and a claude.ai (Pro/Max) login, not an API key, and pairs the extension by
+  itself when it is the only connected browser. Other banks run over a debugging port under a fixed command list (one
+  tab; clicks, scrolls and a few keys like Enter and Tab; no typing text, no scripts). The owner ran it on a real HSBC
+  account on 2026-10-08. It runs when you start it (dashboard button or `finnamon import --browser <bank>`), not on a schedule.
+  Claude Code only. Without AI: "Fetch without AI" opens the bank and imports the CSV you download, or plain CSV import.
 - **Try it without keys:** `finnamon demo` (four banks, six months of made-up transactions, budgets, alerts and the
   dashboard on a spare port; nothing touches Plaid, Telegram or a real household). `finnamon demo --stop` to stop.
 - **Cost:** Finnamon free; the assistant needs a Claude Pro or Max subscription (or Console credit), or a ChatGPT Plus
@@ -60,8 +69,11 @@ Suggested title shape (owner's call): `Show HN: Finnamon – turn Claude or Code
   on. `finnamon init` walks through it and `finnamon doctor` prints the fix for each problem, but it is a setup.
 - **Plaid Trial is 10 bank logins.** Enough for most households; the next tier is paid. US and Canada only.
 - **Data does leave the machine, in three places:** Plaid (that's where transactions come from), Anthropic or OpenAI,
-  whichever assistant you run (what it reads when it triages or answers: merchant names, amounts, dates), Telegram (alerts and chat; bot chats
-  aren't end-to-end encrypted). The README section "What leaves your machine" lists it all.
+  whichever assistant you run (what it reads when it triages or answers: merchant names, amounts, dates; with Fetch by
+  AI, also the bank pages it reads after you log in: account names, balances, transactions), Telegram (alerts and chat;
+  bot chats aren't end-to-end encrypted). The README section "What leaves your machine" lists it all.
+- **Fetch by AI is on demand and Claude-only.** You log in each time; it isn't a background sync. Tested on HSBC US on
+  a Mac; not yet tried on Linux or WSL2 (it needs Linux Chrome there).
 - **Claude or Codex only.** No other agent, no local model.
 - **Mac, Linux or Windows via WSL2.** No native Windows build: on Windows it runs in Ubuntu under WSL2. Keeping WSL
   from shutting down when idle has a documented workaround that hasn't been tried on a real PC yet.
@@ -71,7 +83,16 @@ Suggested title shape (owner's call): `Show HN: Finnamon – turn Claude or Code
 
 **Why Plaid? Isn't that the thing people self-host to avoid?** It's the only practical way to get US/Canada bank data
 without screen-scraping, and it's your own Plaid keys and account, not a shared one. You log in at Plaid or the bank;
-Finnamon never sees bank passwords. For banks Plaid can't reach, CSV import.
+Finnamon never sees bank passwords. For a bank Plaid can't reach, or one you'd rather not give Plaid: Fetch by AI (you
+log in, Claude downloads the bank's own CSV export) or plain CSV import.
+
+**You let an AI click around your bank?** Only after you've logged in yourself, and it can never type text or run
+scripts. On HSBC, through the Claude in Chrome extension: only on the bank's own site, only clicks and reads; a hook
+checks every browser call, refuses typing, JavaScript, new tabs and other sites, and ends the session if the tab leaves
+the bank, and its shell runs exactly two `finnamon` commands (list accounts, import the newest download). Other banks:
+one tab and a fixed command list (clicks, scrolls, a few keys like Enter and Tab), checked by a hook on every call. What it reads on those pages goes to Anthropic under your Claude account's terms, like any other
+Claude session. If you'd rather not, "Fetch without AI" opens the bank with nothing attached and imports the file you
+download.
 
 **What does Anthropic (or OpenAI) see / keep?** What the assistant reads when it triages an alert or answers you: merchant names,
 amounts, dates, under your Claude account's terms. With "Help improve Claude" on, Anthropic keeps that for 5 years;

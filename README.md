@@ -17,6 +17,28 @@ On your own computer (Mac, Linux or Windows via WSL2), with no ads and no data s
 2. **A dashboard that's yours.** Ask "dining by month" or "everything over $500" and your assistant draws it, whenever you want.
 3. **Yours to keep.** Your data lives on your machine, with your own keys.
 
+**Bank not on Plaid, or rather not hand Plaid your login?** Fetch by AI: you log in to your bank's own site yourself,
+then Claude clicks through to the CSV export and imports it. It never types into the page or sees your password. Tested on HSBC US,
+which Plaid doesn't support, through the Claude in Chrome extension. Claude Code only for now.
+
+## Try it in 30 seconds: `finnamon demo` (no keys)
+
+Linking your own banks waits on Plaid approving your keys, which can take a while, so start with the demo: a made-up household
+and its dashboard, on your machine, with no Plaid, Telegram or account. With [uv](https://docs.astral.sh/uv/) and
+Node 20.12+ already installed:
+
+```
+git clone https://github.com/bill10/finnamon ~/finnamon && cd ~/finnamon
+uv tool install -e . && uv tool update-shell   # then open a new terminal if `finnamon` is "not found"
+(cd web && npm install)
+finnamon demo                                  # opens the dashboard in your browser; --print only prints its address
+finnamon demo --stop                           # --reset starts the household over
+```
+
+The demo dashboard takes the first free port from 8890 (`--port` picks one) and lives in `~/.finnamon-demo`, apart from
+a real household. Four banks, six months of transactions, budgets, recurring charges and alerts, and the intercom (your
+Claude Code over the demo data).
+
 ## Why I built this
 
 I loved Mint: one clean place for all my accounts and transactions, no ads. Then it was shut down, and nothing else
@@ -32,30 +54,15 @@ I recategorized a lot by hand. Now the AI does it, and I can just ask how we're 
 
 ### What lands in your Telegram
 
-> ⚠️ **Possible duplicate:** Shell $52.18 on Chase Checking …4821, charged Sep 17 and again Sep 18. Same merchant,
-> same amount. Reply "it's normal" if you filled up twice.
+> ⚠️ **Possible duplicate:** Shell $52.18 on Chase Checking …4821, Sep 17 and Sep 18. Same merchant, same amount.
+> Reply *it's normal* if it was meant.
 
-> 🔁 **New subscription:** Peloton $44.00 monthly on Sapphire …7710, first seen Aug 29. Expected? Reply "it's normal"
-> and I won't ask again.
+> 🔁 **New recurring charge:** Peloton $44.00 monthly on Sapphire …7710, first seen Aug 29.
 
-> 📊 **Dining is on pace to go over:** $248 spent by day 20, tracking to $372 against your $350 budget.
+> 📊 **Dining on pace to go over:** $248.00 spent by day 20, tracking to $372.00 against your $350.00 budget.
 
-(Examples, not real alerts.) Reply in plain words: "it's normal", "set dining 400", "how much did we spend on the dog
+(Made-up charges, in the alerts' real wording.) Reply in plain words: "it's normal", "set dining 400", "how much did we spend on the dog
 this year". Most days it says nothing; on Sunday you get a short roundup.
-
-## Try it in 2 minutes: `finnamon demo` (no keys)
-
-<!-- set when the public repo exists: replace <repo> with its clone URL (#113) -->
-```
-git clone <repo> ~/finnamon && cd ~/finnamon
-uv tool install -e . && uv tool update-shell   # then open a new terminal
-(cd web && npm install)                        # Node 20.12+
-finnamon demo                                  # a made-up household and its dashboard on a spare port
-finnamon demo --stop                           # --reset starts the household over
-```
-
-Four banks, six months of transactions, budgets, recurring charges and alerts, and the intercom (your Claude Code
-over the demo data). Nothing touches Plaid, Telegram or a real household.
 
 ## Who it's for
 
@@ -65,7 +72,10 @@ over the demo data). Nothing touches Plaid, Telegram or a real household.
   (`claude`) or OpenAI's Codex CLI (`codex`, 0.157 or newer): triage, chat and the dashboard's intercom all run the one you
   pick (`finnamon init` asks; `finnamon settings set assistant codex|claude` switches). A few features are Claude-only for
   now: [what Codex doesn't do yet](docs/INSTALL.md#codex-what-v1-does-not-do).
-- **Banks in the US or Canada**, for Plaid's free Trial plan. Banks Plaid can't reach can be imported from CSV.
+- **Banks in the US or Canada**, for Plaid's free Trial plan. For a bank Plaid can't reach, **Fetch by AI** (Claude Code and
+  Google Chrome; for HSBC, Claude Code 2.1.292+ and the Claude in Chrome extension; for other banks, the `agent-browser`
+  CLI) opens a Chrome window for you to log in to the bank, then downloads and imports its CSV export, or you import the
+  CSV yourself ([how](docs/COMMANDS.md#banks-plaid-doesnt-reach)). These imports happen when you run them; only Plaid banks sync on their own.
 
 ## What it costs
 
@@ -73,7 +83,7 @@ over the demo data). Nothing touches Plaid, Telegram or a real household.
 |---|---|
 | Finnamon | Free |
 | Claude or Codex | Free + your Claude or ChatGPT subscription: Claude Pro or Max (or Console credit), or ChatGPT Plus or higher (or OpenAI API credit). **One of them is required.** Codex uses your existing Codex login, shared with your own `codex`. |
-| Plaid | Free on the Trial plan: 10 bank logins with real data, for US/Canada teams created on or after 2026-04-15. Per Plaid it includes the big OAuth banks (Chase, Bank of America, Wells Fargo). Older teams get Limited Production, without those banks. |
+| Plaid | Free on the Trial plan: 10 bank logins with real data, for US/Canada teams created on or after 2026-04-15. Whether Trial links the big OAuth banks (Chase, Bank of America, Wells Fargo) is not confirmed yet ([open question](docs/INSTALL.md#2-plaid-the-slow-part)); older teams get Limited Production, which Plaid says cannot connect them. |
 | Telegram, Tailscale | Free |
 
 ## What leaves your machine
@@ -88,10 +98,14 @@ Your data lives in one SQLite file on your own computer. Some of it still travel
   to OpenAI instead of Anthropic, under your ChatGPT or OpenAI account's terms. On a ChatGPT plan, **turn off "Improve the
   model for everyone"** (ChatGPT → Settings → Data controls): with it on, OpenAI may use what Codex sends to train its
   models. With an OpenAI API key, API data is not used for training by default. Nothing goes to Anthropic then.
+- **Anthropic, through Fetch by AI**: when Claude fetches a bank's export, what it reads on the bank's pages after you
+  log in (account names, balances, transactions, as screenshots and page text) goes to Anthropic the same way. The login
+  page opens first; Claude is told to wait without a browser call until you say you're in, and it can never type, so your
+  password is not on its screen.
 - **Telegram**: alerts and your chat with the bot pass through Telegram's servers. Bot chats are not end-to-end
   encrypted.
 - **Nothing goes to a Finnamon company or server.** There isn't one. No telemetry, no account.
-- **Stays local**: your bank credentials (you log in at Plaid or the bank, never in Finnamon), full account numbers,
+- **Stays local**: your bank credentials (you log in at Plaid or the bank yourself, never in Finnamon or to the AI), full account numbers,
   your Plaid keys and bot token (`~/.finnamon/secrets.toml`, mode 0600).
 
 ## How it compares
@@ -101,7 +115,7 @@ As of 2026-10-03; sources are listed in the [market research](docs/market-resear
 | | Finnamon | ChatGPT Finances | Monarch | Actual Budget | Firefly III |
 |---|---|---|---|---|---|
 | Where data lives | Your computer (SQLite) | OpenAI's cloud | Monarch's cloud | Self-hosted | Self-hosted |
-| Bank sync | Plaid (your keys) | Plaid | Built in (aggregators) | SimpleFIN (US), GoCardless (EU) | Separate importer |
+| Bank sync | Plaid (your keys); for banks Plaid can't reach, Fetch by AI or CSV import | Plaid | Built in (aggregators) | SimpleFIN (US), GoCardless (EU) | Separate importer |
 | Cost | Free + your Claude or ChatGPT subscription | $0 in the US since 2026-10-02 | $99.99/yr | Free | Free |
 | Proactive alerts | Yes: rules plus AI triage (Claude or Codex), only what needs a human | Credit score only | Rule-based push alerts, weekly recap | No | Rules, bill reminders |
 | AI Q&A and charts | Yes (your Claude or Codex) | Yes | Yes | No | No |
@@ -113,10 +127,9 @@ As of 2026-10-03; sources are listed in the [market research](docs/market-resear
 Plaid approval is the slow part, so start there. The full guide, with what each step asks for, is
 **[docs/INSTALL.md](docs/INSTALL.md)**. The short version:
 
-<!-- set when the public repo exists: replace <repo> with its clone URL (#113) -->
 ```
 brew install uv node                           # Python 3.11+ via uv, Node 20.12+ for the dashboard
-git clone <repo> ~/finnamon && cd ~/finnamon
+git clone https://github.com/bill10/finnamon ~/finnamon && cd ~/finnamon
 uv tool install -e .                           # puts `finnamon` on PATH
 uv tool update-shell                           # if `finnamon` is "not found"; then open a new terminal
 finnamon init                                  # Plaid keys → Telegram bot → assistant (Claude Code, or Codex) → dashboard → always-on jobs
@@ -124,7 +137,7 @@ finnamon open                                  # link a bank, then ask the inter
 finnamon doctor                                # checks every piece and prints the fix for each problem
 ```
 
-Every `init` step can be skipped and added later by running `finnamon init` again. Later releases: `finnamon update`.
+Every `init` step can be skipped and added later by running `finnamon init` again. Later releases: `finnamon update`. Removing it: [docs/INSTALL.md](docs/INSTALL.md#8-uninstalling) section 8.
 
 ---
 
@@ -152,7 +165,7 @@ weekly to `~/.finnamon/backups/` (restoring one: [docs/INSTALL.md](docs/INSTALL.
 
 More:
 
-- [docs/COMMANDS.md](docs/COMMANDS.md): talking to it, and every command (adding banks and partners, CSV import for banks Plaid can't reach, updates).
+- [docs/COMMANDS.md](docs/COMMANDS.md): talking to it, and every command (adding banks and partners, Fetch by AI and CSV import for banks Plaid can't reach, updates).
 - [docs/DASHBOARD.md](docs/DASHBOARD.md): the web dashboard, its key, and your phone over Tailscale.
 - [docs/CHANNEL-MODE.md](docs/CHANNEL-MODE.md): who answers Telegram: `session` (the default, one conversation with the dashboard), the Claude Code plugin (`channel`) or the legacy `daemon` session.
 
