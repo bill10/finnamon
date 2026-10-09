@@ -963,7 +963,7 @@ const budgetChoice = (s, st = globalThis.localStorage) => {
   return v && budgetNames(s).includes(v.name) && (v.arg ?? null) === (fm.arg ?? null) ? v.name : fm.budget;
 };
 const saveBudgetChoice = (s, name, st = globalThis.localStorage) => { try { st.setItem(BUDGET_KEY, JSON.stringify({ name, arg: s.usermeta.finnamon.arg ?? null })); } catch { /* private mode: the pick lasts until a reload */ } };
-const budgetLabel = (n) => `${n.charAt(0).toUpperCase()}${n.slice(1)}`;
+const budgetLabel = (n) => `${n.trim().charAt(0).toUpperCase()}${n.trim().slice(1)}`;   // " overall" (every budget summed, first in the list) reads Overall
 // the title is the picker ("Budget trend: [After-School ▾]"), so the chart's own title is dropped
 const budgetSpec = (s, name) => { const { title, ...rest } = s; return { ...rest, transform: [{ filter: { field: 'budget', equal: name } }] }; };
 function budgetPicker(s, name) {   // one styled select inline in the title, for any number of budgets; an over-limit one says so and carries a dot

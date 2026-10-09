@@ -201,7 +201,7 @@ def test_budgets_chart_is_one_budget_by_month_by_the_cards_rules(conn):
     sp = charts.spec(conn, "budgets")
     fm = sp["usermeta"]["finnamon"]
     assert sp["title"] == "Budget trend: Dining" and fm["chart"] == "budgets" and fm["id"] == "budgets", "the default is the first budget over its limit"
-    assert fm["budget"] == "dining" and fm["budgets"] == [{"name": "dining", "over": True}, {"name": "groceries", "over": False}]
+    assert fm["budget"] == "dining" and fm["budgets"] == [{"name": " overall", "over": False}, {"name": "dining", "over": True}, {"name": "groceries", "over": False}]
     assert sp["transform"] == [{"filter": {"field": "budget", "equal": "dining"}}], "every budget's rows ride along; the page swaps the filter"
     vals = [v for v in sp["data"]["values"] if v["budget"] == "groceries"]
     assert len(vals) == 12 and {v["limit"] for v in vals} == {600} and sum(v["spent"] for v in vals) == 170
@@ -213,14 +213,39 @@ def test_budgets_chart_is_one_budget_by_month_by_the_cards_rules(conn):
     assert charts.spec(conn, "budgets", "rent")["title"] == "Budget trend: Dining", "a saved board's removed budget falls back, so refresh keeps working"
     with pytest.raises(ValueError, match="no budget named rent; one of dining, groceries"):
         charts.check_budget(conn, "rent")
-    assert len(charts.spec(conn, "budgets", months=0)["data"]["values"]) == 2, "--months 0 is one month, not a traceback"
+    assert len(charts.spec(conn, "budgets", months=0)["data"]["values"]) == 3, "--months 0 is one month, not a traceback"
+
+
+def test_overall_sums_the_budgets_that_applied_each_month(conn):
+    seed(conn)
+    budgets.budget_set(conn, "groceries", 600, "FOOD_AND_DRINK_GROCERIES")
+    budgets.budget_set(conn, "dining", 50, "FOOD_AND_DRINK_RESTAURANT")
+    now = store.now_local()
+    month = lambda back, day=0: conn.execute("SELECT date(?, 'start of month', ?, ?)", (now, f"-{back} months", f"+{day} days")).fetchone()[0]
+    conn.execute("UPDATE budget_limit_history SET effective_from=?", (month(3, 5),))   # both set up three months ago...
+    conn.execute("UPDATE budget_limit_history SET effective_from=? WHERE budget_id=(SELECT id FROM budgets WHERE name='dining')", (month(1, 10),))   # ...dining only last month
+    txn(conn, "t0", "chk", month(0), 50, "WF", "Whole Foods", "mch_wf")
+    txn(conn, "t4", "chk", month(4), 70, "WF", "Whole Foods", "mch_wf")   # before any budget: the first month, left out of Overall
+    txn(conn, "t2", "chk", month(2, 4), 120, "WF", "Whole Foods", "mch_wf")
+    txn(conn, "d2", "cc", month(2, 3), 40, "Nopa", "Nopa", "mch_nopa", "FOOD_AND_DRINK", "FOOD_AND_DRINK_RESTAURANT")   # before dining applied
+    txn(conn, "d0", "cc", month(0), 80, "Nopa", "Nopa", "mch_nopa", "FOOD_AND_DRINK", "FOOD_AND_DRINK_RESTAURANT")
+    sp = charts.spec(conn, "budgets")
+    ov = [v for v in sp["data"]["values"] if v["budget"] == charts.OVERALL]
+    assert [(v["spent"], v["limit"]) for v in ov] == [(0, 600), (120, 600), (0, 650), (130, 650)], "groceries from month -3, dining from -1; month -4 had none"
+    assert [v["status"] for v in ov] == ["within limit"] * 4 and ov[-1]["period"] == "month to date" and ov[-1]["month"].endswith("(so far)")
+    assert sp["usermeta"]["finnamon"]["budgets"][0] == {"name": " overall", "over": False}, "first in the picker"
+    assert sp["usermeta"]["finnamon"]["budget"] == "dining", "the default stays the first budget over its limit"
+    assert charts.spec(conn, "budgets", "Overall")["title"] == "Budget trend: Overall"
+    charts.check_budget(conn, "overall")   # the CLI takes it
+    budgets.budget_set(conn, "overall", 10, "FOOD_AND_DRINK_GROCERIES")
+    assert charts.spec(conn, "budgets", "overall")["transform"][0]["filter"]["equal"] == "overall", "a budget really named overall is that budget"
 
 
 def test_budget_trend_starts_at_the_households_first_transaction(conn):
     seed(conn)
     budgets.budget_set(conn, "groceries", 600, "FOOD_AND_DRINK_GROCERIES")
     txn(conn, "t0", "chk", conn.execute("SELECT date(?, 'start of month', '-2 months')", (store.now_local(),)).fetchone()[0], 50, "WF", "Whole Foods", "mch_wf")
-    assert len(charts.spec(conn, "budgets")["data"]["values"]) == 3, "months before any data would read as nothing spent"
+    assert len([v for v in charts.spec(conn, "budgets")["data"]["values"] if v["budget"] == "groceries"]) == 3, "months before any data would read as nothing spent"
 
 
 def test_the_limit_line_follows_the_limit_in_effect_each_month(conn):

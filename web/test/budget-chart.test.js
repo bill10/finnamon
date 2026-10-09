@@ -47,3 +47,17 @@ test('budgetPicker: one select in the title for any count, the current one selec
   assert.ok(budgetPicker(spec(), 'dining').includes('class="over"'), 'the chosen over-limit budget carries the dot');
   assert.ok(isBudgetTrend(spec()) && !isBudgetTrend({ usermeta: { finnamon: { chart: 'budgets', budgets: [] } } }));
 });
+
+test('Overall: first in the picker, labelled Overall, its rows picked by the filter, and remembered like any budget', () => {
+  const s = spec(); s.usermeta.finnamon.budgets.unshift({ name: ' overall', over: false });
+  const h = budgetPicker(s, ' overall');
+  assert.ok(h.includes('<select data-budget-select aria-label="Budget to show"><option value=" overall" selected>Overall</option>'), 'the first option, with the select\'s label');
+  assert.deepEqual(budgetSpec(s, ' overall').transform, [{ filter: { field: 'budget', equal: ' overall' } }]);
+  const st = store();
+  saveBudgetChoice(s, ' overall', st);
+  assert.equal(budgetChoice(s, st), ' overall', 'Overall is remembered');
+  saveBudgetChoice(s, 'coffee', st);
+  assert.equal(budgetChoice(s, st), 'coffee', 'a saved budget name still opens that budget');
+  saveBudgetChoice(s, ' overall', st);
+  assert.equal(budgetChoice(spec(), st), 'dining', 'a board drawn before Overall existed falls back to its default');
+});
