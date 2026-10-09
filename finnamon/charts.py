@@ -174,15 +174,15 @@ def spec(conn: sqlite3.Connection, name: str, arg: str | None = None, months: in
         series = _budget_trend(conn, months)
         if not series:
             return {**base, "title": "Budget trend", "data": {"values": []}, "mark": "bar"}
-        series.append(_budget_overall(series))   # last here, so the default pick stays a real budget; first in the page's picker
-        b, pts = _budget_pick(series, arg)
+        ov = _budget_overall(series)
+        b, pts = _budget_pick(series + [ov], arg)   # Overall last here, so the default pick stays a real budget; first in the page's picker
         values = [{"budget": c["name"], "month": p["label"], "spent": p["spent"], "limit": p["limit"], "period": p["period"], "status": p["status"]}
-                  for c, ps in series for p in ps]
+                  for c, ps in [ov] + series for p in ps]
         tip = [{"field": "month"}, {"field": "spent", "format": "$,.0f"}, {"field": "limit", "format": "$,.0f"}]
         y = {"type": "quantitative", "title": "$"}
         return {**base, "title": f"Budget trend: {_title(b['name'])}", "data": {"values": values},
                 "usermeta": {"finnamon": {**base["usermeta"]["finnamon"], "id": name, "budget": b["name"],   # one budgets panel, whichever it opens on
-                                          "budgets": [{"name": c["name"], "over": c["spent"] > c["monthly_limit"]} for c, _ in series[-1:] + series[:-1]]}},
+                                          "budgets": [{"name": c["name"], "over": c["spent"] > c["monthly_limit"]} for c, _ in [ov] + series]}},
                 "transform": [{"filter": {"field": "budget", "equal": b["name"]}}],
                 "encoding": {"x": {"field": "month", "type": "ordinal", "title": None, "sort": [p["label"] for p in pts], "axis": {"labelAngle": 0}}},
                 # the "" entry takes the theme's pale first colour; within, over and the limit line take the next three
@@ -260,8 +260,10 @@ def _budget_overall(series: list) -> tuple[dict, list[dict]]:
             if p["ym"] >= b["since"]:
                 m = months.setdefault(p["ym"], {**p, "spent": 0.0, "limit": 0.0})
                 m["spent"] += p["spent"]; m["limit"] += p["limit"]
-    pts = [{**m, "spent": round(m["spent"], 2), "limit": round(m["limit"], 2), "status": "over limit" if m["spent"] > m["limit"] else "within limit"}
-           for _, m in sorted(months.items())]
+    pts = []
+    for _, m in sorted(months.items()):
+        spent, limit = round(m["spent"], 2), round(m["limit"], 2)
+        pts.append({**m, "spent": spent, "limit": limit, "status": "over limit" if spent > limit else "within limit"})
     spent, limit = sum(b["spent"] for b, _ in series), sum(b["monthly_limit"] for b, _ in series)
     return {"name": OVERALL, "spent": round(spent, 2), "monthly_limit": limit}, pts
 
@@ -275,7 +277,7 @@ def _budget_pick(series: list, name: str | None) -> tuple[dict, list[dict]]:
 
 def check_budget(conn: sqlite3.Connection, name: str) -> None:
     names = [b["name"] for b in budgets.budget_list(conn)]
-    if name.strip().lower() not in names + ["overall"] * bool(names):
+    if name.strip().lower() not in names and not (names and name.strip().lower() == OVERALL.strip()):
         raise ValueError(f"no budget named {name}; one of {', '.join(names) or 'none yet (finnamon budget set)'}")
 
 

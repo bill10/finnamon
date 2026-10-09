@@ -233,12 +233,22 @@ def test_overall_sums_the_budgets_that_applied_each_month(conn):
     ov = [v for v in sp["data"]["values"] if v["budget"] == charts.OVERALL]
     assert [(v["spent"], v["limit"]) for v in ov] == [(0, 600), (120, 600), (0, 650), (130, 650)], "groceries from month -3, dining from -1; month -4 had none"
     assert [v["status"] for v in ov] == ["within limit"] * 4 and ov[-1]["period"] == "month to date" and ov[-1]["month"].endswith("(so far)")
+    assert [v["budget"] for v in sp["data"]["values"]][0] == charts.OVERALL
     assert sp["usermeta"]["finnamon"]["budgets"][0] == {"name": " overall", "over": False}, "first in the picker"
     assert sp["usermeta"]["finnamon"]["budget"] == "dining", "the default stays the first budget over its limit"
     assert charts.spec(conn, "budgets", "Overall")["title"] == "Budget trend: Overall"
     charts.check_budget(conn, "overall")   # the CLI takes it
+    txn(conn, "t9", "chk", month(0, 1), 700, "WF", "Whole Foods", "mch_wf")   # over in total this month: red, and the picker's dot
+    sp = charts.spec(conn, "budgets")
+    assert [v["status"] for v in sp["data"]["values"] if v["budget"] == charts.OVERALL][-1] == "over limit"
+    assert sp["usermeta"]["finnamon"]["budgets"][0] == {"name": " overall", "over": True}
     budgets.budget_set(conn, "overall", 10, "FOOD_AND_DRINK_GROCERIES")
     assert charts.spec(conn, "budgets", "overall")["transform"][0]["filter"]["equal"] == "overall", "a budget really named overall is that budget"
+
+
+def test_overall_is_refused_with_no_budgets(conn):
+    with pytest.raises(ValueError, match="no budget named overall; one of none yet"):
+        charts.check_budget(conn, "overall")
 
 
 def test_budget_trend_starts_at_the_households_first_transaction(conn):
@@ -289,3 +299,14 @@ def test_budgets_png_takes_a_budget(home, conn, capsys):
     with pytest.raises(SystemExit):
         cli.main(["chart", "budgets", "--budget", "rent"])
     assert "no budget named rent" in capsys.readouterr().err
+
+
+def test_budgets_png_draws_overall(home, conn, capsys, monkeypatch):
+    from finnamon import cli
+    seed(conn)
+    budgets.budget_set(conn, "groceries", 600, "FOOD_AND_DRINK_GROCERIES")
+    budgets.budget_set(conn, "dining", 300, "FOOD_AND_DRINK_RESTAURANT")
+    picked, pick = [], charts._budget_pick
+    monkeypatch.setattr(charts, "_budget_pick", lambda s, n: picked.append(pick(s, n)) or picked[-1])
+    cli.main(["chart", "budgets", "--budget", "overall"])   # the PNG (and MCP render_chart arg=overall), not only the dashboard
+    assert capsys.readouterr().out.strip().endswith(".png") and picked[-1][0]["name"] == charts.OVERALL
