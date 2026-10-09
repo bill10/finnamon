@@ -51,6 +51,15 @@ def esc(s) -> str:
     return html.escape("" if s is None else str(s), quote=False)
 
 
+def why(e: TelegramError) -> str:
+    """One line naming the cause, for a person: a refused token reads differently from a network that is down."""
+    if e.code in (401, 404):   # Telegram answers 404 Not Found for a token that is not a bot's at all
+        return f"Telegram rejected the bot token ({e}); check it with @BotFather, then run finnamon init"
+    if e.code == 0:
+        return f"could not reach Telegram ({e.description})"
+    return f"Telegram refused the message ({e})"
+
+
 def get_me(token: str | None = None) -> dict:
     return _call("getMe", token=token)
 

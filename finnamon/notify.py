@@ -19,6 +19,7 @@ from . import store, telegram
 from .telegram import esc
 
 log = logging.getLogger("finnamon.notify")
+last_error: telegram.TelegramError | None = None   # the latest send failure; `finnamon notify` turns it into its exit code
 
 SENDABLE = "sent_at IS NULL AND resolved_at IS NULL AND (tier = 'rule' OR (verdict = 'promote' AND confidence = 'high'))"   # resolved while queued (Dismiss on the page): never sent
 ROUNDUP_CHUNK_CHARS = 3500  # under Telegram's 4096 with HTML entities to spare; never truncate escaped HTML
@@ -118,10 +119,15 @@ def relogin_item(alert: sqlite3.Row) -> str | None:
     return None
 
 
-def render(alert: sqlite3.Row, page: bool = False) -> str:
+EXPECTED = " Expected? Reply <i>it's normal</i> and I won't ask again."   # the README's line
+
+
+def render(alert: sqlite3.Row, page: bool = False, cue: bool = True) -> str:
     """Telegram HTML for an alert. The web dashboard puts this straight into the page too, so every bank string
     goes through esc(): this is an XSS boundary, not just Telegram formatting. page: the dashboard's words where it
-    shows a Reconnect button instead of "reply fix X"."""
+    shows a Reconnect button instead of "reply fix X". cue=False drops the "reply it's normal" line (the roundup has
+    its own footer)."""
+    cue = cue and not page
     p = json.loads(alert["payload_json"])
     k = alert["kind"]
     acct = f"{esc(p.get('account'))} …{esc(p.get('mask'))}" if p.get("mask") else esc(p.get("account"))
@@ -147,17 +153,17 @@ def render(alert: sqlite3.Row, page: bool = False) -> str:
         return (f"⏳ <b>{bank}'s connection expires {day(str(p.get('expires') or '')[:10])}.</b> Reply <i>{fix}</i> and I'll send a link "
                 f"to renew it here; after that date its accounts stop updating.")
     if k == "duplicate_charge":   # the bank sends no name at all for some charges: say so, the way the anomaly line does
-        normal = "" if page else " Reply <i>it's normal</i> if it was meant."   # the README's line; the page has its own button
+        normal = " Reply <i>it's normal</i> if it was meant." if cue else ""   # the README's line; the page has its own button
         what = f"{esc(tidy(p.get('merchant')) or 'an unnamed charge')} {money(p.get('amount'))} on {acct}"
         same = p.get("date_a") == p.get("date_b")
         if int(p.get("count") or 2) > 2:   # one alert for the whole run of repeats
             span = f"all on {day(p.get('date_b'))}" if same else f"{day(p.get('date_a'))} to {day(p.get('date_b'))}"
             return f"⚠️ <b>Charged {int(p['count'])} times:</b> {what}, {span}. Same merchant, same amount.{normal}"
-        span = f"both on {day(p.get('date_a'))}" if same else f"{day(p.get('date_a'))} and {day(p.get('date_b'))}"
+        span = f"both on {day(p.get('date_a'))}" if same else f"charged {day(p.get('date_a'))} and again {day(p.get('date_b'))}"
         return f"⚠️ <b>Possible duplicate:</b> {what}, {span}. Same merchant, same amount.{normal}"
     if k == "new_recurring":
         return (f"🔁 <b>New recurring charge:</b> {esc(tidy(p.get('merchant')) or 'an unnamed payee')} {money(p.get('amount'))} "
-                f"{esc((p.get('frequency') or '').lower())} on {acct}, first seen {day(p.get('first_date'))}.")
+                f"{esc((p.get('frequency') or '').lower())} on {acct}, first seen {day(p.get('first_date'))}." + (EXPECTED if cue else ""))
     if k == "recurring_price":
         return (f"🔁 <b>{esc(tidy(p.get('merchant')) or 'A subscription')} went from {money(p.get('old_amount'))} to {money(p.get('amount'))}</b> "
                 f"on {acct}, {day(p.get('date'))}.")
@@ -191,7 +197,9 @@ def render(alert: sqlite3.Row, page: bool = False) -> str:
             head += f" on {acct}"
         if p.get("date"):
             head += f", {day(p.get('date'))}"
-        return f"{head}. {esc(alert['reason'] or '')}".strip()
+        if k == "anomaly:first_merchant" and p.get("merchant"):
+            head += f": first time at {esc(what)}"
+        return f"{head}. {esc(alert['reason'] or '')}".strip() + (EXPECTED if cue else "")
     return f"ℹ️ {esc(k)}: <code>{esc(json.dumps(p)[:500])}</code>"
 
 
@@ -213,6 +221,11 @@ def _stamp(conn: sqlite3.Connection, ids: list[int], chat_id, mid) -> None:
                  (None if chat_id is None else str(chat_id), mid, *ids))
 
 
+def _failed(e: telegram.TelegramError) -> None:
+    global last_error
+    last_error = e
+
+
 def send_pending(conn: sqlite3.Connection, chat_id: int | str | None = None, sleep=time.sleep) -> int:
     chat_id = chat_id or store.get_state(conn, "chat_id")
     if not chat_id:
@@ -230,6 +243,7 @@ def send_pending(conn: sqlite3.Connection, chat_id: int | str | None = None, sle
         try:
             send_one(conn, alert, chat_id)
         except telegram.TelegramError as e:
+            _failed(e)
             log.warning("send failed for alert %s: %s", alert["id"], e)
             if e.code == 429:
                 sleep(e.retry_after or 5)
@@ -292,13 +306,14 @@ def send_roundup(conn: sqlite3.Connection, as_of: str, chat_id: int | str | None
         try:
             mid = telegram.send_message(chat_id, quiet_line(conn, as_of))
         except telegram.TelegramError as e:
+            _failed(e)
             log.warning("all-quiet roundup failed: %s (the week is not marked done)", e)
             return None
         if in_slot:
             store.set_state(conn, "last_roundup_week", week)
         return mid
     # One numbered list, chunked under Telegram's limit; each chunk is its own message with its own roundup_items rows.
-    items = [(n, fam, f"{n}. {render(best(fam)).replace('🔍 ', '')}") for n, fam in enumerate(rows, 1)]
+    items = [(n, fam, f"{n}. {render(best(fam), cue=False).replace('🔍 ', '')}") for n, fam in enumerate(rows, 1)]
     footer = "\nReply <i>normal 3</i> (etc.) to stop hearing about a pattern."
     chunks: list[list[tuple]] = [[]]
     size = len("📋 <b>Things I noticed this week</b>")
@@ -313,6 +328,7 @@ def send_roundup(conn: sqlite3.Connection, as_of: str, chat_id: int | str | None
         try:
             mid = telegram.send_message(chat_id, text)
         except telegram.TelegramError as e:
+            _failed(e)
             log.warning("roundup chunk %d failed: %s (alerts stay unsent; the week is not marked done)", ci, e)
             return first_mid
         first_mid = first_mid or mid

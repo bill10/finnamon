@@ -87,7 +87,7 @@ async function loadUpdate({ fresh = false } = {}) {
   let r;
   try { r = await fetch('/api/update' + q); } catch { return; }
   if (r.status === 401) return lock();
-  if (!r.ok) return;
+  if (!r.ok || r.status === 204) return;   // 204: this server has nothing to update (the demo)
   updLoaded = true;
   upd = await r.json();
   if (updPhase === 'failed' && !upd.running && !(upd.ahead > 0)) updPhase = null;
@@ -1208,7 +1208,7 @@ function sendSize() {   // the visible terminal is measured; the hidden one has 
 }
 
 let view = 'chat', importState = null, importStopping = false, importTyped = false;
-const STATE_TEXT = { WORKING: 'thinking…', WAITING: 'ready', QUESTION: 'asking you something', DOWN: 'offline', STARTING: 'starting…' };
+const STATE_TEXT = { WORKING: 'thinking…', WAITING: 'ready', QUESTION: 'asking you something', DOWN: 'offline', STARTING: 'starting…', SIGNED_OUT: 'sign in first' };
 function showView(v) {
   view = v;
   $('terminal').hidden = v !== 'chat'; $('terminal-import').hidden = v !== 'import';

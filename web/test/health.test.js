@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { health, delta } from '../server.js';
+import { health, delta, SIGNED_OUT } from '../server.js';
 
 const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
 
@@ -12,7 +12,9 @@ test('health reads like a person would say it', () => {
   assert.deepEqual(health({ items: [{ institution: 'Chase', status: 'good' }], last_run: now, daemon_alive: true, assistant_problems: ['missing x'] }), { level: 'down', label: 'Assistant directory not ready: finnamon install' }, 'no allow list, no answers: the page says why');
   assert.deepEqual(health({ items: [{ institution: 'Chase', status: 'good' }], last_run: now, daemon_alive: true, assistant_problems: [] }), { level: 'ok', label: 'All good' });
   assert.deepEqual(health({ items: [{ institution: 'Chase', status: 'good' }], last_run: '2020-01-01 00:00:00', daemon_alive: true }), { level: 'warn', label: 'Sync overdue' });
-  assert.deepEqual(health({ items: [], last_run: null }), { level: 'ok', label: 'All good' });   // nothing linked yet is not a fault
+  assert.deepEqual(health({ items: [], last_run: null }), { level: 'ok', label: 'All good' });
+  assert.deepEqual(health({ items: [], last_run: now, daemon_alive: true, login_problem: SIGNED_OUT.claude }), { level: 'down', label: 'Sign in to Claude Code first: run `claude` in a terminal' },
+    'a signed-out claude would show its first-run screens in the intercom: the pill says why it is held back instead of "All good"');   // nothing linked yet is not a fault
   assert.deepEqual(health({ items: [], demo: true, daemon_alive: false }), { level: 'ok', label: 'Demo household: made-up data' }, '`finnamon demo` runs no daemon');
 });
 

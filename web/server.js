@@ -122,6 +122,9 @@ export function csp(host) {
     `connect-src 'self'${ws} https://*.plaid.com`, "img-src 'self' data:", "media-src 'self' blob:", "frame-src https://*.plaid.com", "object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'", "form-action 'none'"].join('; ');
 }
 
+export const SIGNED_OUT = { claude: 'Sign in to Claude Code first: run `claude` in a terminal', codex: 'Sign in to Codex first: run `codex login` in a terminal' };
+export const signedOutText = (why) => `\r\n\x1b[1m${why}\x1b[0m\r\nThe chat starts by itself within 30 seconds of signing in.\r\n`;
+
 // One line a person can read instead of "inbound daemon": what needs attention, if anything.
 export function health(status, inbound = status.inbound) {
   if (status.demo) return { level: 'ok', label: 'Demo household: made-up data' };   // `finnamon demo`: no daemon, no bot, nothing to warn about
@@ -133,6 +136,7 @@ export function health(status, inbound = status.inbound) {
   // The session in the corner runs in ~/.finnamon/assistant; without its files or claude's trust in the directory it has
   // no allow list and answers nothing useful, and nothing else on this page would say why.
   if (Array.isArray(status.assistant_problems) && status.assistant_problems.length) return { level: 'down', label: 'Assistant directory not ready: finnamon install' };
+  if (status.login_problem) return { level: 'down', label: status.login_problem };   // main(): the session waits for a sign-in instead of showing claude's first-run screens
   // This pill is the one surface a person is looking at while the chat goes unanswered. It said "All good" through two
   // real outages, so a chat nobody is reading outranks a sync warning.
   if (status.channel_deaf_since) return { level: 'down', label: 'Telegram is not being read: finnamon update --no-pull' };
@@ -564,7 +568,7 @@ export function updater({ call = cli, spawn = spawnChild, home = config.home, no
 // ---- routes -----------------------------------------------------------------------------------------------------
 
 // The routes alone, with the CLI and the host check injectable, so tests can drive them without a PTY or a shell.
-export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon', allowHost = loopback(config.port).host, allowOrigin = loopback(config.port).origin, token = webToken, spec = specPath, home = config.home, startImport = null, talk = null, relay = null, update = null } = {}) {
+export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon', allowHost = loopback(config.port).host, allowOrigin = loopback(config.port).origin, token = webToken, spec = specPath, home = config.home, startImport = null, talk = null, relay = null, update = null, loginProblem = () => null } = {}) {
   let linkOwner = null;   // whose bank that token is for (null: the CLI's default owner); it must survive the OAuth round trip with the token
   let linkToken = null;   // the last Plaid Link token minted: an OAuth return (HTTPS only) may land in a new tab, whose sessionStorage is empty
   const app = express();
@@ -653,7 +657,7 @@ export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon',
         call('property', 'list'), call('networth', '--history', '--months', '12').catch(() => []),
         call('budget', 'overall').catch(() => null)]);   // a charge two budgets share, once; and how many rows have no category
       const owners = await call('owner', 'list').catch(() => []);   // the Link account picker asks whose bank it is when there are several
-      res.json({ owners: Array.isArray(owners) ? owners : [], status, accounts, budgets, overall, networth, alerts, resolved, properties, inbound, health: health(status, inbound), delta: delta(history), history: Array.isArray(history) ? history : [] });
+      res.json({ owners: Array.isArray(owners) ? owners : [], status, accounts, budgets, overall, networth, alerts, resolved, properties, inbound, health: health({ ...status, login_problem: loginProblem() }, inbound), delta: delta(history), history: Array.isArray(history) ? history : [] });
     } catch (e) { fail(res, e, 500); }
   });
   app.get('/api/chart', async (_req, res) => {   // the board: a list of specs; a pre-0.7.5 file holds one object
@@ -815,7 +819,8 @@ export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon',
   // Update Finnamon (the header's Update available). A POST only from the page itself: its cookie and its Origin, which a
   // browser always sends on a fetch POST; the bearer key (the CLI's `--to`, curl) is refused, so nothing but a person's tap runs it.
   const updating = (res) => update || (res.status(503).json({ error: process.env.FINNAMON_DEMO ? "the demo can't update: it is made-up data, with nothing installed to update" : 'this server cannot update Finnamon' }), null);
-  app.get('/api/update', async (req, res) => { if (updating(res)) res.json(await update.status({ fresh: req.query.fresh === '1', load: req.query.load === '1' })); });
+  // Nothing to update (the demo): the page's routine look gets an empty answer, not an error in the console. Starting one still says why not.
+  app.get('/api/update', async (req, res) => { if (!update) return res.status(204).end(); res.json(await update.status({ fresh: req.query.fresh === '1', load: req.query.load === '1' })); });
   // Settings' read-only rows: what `finnamon doctor` and the existing APIs already know. The demo has no update, so the version comes from the checkout.
   app.get('/api/settings', (_req, res) => {
     let version = null, listed = '';
@@ -923,6 +928,7 @@ export async function main() {
   catch (e) { console.warn(`${stamp()} cannot read the key: ${e.message}; every request answers 503 until the file is fixed`); }   // and still listen: a crash here would loop under KeepAlive and take the chat's reader with it
   let term = null;   // created once the port is ours: a port we cannot take must never spawn Claude
   let intercom = null, learning = null;
+  let loginProblem = null;   // the assistant's CLI is signed out: the session is held back and the page says so
   // Talk to Finnamon, and in session mode Telegram, type into the household session and read the answer off its own transcript.
   const sessionTranscript = () => transcriptOf(term, intercom, agent);
   const read = (...a) => agent.readTurn(...a), open = (...a) => agent.open(...a);   // only called once a session runs, so agent is set
@@ -932,7 +938,7 @@ export async function main() {
                             since: () => term?.session.startedAt || 0, transcript: sessionTranscript, read, open });
   const relay = createRelay({ write: (d) => term?.write(d), idle: () => term?.session.state === 'WAITING', asking: () => term?.session.state === 'QUESTION',
                               since: () => term?.session.startedAt || 0, transcript: sessionTranscript, read, open });
-  const app = buildApp({ inbound, allowHost: lo.host, allowOrigin: lo.origin, startImport: (bank, opts) => imports.start(bank, opts), talk, relay, update: process.env.FINNAMON_DEMO ? null : updater() });   // a demo has nothing to update: `finnamon update` would act on the household
+  const app = buildApp({ inbound, allowHost: lo.host, allowOrigin: lo.origin, startImport: (bank, opts) => imports.start(bank, opts), talk, relay, update: process.env.FINNAMON_DEMO ? null : updater(), loginProblem: () => loginProblem });   // a demo has nothing to update: `finnamon update` would act on the household
   const server = createServer(app);
   // A browser sends the page's Origin; a non-browser client on this machine (wscat, a test) sends none. Any other origin
   // is a hostile tab, whatever Host it managed to resolve to. Either way the handshake carries the key or is refused.
@@ -941,7 +947,8 @@ export async function main() {
   wss.on('connection', (ws, req) => {
     console.log(`${stamp()} intercom connect from ${peer(req)} via ${req.auth}`);   // who reached the shell, and how; never the key itself
     clients.add(ws);
-    ws.send(JSON.stringify({ type: 'hello', state: term ? term.session.state : 'STARTING', inbound, replay: term ? term.replay() : '',
+    ws.send(JSON.stringify({ type: 'hello', state: loginProblem ? 'SIGNED_OUT' : term ? term.session.state : 'STARTING', inbound,
+                             replay: term ? term.replay() + (loginProblem ? signedOutText(loginProblem) : '') : loginProblem ? signedOutText(loginProblem) : '',
                              import: imports.current ? { state: imports.current.session.state, replay: imports.current.replay() } : null }));
     ws.key = req.key;
     ws.on('message', (raw) => {   // a bad frame is dropped; it must never take the session down
@@ -979,10 +986,18 @@ export async function main() {
     // then, wait. createSession asks it again before every restart: a config changed while the session ran is checked too.
     const ready = async () => {
       try {
-        const st = await cli('status');
+        const st = await cli('status', '--login');
         // status checks the CLI the setting names: one this process is not running (a switch whose restart failed) would
         // be checked in its place, so this session waits for the restart that runs the other
         if (kind && st.agent && st.agent !== kind) { console.warn(`the assistant is now ${st.agent}, this dashboard runs ${kind}: finnamon update --no-pull restarts it; retrying in 30s`); return false; }
+        // A signed-out claude opens on its first-run theme picker, which reads as a broken chat: wait for the sign-in instead.
+        const signedOut = st.logged_in === false ? SIGNED_OUT[kind] || SIGNED_OUT.claude : null;
+        if (signedOut !== loginProblem) {
+          loginProblem = signedOut;
+          if (signedOut) { console.warn(`${signedOut}; retrying in 30s`); broadcast({ type: 'output', data: signedOutText(signedOut) }); }
+          broadcast({ type: 'state', state: signedOut ? 'SIGNED_OUT' : term ? term.session.state : 'STARTING' });
+        }
+        if (signedOut) return false;
         if (!(Array.isArray(st.assistant_problems) && st.assistant_problems.length)) return true;
         console.warn(`assistant directory not ready, retrying in 30s: ${st.assistant_problems.join('; ')}`);
       } catch (e) { console.warn(`finnamon status: ${e.message}; retrying in 30s`); }

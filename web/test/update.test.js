@@ -111,7 +111,10 @@ test('POST /api/update: the page only (cookie and Origin); never a bearer key, a
       assert.equal((await fetch(base + '/api/update', { method: 'POST', headers: { ...cookie, origin: base } })).status, 409);
       assert.equal(r.spawned.length, 1);
     });
-    await withApp(null, async (base) => assert.equal((await fetch(base + '/api/update', { headers: { cookie: `${COOKIE_NAME}=${KEY}` } })).status, 503));
+    await withApp(null, async (base) => {   // the demo: the page's look is a quiet no-content, a start is refused with why
+      assert.equal((await fetch(base + '/api/update?load=1', { headers: { cookie: `${COOKIE_NAME}=${KEY}` } })).status, 204);
+      assert.equal((await fetch(base + '/api/update', { method: 'POST', headers: { cookie: `${COOKIE_NAME}=${KEY}`, origin: base } })).status, 503);
+    });
   } finally { r.done(); }
 });
 

@@ -188,7 +188,7 @@ def test_a_symlink_in_the_assistant_directory_is_replaced_never_followed(own_dir
 def test_init_writes_and_trusts_the_bundle(own_dir, tg, monkeypatch, capsys):
     from finnamon import owners, plaid_api
     monkeypatch.setattr(plaid_api, "institution_get", lambda i, env=None: {"institution": {"name": "Chase"}})
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: [])
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: [])
     monkeypatch.setattr(owners, "add_first", lambda conn, owner, code, **kw: (store.set_state(conn, "chat_id", 555), {"chat_id": 555})[1])
     monkeypatch.setattr(cli.shutil, "which", lambda exe: None)
     monkeypatch.delenv("FINNAMON_CLAUDE_BIN")
@@ -233,7 +233,7 @@ def test_register_channel_plugin_warns_without_claude_or_on_a_failed_spawn(own_d
     monkeypatch.setattr("finnamon.claude_runner.binary", lambda: str(own_dir / "no-such-claude"))
     cli._register_channel_plugin(conn)
     assert "could not register" in capsys.readouterr().err
-    monkeypatch.setattr(scheduler, "install", lambda os_name=None, dry_run=False: [])
+    monkeypatch.setattr(scheduler, "install", lambda os_name=None, dry_run=False, force=False: [])
     cli.main(["install", "--yes"])   # and neither failure stops the install
     assert "could not register" in capsys.readouterr().err
 
@@ -241,7 +241,7 @@ def test_register_channel_plugin_warns_without_claude_or_on_a_failed_spawn(own_d
 def test_install_warns_when_trust_cannot_be_written(own_dir, monkeypatch, capsys):
     assistant.claude_config_path().write_text("not json {")
     ran = []
-    monkeypatch.setattr(scheduler, "install", lambda os_name=None, dry_run=False: ran.append(1) or [])
+    monkeypatch.setattr(scheduler, "install", lambda os_name=None, dry_run=False, force=False: ran.append(1) or [])
     cli.main(["install", "--yes"])
     err = capsys.readouterr().err
     assert "could not mark" in err and assistant.TRUST_FIX in err and own_dir.is_dir() and ran == [1], "a warning, never a stop: the bundle is written and the jobs still come up"
@@ -365,7 +365,7 @@ def test_update_writes_the_bundle_retires_the_sessions_once_and_restarts_both_jo
 
 def test_install_writes_the_bundle_before_the_jobs_come_up(own_dir, monkeypatch, capsys):
     seen = []
-    monkeypatch.setattr(scheduler, "install", lambda os_name=None, dry_run=False: seen.append(own_dir.is_dir()) or [])
+    monkeypatch.setattr(scheduler, "install", lambda os_name=None, dry_run=False, force=False: seen.append(own_dir.is_dir()) or [])
     cli.main(["install", "--dry-run"])
     assert seen == [False] and "would write the assistant bundle" in capsys.readouterr().out and not own_dir.exists(), "--dry-run writes nothing"
     cli.main(["install", "--yes"])
@@ -468,7 +468,7 @@ def test_update_that_cannot_write_the_bundle_dies_after_the_migration_and_restar
 def test_install_warns_when_the_shell_overrides_the_assistant_directory(own_dir, tmp_path, monkeypatch, capsys):
     elsewhere = tmp_path / "elsewhere"
     monkeypatch.setenv("FINNAMON_ASSISTANT", str(elsewhere))
-    monkeypatch.setattr(scheduler, "install", lambda os_name=None, dry_run=False: [])
+    monkeypatch.setattr(scheduler, "install", lambda os_name=None, dry_run=False, force=False: [])
     cli.main(["install", "--yes"])
     err = capsys.readouterr().err
     assert "FINNAMON_ASSISTANT is set" in err and str(assistant.default_dir()) in err and (elsewhere / "CLAUDE.md").is_file() and not own_dir.exists()
