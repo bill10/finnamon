@@ -98,8 +98,12 @@ the cwd of every household `claude`, and where Claude Code keeps their transcrip
   dashboard's session runs in ask mode (`--permission-mode default`, every mode but channel), so each
   fetch and search shows a dialog naming the site; `finnamon channel on` prints the hand-run channel
   command with the same flag. The tests in `tests/test_daemon_cli.py` and `web/test/session.test.js` pin the argv.
-- **Some paths are no one's to approve.** The secrets, the database (and its `-wal`/`-shm`), the dashboard key,
-  `intercom.json`, `imports/`, Finnamon's Chrome profile, the bot's `.env` and `~/.agent-browser` are refused for every
+- **Some paths are no one's to approve.** `config.PROTECTED_HOUSEHOLD` (under `FINNAMON_HOME`: the secrets, the database
+  and its `-wal`/`-shm`, the dashboard key, `intercom.json`, `imports/`, `backups/`, `downloads/`, both Chrome profiles,
+  `claude-import/`) and `config.PROTECTED_PERSONAL` (under the home: the bot's `.env`, `~/.agent-browser`, every Claude
+  transcript in `~/.claude/projects` but the assistant's own `memory/`, Claude's login files, `.ssh`, `.aws`, `.gnupg`,
+  `.netrc`, `.config/gh`, `.kube`, the keychains) are the one list both assistants share: Codex's permission profile
+  denies them (`codex.denied()`, plus Codex's own sessions and login), and they are refused for every
   tool before any permission check: the bundle's first `PreToolUse` hook (`finnamon hook secret-guard`, matcher `*`, fails
   closed) runs `approval.protected_path` over the call's whole input, case-insensitive, for the `~`, `$HOME`, `${HOME}`,
   `/Users/<name>`, `/home/<name>`, this box's home and `FINNAMON_HOME` forms (and a Bash `cd` into `.finnamon` naming one).

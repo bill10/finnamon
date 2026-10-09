@@ -122,7 +122,7 @@ the daemon answers with its own separate session (the legacy `daemon` mode). The
 2. **`finnamon init`** sees `codex` at step 3 and asks which runs the assistant; answer Codex. It writes the same
    bundle as `AGENTS.md` and `.agents/skills/` in `~/.finnamon/assistant/`, and Finnamon's own Codex home,
    `~/.finnamon/codex/`: a `config.toml` with a permission profile that keeps the shell away from your keys and the
-   database, the secret guard and the phone's permission prompt as hooks (their trust pinned), no web search, no
+   database, the secret guard and the phone's permission prompt as hooks (their trust pinned), no network for its tools, no web search, no
    ChatGPT apps, and the `finnamon` MCP tool, which is how the assistant runs `finnamon` commands (the same allow list as
    Claude's). Your own `~/.codex` config, MCP servers and skills never reach the household's assistant.
 3. **The login is shared, not repeated.** `~/.finnamon/codex/auth.json` is a link to your `~/.codex/auth.json`, so a
