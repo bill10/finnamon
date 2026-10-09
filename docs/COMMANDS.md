@@ -22,7 +22,7 @@ A budget covers one or more categories and merchants: `finnamon budget set dinin
 --category "fast food" --category coffee`, `finnamon budget set "water and trash" 90 --merchant "Seattle Public Utilities"
 --merchant Recology` (each flag repeats; a merchant is any name its charges show, as for `finnamon category`, and a name with no charge is refused with suggestions; either one given replaces all of the budget's categories and merchants; a charge
 several of them match counts once; two budgets may share a category, and `budget set` then warns (`overlaps`) since both
-alert on those charges; the dashboard's Overall counts such a charge once). Every `budget set` says what it counts
+alert on those charges; the dashboard's Overall bar counts such a charge once, while the budget trend chart's Overall, `finnamon chart budgets --budget overall`, counts it in each, as their limits do). Every `budget set` says what it counts
 (`counts`, as people read it); a new budget named without `--category` takes its name as the category and says so
 (`guessed`) when the name was only read as one ("dining" → Restaurant, "utilities" → every utility but rent). A name that is
 no category ("subscriptions", "kids", "car insurance") is refused with what it might mean: name its categories or merchants.

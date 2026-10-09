@@ -64,7 +64,7 @@ def render(conn: sqlite3.Connection, name: str, arg: str | None = None, months: 
     if name == "budgets":
         from matplotlib.patches import Patch
         series = _budget_trend(conn, months)
-        b, pts = _budget_pick(series, arg) if series else ({"name": "no budgets yet"}, [])
+        b, pts = _budget_pick(series + [_budget_overall(series)], arg) if series else ({"name": "no budgets yet"}, [])
         ax.yaxis.set_major_formatter(dollars)
         x = range(len(pts))
         bars = ax.bar(x, [p["spent"] for p in pts], color=[OVER if p["status"] == "over limit" else WITHIN for p in pts])
@@ -174,14 +174,15 @@ def spec(conn: sqlite3.Connection, name: str, arg: str | None = None, months: in
         series = _budget_trend(conn, months)
         if not series:
             return {**base, "title": "Budget trend", "data": {"values": []}, "mark": "bar"}
-        b, pts = _budget_pick(series, arg)
+        ov = _budget_overall(series)
+        b, pts = _budget_pick(series + [ov], arg)   # Overall last here, so the default pick stays a real budget; first in the page's picker
         values = [{"budget": c["name"], "month": p["label"], "spent": p["spent"], "limit": p["limit"], "period": p["period"], "status": p["status"]}
-                  for c, ps in series for p in ps]
+                  for c, ps in [ov] + series for p in ps]
         tip = [{"field": "month"}, {"field": "spent", "format": "$,.0f"}, {"field": "limit", "format": "$,.0f"}]
         y = {"type": "quantitative", "title": "$"}
         return {**base, "title": f"Budget trend: {_title(b['name'])}", "data": {"values": values},
                 "usermeta": {"finnamon": {**base["usermeta"]["finnamon"], "id": name, "budget": b["name"],   # one budgets panel, whichever it opens on
-                                          "budgets": [{"name": c["name"], "over": c["spent"] > c["monthly_limit"]} for c, _ in series]}},
+                                          "budgets": [{"name": c["name"], "over": c["spent"] > c["monthly_limit"]} for c, _ in [ov] + series]}},
                 "transform": [{"filter": {"field": "budget", "equal": b["name"]}}],
                 "encoding": {"x": {"field": "month", "type": "ordinal", "title": None, "sort": [p["label"] for p in pts], "axis": {"labelAngle": 0}}},
                 # the "" entry takes the theme's pale first colour; within, over and the limit line take the next three
@@ -235,26 +236,53 @@ def _budget_trend(conn: sqlite3.Connection, months: int = 12) -> list[tuple[dict
         pts = [p for p in budgets.monthly_spent(conn, b["id"], months, as_of) if p[0] >= first] or budgets.monthly_spent(conn, b["id"], 1, as_of)
         labels = _month_labels(pts)
         last = len(pts) - 1
-        out.append((b, [{"label": labels[ym] + (" (so far)" if i == last else ""), "spent": v, "limit": lim,
+        # the month its first limit took effect (created_at for a budget older than the limit history), never past today: Overall counts it from there
+        since = conn.execute("SELECT COALESCE((SELECT min(effective_from) FROM budget_limit_history WHERE budget_id=:id), "
+                             "(SELECT created_at FROM budgets WHERE id=:id))", {"id": b["id"]}).fetchone()[0] or as_of
+        out.append(({**b, "since": min(since, as_of)[:7]}, [{"ym": ym, "label": labels[ym] + (" (so far)" if i == last else ""), "spent": v, "limit": lim,
                          "period": "month to date" if i == last else "full month", "status": "over limit" if v > lim else "within limit"}
                         for i, (ym, v, lim) in enumerate(pts)]))
     return out
 
 
+# Overall's name in the data and the picker: budget_set strips names, so no budget can be called this. "overall" (the CLI's
+# --budget, the page's label) picks it unless a budget really is named overall.
+OVERALL = " overall"
+
+
+def _budget_overall(series: list) -> tuple[dict, list[dict]]:
+    """Every budget summed, month by month: spent against the sum of the limits, drawn as one budget is. A month counts a budget
+    only from the month its first limit took effect, and a month no budget covers yet is left out, so a budget set up last
+    month does not lift the older months' line. Every budget is monthly, so the periods line up."""
+    months: dict[str, dict] = {}
+    for b, pts in series:
+        for p in pts:
+            if p["ym"] >= b["since"]:
+                m = months.setdefault(p["ym"], {**p, "spent": 0.0, "limit": 0.0})
+                m["spent"] += p["spent"]; m["limit"] += p["limit"]
+    pts = []
+    for _, m in sorted(months.items()):
+        spent, limit = round(m["spent"], 2), round(m["limit"], 2)
+        pts.append({**m, "spent": spent, "limit": limit, "status": "over limit" if spent > limit else "within limit"})
+    spent, limit = sum(b["spent"] for b, _ in series), sum(b["monthly_limit"] for b, _ in series)
+    return {"name": OVERALL, "spent": round(spent, 2), "monthly_limit": limit}, pts
+
+
 def _budget_pick(series: list, name: str | None) -> tuple[dict, list[dict]]:
     """The budget the chart shows: the one named, else the first over its limit this month, else the first. A name that is no
     budget (removed since a board saved it) falls back to the default, so the panel keeps refreshing; the CLI refuses one up front."""
-    hit = [s for s in series if name and s[0]["name"] == name.strip().lower()]
+    hit = [s for s in series if name and s[0]["name"].strip() == name.strip().lower()]
     return hit[0] if hit else next((s for s in series if s[0]["spent"] > s[0]["monthly_limit"]), series[0])
 
 
 def check_budget(conn: sqlite3.Connection, name: str) -> None:
     names = [b["name"] for b in budgets.budget_list(conn)]
-    if name.strip().lower() not in names:
+    if name.strip().lower() not in names and not (names and name.strip().lower() == OVERALL.strip()):
         raise ValueError(f"no budget named {name}; one of {', '.join(names) or 'none yet (finnamon budget set)'}")
 
 
 def _title(name: str) -> str:
+    name = name.strip()   # OVERALL
     return name[:1].upper() + name[1:]
 
 
