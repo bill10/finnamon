@@ -176,6 +176,7 @@ def test_fetch_by_ai_extension_line(home, units, fake_claude, capsys, monkeypatc
 
 def test_a_rejected_bot_token_is_named_as_such(home, units, fake_claude, tg, capsys, monkeypatch):
     secrets.write({"client_id": "cid", "sandbox_secret": "sb"}, {"bot_token": "000000:DUMMY"}, {})
+    monkeypatch.setattr(plaid_api, "institution_get", lambda i, env=None: {"institution": {"name": "Chase"}})   # never the network
     monkeypatch.setattr(telegram, "get_me", lambda token=None: (_ for _ in ()).throw(telegram.TelegramError(401, "Unauthorized")))
     _, out = doctor(capsys)
     assert line(out, "Telegram bot").startswith("✗") and "Telegram rejected the bot token (401: Unauthorized)" in out
