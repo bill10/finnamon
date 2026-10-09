@@ -29,7 +29,7 @@ import unicodedata
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import config, store, telegram
+from . import assistant, config, store, telegram
 from .telegram import esc
 
 WAIT_S = 600   # the hook's own "timeout" in settings.json sits above this, so the deny is ours and the chat hears it
@@ -260,6 +260,10 @@ def protected_path(tool: str, inp, home: str | None = None, cwd: str | None = No
     home = (home or str(Path.home())).rstrip("/")
     if home:   # this box's own home, whatever its root (/var/root, /private/...)
         text = re.sub(re.escape(home) + r"(?=/)", "~", text, flags=re.IGNORECASE)
+    # the assistant's own auto memory is the one folder under ~/.claude/projects it may use (Claude Code names it by the
+    # cwd with every other character a dash); a `..` after it goes back to the guard
+    own = "~/.claude/projects/" + re.sub(r"[^A-Za-z0-9]", "-", str(assistant.dir())) + "/memory"
+    text = re.sub(re.escape(own) + r"(?![\w-])(?![^\s'\"]*\.\.)", "~/assistant-memory", text, flags=re.IGNORECASE)
     cmd = _argv_command(inp) if tool == FINNAMON_TOOL else str(inp.get("command") or "") if tool == "Bash" and isinstance(inp, dict) else ""
     m = _PROTECTED_RE.search(text) or (cmd and _IN_FOLDER_RE.search(cmd))
     return m.group(0) if m else None

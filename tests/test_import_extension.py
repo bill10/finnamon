@@ -283,9 +283,11 @@ def test_an_import_prunes_imported_csvs_past_the_keep_window(home, conn, monkeyp
     for f, age in ((stale, cli.IMPORTED_KEEP_DAYS + 1), (recent, cli.IMPORTED_KEEP_DAYS - 1)):
         f.write_text("Date,Description,Amount\n")
         os.utime(f, (time.time() - age * 86400,) * 2)
-    (home / "downloads" / "TransactionHistory.csv").write_text("Date,Description,Amount\n09/15/2026,COSTCO,-142.17\n")
+    csv = home / "downloads" / "TransactionHistory.csv"
+    csv.write_text("Date,Description,Amount\n09/15/2026,COSTCO,-142.17\n")
+    os.utime(csv, (time.time() - 60 * 86400,) * 2)   # downloaded long ago: imported today, so not pruned on the spot
     monkeypatch.setattr(cli, "WATCH_POLL", 0.01)
-    monkeypatch.setenv("FINNAMON_IMPORT_SINCE", str(time.time() - 10))
+    monkeypatch.setenv("FINNAMON_IMPORT_SINCE", str(time.time() - 90 * 86400))
     cli.main(["import", "HSBC Checking", "--newest-download"])
     assert not stale.exists() and recent.exists() and len(list(done.glob("*.csv"))) == 2, "the stale one goes; the recent one and today's stay"
 

@@ -2,6 +2,7 @@
 (finnamon/approval.py, `finnamon hook permission`, the daemon's callback_query). Telegram and Claude are both stubbed."""
 import io
 import json
+import re
 
 import pytest
 
@@ -394,6 +395,15 @@ def test_what_stays_reachable():
                       ("Read", {"file_path": "~/.finnamon/assistant/CLAUDE.md"}), ("Bash", {"command": "agent-browser --session finnamon-import snapshot -i"}),
                       ("mcp__plugin_telegram_telegram__reply", {"chat_id": 1, "text": "I can't read ~/.finnamon/secrets.toml"})):
         assert approval.protected_path(tool, inp, home="/nonexistent") is None, inp
+
+
+def test_the_assistant_s_own_memory_is_the_one_project_folder_it_may_use(home):
+    # Value: protects=the household assistant's auto memory (Write under ~/.claude/projects/<its slug>/memory) while every other transcript and memory stays guarded; fails_when=the carve-out goes, widens, or lets `..` out; seam=none
+    slug = re.sub(r"[^A-Za-z0-9]", "-", str(assistant.dir()))
+    mem = f"/nonexistent/.claude/projects/{slug}/memory"
+    assert approval.protected_path("Write", {"file_path": f"{mem}/household.md"}, home="/nonexistent") is None
+    for path in (f"/nonexistent/.claude/projects/{slug}/abc.jsonl", f"{mem}/../abc.jsonl", "/nonexistent/.claude/projects/-Users-jane-code/memory/x.md"):
+        assert approval.protected_path("Read", {"file_path": path}, home="/nonexistent"), path
 
 
 def test_the_guard_hook_blocks_before_any_prompt(home, monkeypatch, capsys):

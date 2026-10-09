@@ -1868,7 +1868,9 @@ def cmd_import(a) -> None:
         if newest and not a.dry_run:   # imported: out of the folder, so the next account's --newest-download cannot take it again
             done = config.home() / "downloads" / "imported"
             done.mkdir(mode=0o700, parents=True, exist_ok=True)
-            shutil.move(str(newest), done / f"{time.strftime('%Y%m%d-%H%M%S')}-{newest.name}")
+            moved = done / f"{time.strftime('%Y%m%d-%H%M%S')}-{newest.name}"
+            shutil.move(str(newest), moved)
+            os.utime(moved)   # its age counts from the import: a CSV downloaded long ago is not pruned on the spot
             for old in done.glob("*.csv"):   # the rows are in the database; the statement itself need not sit there for good
                 if old.stat().st_mtime < time.time() - IMPORTED_KEEP_DAYS * 86400:
                     old.unlink(missing_ok=True)
