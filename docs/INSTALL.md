@@ -228,8 +228,10 @@ first if you want to keep your history: step 5 deletes it and its backups.
    (`finnamon status` lists the item ids). It calls Plaid's `/item/remove`.
 2. **Phone access**, if you ran `finnamon remote`: `finnamon remote --off`.
 3. **The always-on jobs**: `finnamon install --uninstall` stops and removes the daemon, heartbeat and dashboard jobs
-   (LaunchAgents on a Mac, systemd user units on Linux). It prints `removed`. Don't add `--dry-run`: it is ignored there
-   and the jobs are removed anyway.
+   (LaunchAgents on a Mac, systemd user units on Linux) and prints each file it removed; `--dry-run` first lists them and
+   removes nothing. It only touches this home's jobs: if a job under those names was written for another Finnamon home
+   (another `FINNAMON_HOME`), or your shell's `HOME` is not your login's, it refuses and says why. Add `--force` only when
+   that other home is gone and the jobs really are yours to remove.
 4. **Channel mode**, if you turned it on (`finnamon channel on`): `cd ~/.finnamon/assistant && claude plugin uninstall
    telegram@claude-plugins-official --scope local`, then delete `~/.claude/channels/telegram/` unless you use the
    Telegram plugin for something else (it holds the bot token).
