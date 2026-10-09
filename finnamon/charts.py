@@ -236,10 +236,10 @@ def _budget_trend(conn: sqlite3.Connection, months: int = 12) -> list[tuple[dict
         pts = [p for p in budgets.monthly_spent(conn, b["id"], months, as_of) if p[0] >= first] or budgets.monthly_spent(conn, b["id"], 1, as_of)
         labels = _month_labels(pts)
         last = len(pts) - 1
-        # the month its first limit took effect (created_at for a budget older than the limit history): Overall counts it from there
+        # the month its first limit took effect (created_at for a budget older than the limit history), never past today: Overall counts it from there
         since = conn.execute("SELECT COALESCE((SELECT min(effective_from) FROM budget_limit_history WHERE budget_id=:id), "
                              "(SELECT created_at FROM budgets WHERE id=:id))", {"id": b["id"]}).fetchone()[0] or as_of
-        out.append(({**b, "since": since[:7]}, [{"ym": ym, "label": labels[ym] + (" (so far)" if i == last else ""), "spent": v, "limit": lim,
+        out.append(({**b, "since": min(since, as_of)[:7]}, [{"ym": ym, "label": labels[ym] + (" (so far)" if i == last else ""), "spent": v, "limit": lim,
                          "period": "month to date" if i == last else "full month", "status": "over limit" if v > lim else "within limit"}
                         for i, (ym, v, lim) in enumerate(pts)]))
     return out
