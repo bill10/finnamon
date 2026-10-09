@@ -148,6 +148,7 @@ def test_store_and_scheduler_leftovers(home, monkeypatch):
     monkeypatch.setattr(scheduler.shutil, "which", lambda n: f"/opt/tools/bin/{n}")
     assert scheduler.env_path().split(":")[0] == "/opt/tools/bin" and scheduler.exe_args() == ["/opt/tools/bin/finnamon"]
     monkeypatch.setattr(scheduler.Path, "home", lambda: home)
+    monkeypatch.setattr(scheduler, "real_home", lambda: home)
     monkeypatch.setattr(scheduler, "unit_dir", REAL_UNIT_DIR)
     monkeypatch.setenv("FINNAMON_HOME", str(home / ".finnamon"))   # the household's names
     written = scheduler.install("Linux", dry_run=True)
@@ -207,15 +208,15 @@ def test_cmd_install_dry_run_prints_paths_and_scheduler_failures_die(home, capsy
     import subprocess
     from finnamon import cli
     seen = []
-    monkeypatch.setattr(scheduler, "install", lambda os_name=None, dry_run=False: seen.append(dry_run) or ["/LaunchAgents/a.plist", "/LaunchAgents/b.plist"])
+    monkeypatch.setattr(scheduler, "install", lambda os_name=None, dry_run=False, force=False: seen.append(dry_run) or ["/LaunchAgents/a.plist", "/LaunchAgents/b.plist"])
     cli.main(["install", "--dry-run"])
     out = capsys.readouterr().out.splitlines()
     assert seen == [True] and out[1:] == ["/LaunchAgents/a.plist", "/LaunchAgents/b.plist"] and out[0].startswith("would write the assistant bundle to ")
-    monkeypatch.setattr(scheduler, "install", lambda os_name=None, dry_run=False: (_ for _ in ()).throw(RuntimeError("launchctl bootstrap com.finnamon.daemon failed (5): Input/output error")))
+    monkeypatch.setattr(scheduler, "install", lambda os_name=None, dry_run=False, force=False: (_ for _ in ()).throw(RuntimeError("launchctl bootstrap com.finnamon.daemon failed (5): Input/output error")))
     with pytest.raises(SystemExit) as e:
         cli.main(["install"])
     assert e.value.code == 1 and capsys.readouterr().err == "error: launchctl bootstrap com.finnamon.daemon failed (5): Input/output error\n"
-    monkeypatch.setattr(scheduler, "install", lambda os_name=None, dry_run=False: (_ for _ in ()).throw(subprocess.CalledProcessError(1, ["systemctl", "--user", "daemon-reload"])))
+    monkeypatch.setattr(scheduler, "install", lambda os_name=None, dry_run=False, force=False: (_ for _ in ()).throw(subprocess.CalledProcessError(1, ["systemctl", "--user", "daemon-reload"])))
     with pytest.raises(SystemExit) as e:
         cli.main(["install"])
     assert e.value.code == 1 and "systemctl" in capsys.readouterr().err

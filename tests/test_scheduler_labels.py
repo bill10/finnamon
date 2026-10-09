@@ -118,3 +118,83 @@ def test_doctor_reports_linger_on_linux(home, fake_claude, monkeypatch, capsys):
         cli.main(["doctor"])
     out = capsys.readouterr().out
     assert "✗ Linger: linger is off for bill" in out and "fix: sudo loginctl enable-linger" in out
+
+
+def test_a_scratch_HOME_named_dot_finnamon_is_not_the_household(tmp_path, monkeypatch):
+    """The QA incident: HOME=<scratch>, FINNAMON_HOME=$HOME/.finnamon took the plain names and replaced the real jobs.
+    The household is ~/.finnamon of the login (the password database), not of $HOME."""
+    monkeypatch.setattr(scheduler, "real_home", lambda: tmp_path / "real-user")
+    monkeypatch.setattr(scheduler.Path, "home", lambda: tmp_path / "scratch")
+    monkeypatch.setenv("FINNAMON_HOME", str(tmp_path / "scratch" / ".finnamon"))
+    assert scheduler.suffix("Darwin") and scheduler.label("daemon") != "com.finnamon.daemon"
+    monkeypatch.setenv("FINNAMON_HOME", str(tmp_path / "real-user" / ".finnamon"))
+    assert scheduler.suffix("Darwin") == ""
+
+
+@pytest.mark.parametrize("osn", ["Darwin", "Linux"])
+def test_install_and_uninstall_refuse_jobs_that_belong_to_another_home(household_home, tmp_path, monkeypatch, argv, osn):
+    monkeypatch.setattr(scheduler, "unit_dir", REAL_UNIT_DIR)
+    with monkeypatch.context() as m:   # the plain names, written for some other home (the reverse of the incident)
+        m.setenv("FINNAMON_HOME", str(tmp_path / "elsewhere"))
+        m.setattr(scheduler, "suffix", lambda os_name=None: "")
+        scheduler.install(osn)
+    theirs = {p.name: p.read_text() for p in scheduler.unit_dir(osn).iterdir()}
+    argv.clear()
+    for f in (lambda: scheduler.install(osn), lambda: scheduler.uninstall(osn), lambda: scheduler.uninstall(osn, dry_run=True)):
+        with pytest.raises(RuntimeError, match="belongs to another Finnamon home.*elsewhere.*--force"):
+            f()
+    assert argv == [] and {p.name: p.read_text() for p in scheduler.unit_dir(osn).iterdir()} == theirs
+    scheduler.install(osn, force=True)
+    assert all(str(household_home) in p.read_text() for p in scheduler.unit_dir(osn).iterdir() if not p.name.endswith(".timer"))
+
+
+@pytest.mark.parametrize("osn", ["Darwin", "Linux"])
+def test_uninstall_dry_run_names_the_units_and_removes_nothing(household_home, monkeypatch, argv, osn):
+    monkeypatch.setattr(scheduler, "unit_dir", REAL_UNIT_DIR)
+    scheduler.install(osn)
+    before = sorted(p.name for p in scheduler.unit_dir(osn).iterdir())
+    argv.clear()
+    named = scheduler.uninstall(osn, dry_run=True)
+    assert sorted(cli.Path(n).name for n in named) == before and argv == []
+    assert sorted(p.name for p in scheduler.unit_dir(osn).iterdir()) == before
+    assert sorted(cli.Path(n).name for n in scheduler.uninstall(osn)) == before and not list(scheduler.unit_dir(osn).iterdir())
+
+
+def test_cli_uninstall_dry_run(home, monkeypatch, capsys):
+    seen = []
+    monkeypatch.setattr(scheduler, "uninstall", lambda os_name=None, dry_run=False, force=False: seen.append((dry_run, force)) or ["/u/a.plist"])
+    cli.main(["install", "--uninstall", "--dry-run"])
+    assert capsys.readouterr().out.strip() == "would remove /u/a.plist" and seen == [(True, False)]
+    monkeypatch.setattr(scheduler, "uninstall", lambda **k: (_ for _ in ()).throw(RuntimeError("x belongs to another Finnamon home")))
+    with pytest.raises(SystemExit):
+        cli.main(["install", "--uninstall"])
+    assert "belongs to another Finnamon home" in capsys.readouterr().err
+
+
+def test_a_HOME_other_than_the_passwd_one_keeps_its_plain_jobs(tmp_path, monkeypatch):
+    """A person who runs with HOME set elsewhere installed the plain names under that HOME: they stay theirs, and a scratch
+    HOME's files never land in the login's own LaunchAgents."""
+    monkeypatch.setattr(scheduler, "unit_dir", REAL_UNIT_DIR)
+    monkeypatch.setattr(scheduler, "real_home", lambda: tmp_path / "passwd-home")
+    monkeypatch.setattr(scheduler.Path, "home", lambda: tmp_path / "their-home")
+    monkeypatch.setenv("FINNAMON_HOME", str(tmp_path / "their-home" / ".finnamon"))
+    assert scheduler.unit_dir("Darwin") == tmp_path / "their-home" / "Library" / "LaunchAgents"
+    with monkeypatch.context() as m:
+        m.setattr(scheduler, "suffix", lambda os_name=None: "")
+        plain = scheduler.render("Darwin")
+    d = scheduler.unit_dir("Darwin"); d.mkdir(parents=True)
+    for name, body in plain.items():
+        (d / name).write_text(body)
+    assert scheduler.suffix("Darwin") == "" and scheduler.foreign_home("Darwin") is None
+
+
+def test_the_households_home_from_a_scratch_HOME_is_refused(tmp_path, monkeypatch, argv):
+    """FINNAMON_HOME is the real ~/.finnamon but HOME is a scratch dir: the plain names, with HOME=<scratch> baked in."""
+    monkeypatch.setattr(scheduler, "real_home", lambda: tmp_path / "real-user")
+    monkeypatch.setattr(scheduler.Path, "home", lambda: tmp_path / "scratch")
+    monkeypatch.setenv("FINNAMON_HOME", str(tmp_path / "real-user" / ".finnamon"))
+    for f in (lambda: scheduler.install("Darwin"), lambda: scheduler.uninstall("Darwin")):
+        with pytest.raises(RuntimeError, match="not your login's"):
+            f()
+    assert argv == []
+    scheduler.install("Darwin", force=True)

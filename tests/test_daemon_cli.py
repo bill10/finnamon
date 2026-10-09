@@ -376,7 +376,7 @@ def test_channel_command_and_owner_add_by_id(home, conn, fake_claude, monkeypatc
     out, err = capsys.readouterr()
     assert "claude --permission-mode dontAsk --channels plugin:telegram@claude-plugins-official --disallowedTools WebSearch WebFetch" in out and "finnamon install" in out
     assert "bun" in err and "bun.sh" in err
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: [])
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: [])
     cli.main(["install"]); assert "bun" in capsys.readouterr().err   # and again where the jobs are (re)written
     monkeypatch.setattr(cli.shutil, "which", lambda n, path=None: "/opt/bun/bin/bun")
     cli.main(["install"]); out2, err2 = capsys.readouterr()

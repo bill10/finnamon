@@ -89,6 +89,7 @@ def _not_inside_claude(monkeypatch, tmp_path):
     from finnamon import scheduler   # the heartbeat and daemon rotate ~/Library/Logs/finnamon: never the household's real logs
     monkeypatch.setattr(scheduler, "log_dir", lambda: tmp_path / "Logs")
     monkeypatch.setattr(scheduler, "unit_dir", lambda os_name=None: tmp_path / "units")   # nor read or write the real LaunchAgents / systemd units
+    monkeypatch.setattr(scheduler, "real_home", lambda: tmp_path / "user")   # REAL_UNIT_DIR and the household test read it: never the login's real home
     from finnamon import daemon   # every poll-loop test runs a bot; tests/test_demo.py checks the real guard (REAL_BOT_CONFIGURED)
     monkeypatch.setattr(daemon, "bot_configured", lambda: True)
     from finnamon import remote   # doctor asks tailscale; no test may reach the machine's real one (tests/test_remote.py fakes it)
@@ -125,6 +126,7 @@ def household_home(tmp_path, monkeypatch):
     """FINNAMON_HOME at the default ~/.finnamon, with ~ a scratch directory: what the household's own jobs are named for."""
     from finnamon import scheduler
     monkeypatch.setattr(scheduler.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(scheduler, "real_home", lambda: tmp_path)
     monkeypatch.setenv("FINNAMON_HOME", str(tmp_path / ".finnamon"))
     return tmp_path / ".finnamon"
 

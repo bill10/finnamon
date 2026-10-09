@@ -214,7 +214,7 @@ def test_channel_mode_is_refused_for_codex(conn):
 def init(monkeypatch, answers, *argv):
     from finnamon import owners, plaid_api
     monkeypatch.setattr(plaid_api, "institution_get", lambda i, env=None: {"institution": {"name": "Chase"}})
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: [])
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: [])
     monkeypatch.setattr(owners, "add_first", lambda conn, owner, code, **kw: (store.set_state(conn, "chat_id", 555), {"chat_id": 555})[1])
     monkeypatch.setattr(cli, "_setup_dashboard", lambda a: True)
     it = iter(answers); monkeypatch.setattr("builtins.input", lambda prompt="": next(it))

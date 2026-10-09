@@ -333,7 +333,7 @@ def test_alerts_render_tidy_every_merchant_site(conn):
     texts = {k: notify.render(conn.execute("SELECT * FROM alerts WHERE key=?", (k,)).fetchone()) for k in ("n1", "a1", "a2")}
     assert "1st Security Ban (monthly pa)" in texts["n1"] and "Jane" not in texts["n1"]
     assert "$60.00 to 1st Security Ban (monthly pa)</b>, Sep 16" in texts["a1"] and "Jane" not in texts["a1"]   # name falls back when merchant is absent
-    assert texts["a2"].endswith("<b>$60.00 to a transaction</b>. No name at all.")                            # no merchant, no name, no account, no date
+    assert texts["a2"].endswith("<b>$60.00 to a transaction</b>. No name at all." + notify.EXPECTED)                            # no merchant, no name, no account, no date
 
 
 def test_summary_recurring_tidied_one_per_line_and_null_category_kept(conn):
@@ -523,3 +523,27 @@ def test_roundup_week_key_across_the_year_boundary(conn, tg):
     seed(conn)
     notify.send_roundup(conn, "2026-12-27 09:00:00")
     assert notify.send_roundup(conn, "2027-01-03 09:00:00") and notify.send_roundup(conn, "2027-01-04 09:00:00") is None and len(tg.sent) == 2
+
+
+def test_cli_notify_exits_non_zero_when_telegram_refuses(home, monkeypatch, capsys):
+    """QA: a bad token printed {"sent": 0}, logged a warning and exited 0."""
+    import pytest
+    from finnamon import cli, store, telegram
+    conn = store.connect()
+    conn.execute("INSERT INTO alerts (kind, tier, key, payload_json, as_of) VALUES ('low_balance','rule','k','{}','2026-10-01')")
+    with pytest.raises(SystemExit):   # no chat yet: the most common fresh-install reason nothing arrives
+        cli.main(["notify"])
+    assert "no household chat recorded yet" in capsys.readouterr().err
+    store.set_state(conn, "chat_id", 1)
+    monkeypatch.setattr(telegram, "send_message", lambda *a, **k: (_ for _ in ()).throw(telegram.TelegramError(401, "Unauthorized")))
+    for argv in (["notify"], ["notify", "--roundup"]):
+        with pytest.raises(SystemExit) as e:
+            cli.main(argv)
+        assert e.value.code == 1
+        assert "error: notify: Telegram rejected the bot token (401: Unauthorized)" in capsys.readouterr().err
+    conn.execute("DELETE FROM alerts")
+    with pytest.raises(SystemExit):   # nothing pending: the roundup alone failing still fails the command
+        cli.main(["notify", "--roundup"])
+    monkeypatch.setattr(telegram, "send_message", lambda *a, **k: 7)
+    cli.main(["notify", "--roundup"])   # and a good send exits 0
+    assert '"roundup_message_id": 7' in capsys.readouterr().out

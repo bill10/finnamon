@@ -272,6 +272,7 @@ details.mergebox p.muted { margin: 0 0 8px; font-size: 13px; }
 .eactions .err { flex: 1 0 100%; margin-right: auto; color: var(--error); font-size: 13px; }
 
 /* budgets */
+#budgets { align-self: start; }   /* its own height: stretched to a long alerts list, a few categories left the card mostly blank */
 .overall .row { align-items: baseline; }
 .overall .amt { font-size: 22px; font-weight: 700; }
 .overall .amt small { font-size: 13px; font-weight: 400; color: var(--muted); }
@@ -371,7 +372,7 @@ body.editing #intercom-btn { display: none; }   /* Manage budgets, Property: Sav
 #intercom-btn svg.ic { width: 28px; height: 28px; }
 #intercom-btn .dot { position: absolute; top: 6px; right: 6px; width: 12px; height: 12px; border-radius: 50%; background: transparent; border: 2px solid transparent; }
 #intercom-btn[data-state="QUESTION"] .dot, #intercom-btn.unread .dot { background: var(--gold); border-color: var(--bg); }
-#intercom-btn[data-state="DOWN"] .dot { background: var(--error); border-color: var(--bg); }
+#intercom-btn[data-state="DOWN"] .dot, #intercom-btn[data-state="SIGNED_OUT"] .dot { background: var(--error); border-color: var(--bg); }
 #intercom-btn[data-state="WORKING"] .dot { background: #fff; border-color: var(--bg); animation: pulse 1.2s infinite; }
 @keyframes pulse { 50% { opacity: .2; } }
 #intercom { position: fixed; right: 22px; bottom: 90px; width: 440px; height: min(640px, calc(100vh - 120px)); background: var(--term-bg); color: var(--ink); border: 1px solid var(--term-line); border-radius: 8px; box-shadow: 0 20px 56px rgba(27,27,27,.25); display: flex; flex-direction: column; overflow: hidden; z-index: 29; transition: transform .18s ease, opacity .18s ease; }

@@ -5,7 +5,7 @@ import shutil
 
 import pytest
 
-from finnamon import cli, config, plaid_api, scheduler, secrets, store
+from finnamon import cli, config, plaid_api, scheduler, secrets, store, telegram
 from finnamon.plaid_api import PlaidError
 from tests.conftest import seed
 
@@ -172,3 +172,14 @@ def test_fetch_by_ai_extension_line(home, units, fake_claude, capsys, monkeypatc
     monkeypatch.setattr(cli, "claude_version", lambda: (2, 1, 100))
     out = doctor(capsys)[1]
     assert line(out, "Fetch by AI (extension)").startswith("✗") and "claude update" in out
+
+
+def test_a_rejected_bot_token_is_named_as_such(home, units, fake_claude, tg, capsys, monkeypatch):
+    secrets.write({"client_id": "cid", "sandbox_secret": "sb"}, {"bot_token": "000000:DUMMY"}, {})
+    monkeypatch.setattr(plaid_api, "institution_get", lambda i, env=None: {"institution": {"name": "Chase"}})   # never the network
+    monkeypatch.setattr(telegram, "get_me", lambda token=None: (_ for _ in ()).throw(telegram.TelegramError(401, "Unauthorized")))
+    _, out = doctor(capsys)
+    assert line(out, "Telegram bot").startswith("✗") and "Telegram rejected the bot token (401: Unauthorized)" in out
+    monkeypatch.setattr(telegram, "get_me", lambda token=None: (_ for _ in ()).throw(telegram.TelegramError(0, "URLError: no route")))
+    _, out = doctor(capsys)
+    assert "could not reach Telegram (URLError: no route)" in line(out, "Telegram bot")

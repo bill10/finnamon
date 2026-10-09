@@ -383,6 +383,32 @@ def _check_claude_code() -> None:
     print(f"  {'✓' if ok else '!'} {msg}")
 
 
+def _claude_auth(exe: str) -> dict:
+    r = subprocess.run([exe, "--strict-mcp-config", "auth", "status", "--json"],
+                       capture_output=True, text=True, timeout=CLAUDE_AUTH_TIMEOUT_S)
+    status = json.loads(r.stdout)
+    if not isinstance(status, dict):
+        raise ValueError(f"unexpected output: {r.stdout[:200]!r}")
+    return status
+
+
+def _agent_logged_in(kind: str) -> bool | None:
+    """Whether the assistant's CLI is signed in; None when that cannot be told (not installed, a check that failed).
+    The dashboard holds its session back on False only: a logged-out claude opens on its first-run setup screens."""
+    if kind == "codex":
+        exe = codex.binary()
+        if not exe:
+            return None
+        ok, msg = codex.logged_in(exe)
+        return None if msg.startswith("could not run") else ok   # a hung or failed check is not a sign-out
+    exe = claude_runner.binary()
+    try:
+        v = _claude_auth(exe).get("loggedIn") if exe else None
+        return v if isinstance(v, bool) else None   # an auth method that reports no loggedIn must not hold the chat back
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, ValueError):
+        return None
+
+
 def _claude_code_status() -> tuple[bool, str]:
     """Is Claude Code installed and logged in? `auth status --json` is a local config read, not a model call, so this
     spends no tokens."""
@@ -394,11 +420,7 @@ def _claude_code_status() -> tuple[bool, str]:
         # --strict-mcp-config: the same seal every other claude child Finnamon spawns carries (claude_runner.run,
         # the eval lane); a plain `claude` in this checkout loads the project-local Telegram channel plugin, whose
         # second MCP server copy kills the household session's copy (CLAUDE.md, docs/DEVELOPMENT.md).
-        r = subprocess.run([exe, "--strict-mcp-config", "auth", "status", "--json"],
-                           capture_output=True, text=True, timeout=CLAUDE_AUTH_TIMEOUT_S)
-        status = json.loads(r.stdout)
-        if not isinstance(status, dict):
-            raise ValueError(f"unexpected output: {r.stdout[:200]!r}")
+        status = _claude_auth(exe)
     except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, ValueError) as e:
         return False, f"could not check whether Claude Code is logged in: {e}"
     if status.get("loggedIn"):
@@ -2068,9 +2090,14 @@ def cmd_notify(a) -> None:
     if a.restarted:   # the dashboard, after a restart cut a channel-mode turn short (web/server.js restartNotice)
         chat = store.get_state(conn, "chat_id")
         out({"sent": telegram.send_message(chat, notify.RESTARTED) if chat else None}); return
+    if not store.get_state(conn, "chat_id") and notify.pending(conn):
+        die("notify: no household chat recorded yet, so nothing can be sent; finnamon init gives you a code to send the bot")
+    notify.last_error = None
     n = notify.send_pending(conn)
     r = notify.send_roundup(conn, store.now_local(), force=a.roundup)
     out({"sent": n, "roundup_message_id": r})
+    if notify.last_error:   # the daemon retries a failed send next cycle; a person at a terminal must see it failed
+        die(f"notify: {telegram.why(notify.last_error)}")
 
 
 def cmd_run(a) -> None:
@@ -2111,7 +2138,7 @@ def cmd_status(a) -> None:
          "pending_alerts": conn.execute(f"SELECT count(*) FROM alerts WHERE {notify.SENDABLE}").fetchone()[0],
          "untriaged": len(triage.untriaged(conn)), "agent": store.assistant_kind(conn), "extension_import": extension_problem(conn) is None, "assistant": str(assistant.dir()), "assistant_problems": claude_runner.harness_problems(),
          "scheduler": scheduler.status(), "claude": shutil.which("claude"), "codex": codex.binary(), "codex_min_version": ".".join(map(str, codex.MIN_VERSION)), "finnamon": shutil.which("finnamon")}
-        | _stray_plugin_report())
+        | _stray_plugin_report() | ({"logged_in": _agent_logged_in(store.assistant_kind(conn))} if a.login else {}))
 
 
 def cmd_doctor(a) -> None:
@@ -2168,8 +2195,8 @@ def cmd_doctor(a) -> None:
             privacy = not me.get("can_read_all_group_messages")
             check(None if privacy else True, "Telegram bot", f"@{me.get('username')}" + (": privacy mode is on, so it cannot read a group" if privacy else ""),
                   "in @BotFather: /setprivacy → Disable" if privacy else "")
-        except Exception as e:  # noqa: BLE001 - a bad token, a network blip: both are this line's answer
-            check(False, "Telegram bot", f"Telegram rejected the token or could not be reached: {e}", "check the token with @BotFather, then finnamon init")
+        except telegram.TelegramError as e:   # a bad token, a network blip: both are this line's answer
+            check(False, "Telegram bot", telegram.why(e), "check the token with @BotFather, then finnamon init")
 
     # Read-only: store.connect() would create a missing database and migrate an existing one under a daemon that may
     # still run the old code (a `git pull` before `finnamon update`).
@@ -2495,14 +2522,20 @@ def cmd_install(a) -> None:
     if _from_agent():
         die("`finnamon install` reprovisions the services and retires the household's conversation, which in channel mode is the session you are talking to; run it in a terminal on the Finnamon box")
     if a.uninstall:
-        scheduler.uninstall(); print("removed"); return
+        try:
+            gone = scheduler.uninstall(dry_run=a.dry_run, force=a.force)
+        except RuntimeError as e:
+            die(str(e))
+        verb = "would remove" if a.dry_run else "removed"
+        print("\n".join(f"{verb} {f}" for f in gone) or ("nothing to remove: this home has no jobs installed"))
+        return
     if not _retire_intercom_session(a.yes, dry_run=a.dry_run):
         return
     _install_bundle(dry_run=a.dry_run)   # before the jobs come up: the daemon and the dashboard start their sessions in it
     if not a.dry_run and config.db_path().exists():
         _register_channel_plugin(store.connect(), force=a.force)
     try:
-        files = scheduler.install(dry_run=a.dry_run)
+        files = scheduler.install(dry_run=a.dry_run, force=a.force)
     except (RuntimeError, subprocess.CalledProcessError) as e:
         die(str(e))
     for f in files:
@@ -2828,7 +2861,7 @@ def cmd_alerts(a) -> None:
           "telegram_message_id": r["telegram_message_id"], "verdict": r["verdict"], "confidence": r["confidence"], "reason": r["reason"],
           "resolved_at": r["resolved_at"], "resolution": r["resolution"], "suppression_id": r["suppression_id"],
           "folded": [f["id"] for f in fam if f["id"] != r["id"]],
-          "text": notify.render(r), "payload": json.loads(r["payload_json"]),
+          "text": notify.render(r, cue=False), "payload": json.loads(r["payload_json"]),
           **({"reconnect": item, "page_text": notify.render(r, page=True)} if (item := notify.relogin_item(r)) else {})} for r, fam in shown])
     print(render.alerts(rows)) if _human(a) else out(rows)
 
@@ -2972,7 +3005,8 @@ this on its schedule; run it by hand in a terminal on the Finnamon box after a r
 Next: new alerts go out with the daemon's next pass.""",
     "install": """(Re)install the schedule: the daemon and the dashboard as services, the assistant's directory, and (channel mode)
 the Telegram plugin. Starts the household's Claude conversation fresh (asks first; --yes skips). --dry-run shows what it
-would do; --uninstall removes the services. Run it in a terminal on the Finnamon box.
+would do; --uninstall removes the services (with --dry-run, names them and removes nothing). Each FINNAMON_HOME has its
+own job names; one installed for another home is left alone unless --force. Run it in a terminal on the Finnamon box.
 Next: finnamon status to check the daemon is running.""",
     "update": """Pull the latest Finnamon, migrate, rewrite the assistant's directory, and restart whatever changed, keeping the
 household's Claude conversation. Run it in a terminal on the Finnamon box.
@@ -3071,9 +3105,9 @@ def build_parser() -> argparse.ArgumentParser:
     s = sp.add_parser("run"); s.add_argument("--no-sync", action="store_true"); s.add_argument("--no-triage", action="store_true"); s.add_argument("--no-notify", action="store_true"); s.set_defaults(fn=cmd_run)
     sp.add_parser("daemon").set_defaults(fn=cmd_daemon)
     sp.add_parser("heartbeat").set_defaults(fn=cmd_heartbeat)
-    sp.add_parser("status").set_defaults(fn=cmd_status)
+    s = sp.add_parser("status"); s.add_argument("--login", action="store_true", help="also ask whether the assistant's CLI is signed in (logged_in: true, false, or null when it cannot tell)"); s.set_defaults(fn=cmd_status)
     sp.add_parser("doctor", help="check each prerequisite and piece of setup, with the fix for each").set_defaults(fn=cmd_doctor)
-    s = sp.add_parser("install", help="(re)install the scheduler"); s.add_argument("--dry-run", action="store_true"); s.add_argument("--uninstall", action="store_true"); s.add_argument("--yes", action="store_true", help="do not ask before retiring the assistant's conversation"); s.add_argument("--force", action="store_true", help="register the Telegram channel plugin even outside ~/.finnamon/assistant"); s.set_defaults(fn=cmd_install)
+    s = sp.add_parser("install", help="(re)install the scheduler"); s.add_argument("--dry-run", action="store_true"); s.add_argument("--uninstall", action="store_true"); s.add_argument("--yes", action="store_true", help="do not ask before retiring the assistant's conversation"); s.add_argument("--force", action="store_true", help="register the Telegram channel plugin even outside ~/.finnamon/assistant, and take over (or remove) job names installed for another FINNAMON_HOME"); s.set_defaults(fn=cmd_install)
     s = sp.add_parser("update", help="pull and restart what went stale, keeping the household's Claude session (install reprovisions and starts it fresh)")
     s.add_argument("--no-pull", action="store_true", help="adopt the tree as it stands, without pulling")
     s.add_argument("--all", action="store_true", help="restart the daemon and the dashboard whatever changed")

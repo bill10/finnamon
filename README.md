@@ -54,10 +54,11 @@ I recategorized a lot by hand. Now the AI does it, and I can just ask how we're 
 
 ### What lands in your Telegram
 
-> ⚠️ **Possible duplicate:** Shell $52.18 on Chase Checking …4821, Sep 17 and Sep 18. Same merchant, same amount.
-> Reply *it's normal* if it was meant.
+> ⚠️ **Possible duplicate:** Shell $52.18 on Chase Checking …4821, charged Sep 17 and again Sep 18. Same merchant,
+> same amount. Reply *it's normal* if it was meant.
 
-> 🔁 **New recurring charge:** Peloton $44.00 monthly on Sapphire …7710, first seen Aug 29.
+> 🔁 **New recurring charge:** Peloton $44.00 monthly on Sapphire …7710, first seen Aug 29. Expected? Reply *it's normal*
+> and I won't ask again.
 
 > 📊 **Dining on pace to go over:** $248.00 spent by day 20, tracking to $372.00 against your $350.00 budget.
 

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from finnamon import cli, claude_runner, config, detect, investments, link, notify, owners, plaid_api, run as runmod, scheduler, store, sync
+from finnamon import cli, claude_runner, codex, config, detect, investments, link, notify, owners, plaid_api, run as runmod, scheduler, store, sync
 from finnamon.plaid_api import PlaidError
 from tests.conftest import AS_OF, seed, txn
 
@@ -29,7 +29,7 @@ def test_init_then_link_flow(home, tg, fake_claude, capsys, monkeypatch, tmp_pat
     (tmp_path / "web" / "node_modules" / "node-pty").mkdir(parents=True); (tmp_path / "web" / "package.json").write_text("{}")  # dashboard found, never prompts
     monkeypatch.setattr(scheduler, "repo_dir", lambda: str(tmp_path))
     monkeypatch.setattr(plaid_api, "institution_get", lambda i, env=None: {"institution": {"name": "Chase"}})
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: ["/LaunchAgents/com.finnamon.daemon.plist"])
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: ["/LaunchAgents/com.finnamon.daemon.plist"])
     monkeypatch.setattr(owners, "add_first", lambda conn, owner, code, **kw: (store.set_state(conn, "chat_id", 555), {"chat_id": 555})[1])
     answers(monkeypatch, "cid", "prod-sec", "", "123:token")
     out = run_cli(capsys, "init", "--owner", "bill", "--yes")
@@ -94,7 +94,7 @@ def test_init_skips_blank_plaid_keys_and_telegram(home, tg, fake_claude, capsys,
     (tmp_path / "web" / "node_modules" / "node-pty").mkdir(parents=True); (tmp_path / "web" / "package.json").write_text("{}")
     monkeypatch.setattr(scheduler, "repo_dir", lambda: str(tmp_path))
     installed = []
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: installed.append(1) or [])
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: installed.append(1) or [])
     monkeypatch.setattr(plaid_api, "institution_get", lambda i, env=None: pytest.fail("a skipped step must not call Plaid"))
     answers(monkeypatch, "", "")   # client_id, bot token
     out = run_cli(capsys, "init", "--owner", "bill", "--yes")
@@ -113,7 +113,7 @@ def test_init_skipping_a_rejected_saved_bot_drops_it_and_sends_nothing(home, tg,
     """A re-run whose saved token is now rejected, then skipped: the token goes (the daemon stops polling it) and init
     ends without trying to message a chat it cannot reach."""
     monkeypatch.setattr(scheduler, "repo_dir", lambda: str(tmp_path))
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: [])
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: [])
     from finnamon import secrets
     secrets.write({}, {"bot_token": "123:revoked"}, {})
     store.set_state(store.connect(), "chat_id", 555)
@@ -128,7 +128,7 @@ def test_init_reports_sandbox_only_plaid_keys(home, tg, fake_claude, capsys, mon
     rather than failing against production, and says plainly that it's sandbox only."""
     (tmp_path / "web" / "node_modules" / "node-pty").mkdir(parents=True); (tmp_path / "web" / "package.json").write_text("{}")
     monkeypatch.setattr(scheduler, "repo_dir", lambda: str(tmp_path))
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: [])
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: [])
     monkeypatch.setattr(owners, "add_first", lambda conn, owner, code, **kw: (store.set_state(conn, "chat_id", 555), {"chat_id": 555})[1])
     seen_envs = []
     monkeypatch.setattr(plaid_api, "institution_get", lambda i, env=None: seen_envs.append(env) or {"institution": {"name": "First Platypus Bank"}})
@@ -295,8 +295,8 @@ def test_command_surface(home, tg, capsys, monkeypatch, tmp_path):
         run_cli(capsys, "run")
     assert "another run is in progress" in capsys.readouterr().err
     lock.close()
-    monkeypatch.setattr(scheduler, "uninstall", lambda os_name=None: None)
-    assert run_cli(capsys, "install", "--uninstall").strip() == "removed"
+    monkeypatch.setattr(scheduler, "uninstall", lambda os_name=None, dry_run=False, force=False: ["/u/x.plist"])
+    assert run_cli(capsys, "install", "--uninstall").strip() == "removed /u/x.plist"
     started = []
     monkeypatch.setattr("finnamon.daemon.Daemon", lambda: type("D", (), {"start": lambda self: started.append(1)})())
     run_cli(capsys, "daemon")
@@ -408,7 +408,7 @@ def test_triage_set_again_repairs_the_sentence_and_keeps_the_rest(home, capsys, 
 def test_init_sets_up_the_dashboard_when_node_is_there(home, tg, capsys, monkeypatch, tmp_path):
     """Step 4 installs web/ with npm and the closing message points at the page; without Node it says how to get it."""
     monkeypatch.setattr(plaid_api, "institution_get", lambda i, env=None: {"institution": {"name": "Chase"}})
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: ["/LaunchAgents/com.finnamon.web.plist"])
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: ["/LaunchAgents/com.finnamon.web.plist"])
     monkeypatch.setattr(owners, "add_first", lambda conn, owner, code, **kw: (store.set_state(conn, "chat_id", 555), {"chat_id": 555})[1])
     (tmp_path / "web").mkdir(); (tmp_path / "web" / "package.json").write_text("{}")
     monkeypatch.setattr(scheduler, "repo_dir", lambda: str(tmp_path))
@@ -456,7 +456,7 @@ def test_init_asks_about_the_dashboard_without_yes(home, tg, capsys, monkeypatch
     """Without --yes the dashboard question is asked: '' and 'y' install, 'n' skips it and drops it from the scheduler
     line and the closing notes; npm missing from PATH is taken from next to node."""
     monkeypatch.setattr(plaid_api, "institution_get", lambda i, env=None: {"institution": {"name": "Chase"}})
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: [])
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: [])
     monkeypatch.setattr(owners, "add_first", lambda conn, owner, code, **kw: (store.set_state(conn, "chat_id", 555), {"chat_id": 555})[1])
     (tmp_path / "web").mkdir(); (tmp_path / "web" / "package.json").write_text("{}")
     monkeypatch.setattr(scheduler, "repo_dir", lambda: str(tmp_path))
@@ -778,7 +778,7 @@ def test_update_dry_run_never_takes_the_lock_or_moves_the_schema(scheduled, home
 def test_install_asks_before_retiring_the_conversation(home, capsys, monkeypatch):
     """There is no install-but-keep-the-conversation, so declining stops the whole command: `update` is that command."""
     ran = []
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: ran.append(1) or [])
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: ran.append(1) or [])
     f = config.home() / "intercom.json"
     old = "11111111-2222-3333-4444-555555555555"
     f.write_text(json.dumps({"id": old, "created": True}))
@@ -798,7 +798,7 @@ def test_install_only_asks_when_there_is_something_to_retire(home, capsys, monke
     """A question about ending the household's conversation is only honest when the command is about to end one:
     a dry run ends nothing, --yes was already answered, and a file with nothing readable in it holds no session."""
     ran = []
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: ran.append(len(ran) + 1) or [])
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: ran.append(len(ran) + 1) or [])
     f = config.home() / "intercom.json"
     old = "11111111-2222-3333-4444-555555555555"
     f.write_text(json.dumps({"id": old, "created": True}))
@@ -822,7 +822,7 @@ def test_install_only_asks_when_there_is_something_to_retire(home, capsys, monke
 
 def test_install_retires_a_codex_thread_with_codex_s_resume_and_keeps_its_cli(home, capsys, monkeypatch):
     # Value: protects=a Codex household's retired thread stays reachable (codex resume, Finnamon's CODEX_HOME) and its record keeps the CLI; fails_when=install prints `claude --resume <codex id>` or drops kind, so server.js would read the record as Claude's; why_new=every retire test writes a Claude record; seam=none
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: [])
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: [])
     f = config.home() / "intercom.json"
     tid = "01a10ede-2d6a-7e50-9545-fb0a1c756713"
     f.write_text(json.dumps({"id": tid, "created": True, "kind": "codex", "prev": "11111111-2222-3333-4444-555555555555"}))
@@ -833,7 +833,7 @@ def test_install_retires_a_codex_thread_with_codex_s_resume_and_keeps_its_cli(ho
 
 def test_install_without_a_terminal_refuses_rather_than_retiring(home, capsys, monkeypatch):
     """Nobody to answer is not the same as yes; the conversation is not dropped by a script that meant `update`."""
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: [])
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: [])
     f = config.home() / "intercom.json"
     f.write_text(json.dumps({"id": "11111111-2222-3333-4444-555555555555", "created": True}))
     def eof(prompt=""): raise EOFError
@@ -853,7 +853,7 @@ def test_the_dashboard_and_the_cli_agree_on_the_intercom_file():
 def test_a_record_we_did_not_write_is_left_alone(home, capsys, monkeypatch):
     """Valid JSON is not the same as a record: `null`, a list or a number would have crashed the whole install on
     `.get`, before the services were touched, with the traceback landing where the confirmation should have been."""
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: [])
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: [])
     f = config.home() / config.INTERCOM_FILE
     for junk in ("null", "[1, 2]", "5", '"an id"'):
         f.write_text(junk)
@@ -864,7 +864,7 @@ def test_a_record_we_did_not_write_is_left_alone(home, capsys, monkeypatch):
 def test_the_id_the_dashboard_could_not_resume_is_printed_too(home, capsys, monkeypatch):
     """server.js keeps the id it replaced as `prev` because nothing else can reach that transcript again. Deleting the
     file is the only thing that can lose it, so retiring says it out loud."""
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: [])
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: [])
     cur, gone = "11111111-2222-3333-4444-555555555555", "99999999-8888-7777-6666-555555555555"
     (config.home() / config.INTERCOM_FILE).write_text(json.dumps({"id": cur, "created": True, "prev": gone}))
     out = run_cli(capsys, "install", "--yes")
@@ -875,7 +875,7 @@ def test_the_way_back_is_sealed_against_the_telegram_plugin(home, capsys, monkey
     """The transcript lives under this directory, so the printed command runs here, and a plain `claude` here starts a
     second copy of the channel plugin's server that kills the household session's. The way back must not cost them
     Telegram (v0.7.1.0)."""
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: [])
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: [])
     (config.home() / config.INTERCOM_FILE).write_text(json.dumps(
         {"id": "11111111-2222-3333-4444-555555555555", "prev": "99999999-8888-7777-6666-555555555555"}))
     printed = [l for l in run_cli(capsys, "install", "--yes").splitlines() if "claude" in l]
@@ -885,7 +885,7 @@ def test_the_way_back_is_sealed_against_the_telegram_plugin(home, capsys, monkey
 def test_install_refuses_to_run_from_a_claude_session(home, capsys, monkeypatch):
     """AGENTS.md lists install among the commands that refuse a Claude session, and this is what makes that true: the
     conversation it retires is, in channel mode, the one the assistant is speaking in."""
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: [])
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: [])
     f = config.home() / config.INTERCOM_FILE
     f.write_text(json.dumps({"id": "11111111-2222-3333-4444-555555555555", "created": True}))
     monkeypatch.setenv("CLAUDECODE", "1")
@@ -897,18 +897,18 @@ def test_install_refuses_to_run_from_a_claude_session(home, capsys, monkeypatch)
 def test_uninstall_leaves_the_conversation_alone(home, capsys, monkeypatch):
     """Taking the jobs away is not reprovisioning: there is no fresh assistant coming, so there is nothing to retire
     and nothing to ask about."""
-    monkeypatch.setattr(scheduler, "uninstall", lambda os_name=None: None)
+    monkeypatch.setattr(scheduler, "uninstall", lambda os_name=None, dry_run=False, force=False: ["/u/x.plist"])
     monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail("uninstall has no new session to make room for"))
     f = config.home() / "intercom.json"
     f.write_text(json.dumps({"id": "11111111-2222-3333-4444-555555555555", "created": True}))
-    assert run_cli(capsys, "install", "--uninstall").strip() == "removed"
+    assert run_cli(capsys, "install", "--uninstall").strip() == "removed /u/x.plist"
     assert f.exists(), "the jobs are gone but the conversation is still resumable when they come back"
 
 
 def test_the_question_defaults_to_keeping_the_conversation(home, capsys, monkeypatch):
     """[y/N]: a tired Enter must keep the household's assistant, and only an actual yes may end it, however it is typed."""
     ran = []
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: ran.append(1) or [])
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: ran.append(1) or [])
     f = config.home() / "intercom.json"
     f.write_text(json.dumps({"id": "11111111-2222-3333-4444-555555555555", "created": True}))
 
@@ -925,7 +925,7 @@ def test_the_question_defaults_to_keeping_the_conversation(home, capsys, monkeyp
 def test_a_record_with_no_id_is_nothing_to_retire(home, capsys, monkeypatch):
     """The dashboard writes this file before it knows an id is worth keeping; a record without one holds no
     conversation, so there is nothing to warn about and nothing to print a way back to."""
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: [])
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: [])
     monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail("no id means no conversation to end"))
     f = config.home() / "intercom.json"
     f.write_text(json.dumps({"created": False}))
@@ -936,7 +936,7 @@ def test_a_record_with_no_id_is_nothing_to_retire(home, capsys, monkeypatch):
 def test_the_way_back_is_printed_before_the_install_can_fail(home, capsys, monkeypatch):
     """The id is the only handle on a transcript that is still on disk. A reload that blows up after the file is gone
     must not take it with it, or the household's conversation is unreachable for good."""
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: (_ for _ in ()).throw(RuntimeError("launchctl bootstrap failed")))
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: (_ for _ in ()).throw(RuntimeError("launchctl bootstrap failed")))
     old = "11111111-2222-3333-4444-555555555555"
     (config.home() / "intercom.json").write_text(json.dumps({"id": old, "created": True}))
     with pytest.raises(SystemExit):
@@ -1093,7 +1093,7 @@ def test_update_check_reports_what_the_pull_would_bring_and_changes_nothing(sche
 
 def _init_with_dashboard(home, tg, capsys, monkeypatch, tmp_path, *vals):
     monkeypatch.setattr(plaid_api, "institution_get", lambda i, env=None: {"institution": {"name": "Chase"}})
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: [])
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: [])
     monkeypatch.setattr(owners, "add_first", lambda conn, owner, code, **kw: (store.set_state(conn, "chat_id", 555), {"chat_id": 555})[1])
     (tmp_path / "web" / "node_modules" / "node-pty").mkdir(parents=True, exist_ok=True); (tmp_path / "web" / "package.json").write_text("{}")
     monkeypatch.setattr(scheduler, "repo_dir", lambda: str(tmp_path))
@@ -1113,7 +1113,7 @@ def test_init_defaults_a_new_bot_to_session_but_keeps_an_existing_mode(home, tg,
 
 def test_init_without_a_dashboard_leaves_inbound_alone(home, tg, capsys, monkeypatch, tmp_path):
     monkeypatch.setattr(plaid_api, "institution_get", lambda i, env=None: {"institution": {"name": "Chase"}})
-    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False: [])
+    monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: [])
     monkeypatch.setattr(owners, "add_first", lambda conn, owner, code, **kw: (store.set_state(conn, "chat_id", 555), {"chat_id": 555})[1])
     monkeypatch.setattr(scheduler, "repo_dir", lambda: str(tmp_path))
     monkeypatch.setattr(cli.shutil, "which", lambda exe: None)   # no Node: session mode would have nothing to type into
@@ -1138,3 +1138,22 @@ def test_session_tip_is_shown_once_and_only_off_session(home, tg, capsys, mode, 
 def test_session_tip_needs_a_bot(home, capsys):
     cli._session_tip(store.connect())
     assert capsys.readouterr().out == ""
+
+
+def test_status_login_says_whether_the_assistant_is_signed_in(home, fake_claude, capsys, monkeypatch):
+    """The dashboard holds its session back on logged_in false (web/server.js main), instead of showing claude's first-run screens."""
+    assert "logged_in" not in json.loads(run_cli(capsys, "status")), "plain status spawns no claude"
+    monkeypatch.setenv("CLAUDE_FAKE_RESULT", json.dumps({"loggedIn": False}))
+    assert json.loads(run_cli(capsys, "status", "--login"))["logged_in"] is False
+    monkeypatch.setenv("CLAUDE_FAKE_RESULT", json.dumps({"loggedIn": True}))
+    assert json.loads(run_cli(capsys, "status", "--login"))["logged_in"] is True
+    monkeypatch.setenv("CLAUDE_FAKE_RESULT", "not json")
+    assert json.loads(run_cli(capsys, "status", "--login"))["logged_in"] is None, "a check that fails holds nothing back"
+    monkeypatch.setenv("CLAUDE_FAKE_RESULT", json.dumps({"authMethod": "apiKey"}))
+    assert json.loads(run_cli(capsys, "status", "--login"))["logged_in"] is None, "no loggedIn key is not a sign-out"
+    store.set_setting(store.connect(), "assistant", "codex")
+    monkeypatch.setattr(codex, "binary", lambda: "/x/codex")
+    monkeypatch.setattr(codex, "logged_in", lambda exe: (False, "Not logged in"))
+    assert json.loads(run_cli(capsys, "status", "--login"))["logged_in"] is False
+    monkeypatch.setattr(codex, "logged_in", lambda exe: (False, "could not run `codex login status`: timed out"))
+    assert json.loads(run_cli(capsys, "status", "--login"))["logged_in"] is None

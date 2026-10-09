@@ -22,24 +22,62 @@ from . import assistant, config
 LABEL = "com.finnamon"   # the household's (default FINNAMON_HOME) labels; any other home gets suffix()
 LOG_MAX_BYTES = 5 * 1024 * 1024   # macOS: a log past this is rotated by the next heartbeat or daemon start
 LOG_KEEP = 3                      # name.log.1 .. name.log.3
+JOBS = ("daemon", "heartbeat", "web")
+
+
+def real_home() -> Path:
+    """The login's home from the password database, not $HOME: launchd labels and systemd user units are per user, so a
+    shell with HOME pointed at a scratch directory is still installing into the one user's job namespace."""
+    try:
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except KeyError:   # a uid with no passwd entry (a container's --user N)
+        return Path.home()
+
+
+def _unit_home(text: str, darwin: bool) -> str | None:
+    """The FINNAMON_HOME a rendered plist or unit was written for."""
+    m = re.search(r"<key>FINNAMON_HOME</key><string>([^<]*)</string>" if darwin else r"^Environment=FINNAMON_HOME=(.*)$", text, re.M)
+    return m.group(1) if m else None
+
+
+def _same_home(a, b) -> bool:
+    return Path(a).expanduser().resolve() == Path(b).expanduser().resolve()   # however either side spells it
 
 
 def suffix(os_name: str | None = None) -> str:
-    """'' for the household's home, else '-<hash of the home>': a test or second install under another FINNAMON_HOME must
-    never list, replace or remove the household's jobs. A home already installed under the plain labels (a box that set
-    FINNAMON_HOME before this existed) keeps them, or its next install would start a second daemon beside the first."""
-    h = config.home().expanduser()
-    if h.resolve() == (Path.home() / ".finnamon").resolve():
+    """'' for the household's home (~/.finnamon of the real user, see real_home), else '-<hash of the home>': a test or
+    second install under another FINNAMON_HOME must never list, replace or remove the household's jobs, even one whose
+    FINNAMON_HOME is $HOME/.finnamon under a scratch HOME. A home already installed under the plain labels (a box that
+    set FINNAMON_HOME before this existed) keeps them, or its next install would start a second daemon beside the first."""
+    h = config.home()
+    if _same_home(h, real_home() / ".finnamon"):
         return ""
     darwin = (os_name or platform.system()) == "Darwin"
     try:
         text = (unit_dir(os_name) / (f"{LABEL}.daemon.plist" if darwin else "finnamon-daemon.service")).read_text()
     except OSError:
         text = ""
-    m = re.search(r"<key>FINNAMON_HOME</key><string>([^<]*)</string>" if darwin else r"^Environment=FINNAMON_HOME=(.*)$", text, re.M)
-    if m and Path(m.group(1)).expanduser().resolve() == h.resolve():   # however either side spells it
+    if (theirs := _unit_home(text, darwin)) and _same_home(theirs, h):
         return ""
-    return "-" + hashlib.sha256(str(h.resolve()).encode()).hexdigest()[:8]
+    return "-" + hashlib.sha256(str(h.expanduser().resolve()).encode()).hexdigest()[:8]
+
+
+def foreign_home(os_name: str | None = None) -> str | None:
+    """Why this home must not touch its job names: one of them is installed for a different FINNAMON_HOME. None if not."""
+    os_name = os_name or platform.system()
+    darwin = os_name == "Darwin"
+    if _same_home(config.home(), real_home() / ".finnamon") and not _same_home(Path.home(), real_home()):
+        return (f"this is the household's home ({config.home()}), but HOME is {Path.home()}, not your login's {real_home()}: "
+                "its jobs would run with the wrong HOME and replace the real ones. Run it from your normal shell, or re-run with --force")
+    for name in (f"{label(n, os_name)}.plist" for n in JOBS) if darwin else (unit(n, os_name=os_name) for n in JOBS):
+        try:
+            theirs = _unit_home((unit_dir(os_name) / name).read_text(), darwin)
+        except OSError:
+            continue
+        if theirs and not _same_home(theirs, config.home()):
+            return (f"{name} belongs to another Finnamon home (FINNAMON_HOME={theirs}), not this one ({config.home()}); "
+                    "leaving it alone. If that home is gone and these jobs should be this one's, re-run with --force")
+    return None
 
 
 def label(name: str, os_name: str | None = None) -> str:
@@ -187,6 +225,8 @@ def services_for(paths) -> list[str]:
 
 def unit_dir(os_name: str | None = None) -> Path:
     os_name = os_name or platform.system()
+    # $HOME's, not real_home(): a scratch HOME's jobs must not land in the login's LaunchAgents and load at every login.
+    # The names are what keeps them apart (suffix), and the files under a person's own HOME are what foreign_home reads.
     return Path.home() / "Library" / "LaunchAgents" if os_name == "Darwin" else Path.home() / ".config" / "systemd" / "user"
 
 
@@ -289,8 +329,10 @@ def rotate_logs(d: Path | None = None, os_name: str | None = None) -> list[str]:
     return rotated
 
 
-def install(os_name: str | None = None, dry_run: bool = False) -> list[str]:
+def install(os_name: str | None = None, dry_run: bool = False, force: bool = False) -> list[str]:
     os_name = os_name or platform.system()
+    if not force and (why := foreign_home(os_name)):
+        raise RuntimeError(why)
     files = render(os_name)
     written = []
     dest = unit_dir(os_name)
@@ -375,27 +417,39 @@ def _launchd_reload(domain: str, label: str, plist: Path, run=subprocess.run, sl
     raise RuntimeError(f"launchctl bootstrap {label} failed ({last.returncode}): {(last.stderr or last.stdout).strip()}")
 
 
-def uninstall(os_name: str | None = None) -> None:
+def uninstall(os_name: str | None = None, dry_run: bool = False, force: bool = False) -> list[str]:
+    """Stop and remove this home's jobs; returns the unit files it removed (or, with dry_run, would remove)."""
     os_name = os_name or platform.system()
+    if not force and (why := foreign_home(os_name)):
+        raise RuntimeError(why)
+    dest = unit_dir(os_name)
     if os_name == "Darwin":
-        uid = os.getuid()
-        labels = [label(n, os_name) for n in ("daemon", "heartbeat", "web")]   # before any file goes: suffix() reads the daemon's
-        for lb in labels:
-            subprocess.run(["launchctl", "bootout", f"gui/{uid}/{lb}"], capture_output=True)
-            (unit_dir("Darwin") / f"{lb}.plist").unlink(missing_ok=True)
+        labels = [label(n, os_name) for n in JOBS]   # before any file goes: suffix() reads the daemon's
+        paths = [dest / f"{lb}.plist" for lb in labels]
     else:
         names = [unit("daemon", os_name=os_name), unit("heartbeat", os_name=os_name), unit("heartbeat", "timer", os_name), unit("web", os_name=os_name)]
+        paths = [dest / n for n in names]
+    gone = [str(p) for p in paths if p.exists()]
+    if dry_run:
+        return gone
+    if os_name == "Darwin":
+        uid = os.getuid()
+        for lb, p in zip(labels, paths):
+            subprocess.run(["launchctl", "bootout", f"gui/{uid}/{lb}"], capture_output=True)
+            p.unlink(missing_ok=True)
+    else:
         subprocess.run(["systemctl", "--user", "disable", "--now", names[0], names[2], names[3]], capture_output=True)
-        for name in names:
-            (unit_dir("Linux") / name).unlink(missing_ok=True)
+        for p in paths:
+            p.unlink(missing_ok=True)
         subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+    return gone
 
 
 def status(os_name: str | None = None) -> str:
     os_name = os_name or platform.system()
     if os_name == "Darwin":
         r = subprocess.run(["launchctl", "list"], capture_output=True, text=True)
-        mine = label("", os_name)   # "com.finnamon." is not a prefix of another home's "com.finnamon-1a2b3c4d."
-        return "\n".join(l for l in r.stdout.splitlines() if mine in l) or "not loaded"
+        mine = {label(n, os_name) for n in JOBS}   # this home's labels only, never another home's
+        return "\n".join(l for l in r.stdout.splitlines() if l.split("\t")[-1] in mine) or "not loaded"
     r = subprocess.run(["systemctl", "--user", "--no-pager", "status", unit("daemon", os_name=os_name), unit("heartbeat", "timer", os_name), unit("web", os_name=os_name)], capture_output=True, text=True)
     return r.stdout or r.stderr

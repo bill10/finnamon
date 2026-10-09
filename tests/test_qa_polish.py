@@ -80,6 +80,15 @@ def test_alert_wording(conn):
     row = lambda aid: conn.execute("SELECT * FROM alerts WHERE id=?", (aid,)).fetchone()   # noqa: E731
     dup = notify.render(row(alert(conn, "duplicate_charge", "d1", payload={"merchant": "Shell", "amount": 52.18, "account": "Chk", "date_a": "2026-10-01", "date_b": "2026-10-01", "count": 2})))
     assert "both on Oct 1" in dup and "2026-10" not in dup and "Reply <i>it's normal</i>" in dup
+    dup2 = notify.render(row(alert(conn, "duplicate_charge", "d2", payload={"merchant": "Shell", "amount": 52.18, "account": "Chk", "date_a": "2026-09-17", "date_b": "2026-09-18", "count": 2})))
+    assert "charged Sep 17 and again Sep 18" in dup2
+    rec = row(alert(conn, "new_recurring", "n1", payload={"merchant": "Peloton", "amount": 44, "frequency": "MONTHLY", "first_date": "2026-08-29", "account": "Sapphire", "mask": "7710"}))
+    assert notify.render(rec).endswith("first seen Aug 29. Expected? Reply <i>it's normal</i> and I won't ask again.")
+    assert "it's normal" not in notify.render(rec, page=True), "the page has its own button"
+    first = row(alert(conn, "anomaly:first_merchant", "f1", "anomaly", {"merchant": "Best Buy", "amount": 899.99, "date": "2026-10-01", "account": "Blue Cash", "mask": "3005"}, "promote", "high", "Never shopped here."))
+    text = notify.render(first)
+    assert "<b>$899.99 to Best Buy</b> on Blue Cash …3005, Oct 1: first time at Best Buy. Never shopped here. Expected? Reply <i>it's normal</i>" in text
+    assert "it's normal" not in notify.render(first, cue=False), "the roundup carries its own reply footer"
     over = notify.render(row(alert(conn, "budget_pace", "b1", payload={"budget": "dining", "spent": 400, "limit": 350, "day": 24, "days": 30, "state": "over"})))
     assert "Dining is over budget" in over
     err = notify.render(row(alert(conn, "sync_health", "e1", payload={"item_id": "i", "institution": "Chase", "status": "INSTITUTION_NOT_RESPONDING", "last_error": ""})))
