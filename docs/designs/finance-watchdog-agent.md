@@ -6,17 +6,17 @@ Repo: bill10/finnamon
 Status: APPROVED (2026-09-19); BUILT (2026-09-19)
 Mode: Builder
 
-D-numbers below (D4, D10, ...) refer to decisions Bill made during the office-hours session.
+D-numbers below (D4, D10, ...) refer to decisions the owner made during the office-hours session.
 
 ## Problem Statement
 
-Finnamon is a working Plaid-backed personal finance web app (Next.js + FastAPI + Celery + Postgres, deployed on Vercel + Cloud Run). Bill built it, deployed it, and doesn't open it. The background sync has a history of silent failures (Celery workers not running, double-negated amounts, IRA/401k holdings bugs). The app shows data; it never tells him anything.
+Finnamon is a working Plaid-backed personal finance web app (Next.js + FastAPI + Celery + Postgres, deployed on Vercel + Cloud Run). The owner built it, deployed it, and doesn't open it. The background sync has a history of silent failures (Celery workers not running, double-negated amounts, IRA/401k holdings bugs). The app shows data; it never tells its owner anything.
 
 Rewrite it, keeping the name, as a household finance agent: one assistant that watches the household's accounts and comes to whoever needs to know when something needs a human. A one-person household is the degenerate case; the design is the same.
 
 ## Principle: build the infrastructure, not the agent
 
-Arrived at with Bill during the user-workflow walkthrough: **Finnamon builds the infrastructure an agent needs; it does not build the agent.** Claude Code is the agent: reasoning, tool calling, permissions, sessions, compaction, skills. Finnamon supplies what the harness can't have on its own.
+Arrived at with the owner during the user-workflow walkthrough: **Finnamon builds the infrastructure an agent needs; it does not build the agent.** Claude Code is the agent: reasoning, tool calling, permissions, sessions, compaction, skills. Finnamon supplies what the harness can't have on its own.
 
 | Finnamon builds | Claude Code provides |
 |---|---|
@@ -32,7 +32,7 @@ Corollary: the daemon exists only because Claude Code isn't always on and can't 
 
 ## What Makes This Cool
 
-A message from your own money: "Netflix charged you twice on 9/14, $15.49 each. Want me to draft the dispute?" Or on the 18th: "Groceries: $480 of $600, on pace for $780." Or, the one Bill named as the real differentiator: "$412 to 'SQ *PMT 8827' on the Amex yesterday. You've never paid this merchant, it's 6x your usual Square charge, and I can't tell what it is. Recognize it?" The agent finds things you don't know, the way a human assistant reading your statements would. Nothing in the space does this.
+A message from your own money: "Netflix charged you twice on 9/14, $15.49 each. Want me to draft the dispute?" Or on the 18th: "Groceries: $480 of $600, on pace for $780." Or, the one the owner named as the real differentiator: "$412 to 'SQ *PMT 8827' on the Amex yesterday. You've never paid this merchant, it's 6x your usual Square charge, and I can't tell what it is. Recognize it?" The agent finds things you don't know, the way a human assistant reading your statements would. Nothing in the space does this.
 
 The 10x arc, all of which this design leaves room for:
 - Two-way in the chat: reply "normal 3" and item 3 of the roundup becomes a suppression; "set groceries 650" changes the budget; "watch for X" and Claude drafts a detector for review.
@@ -42,8 +42,8 @@ The 10x arc, all of which this design leaves room for:
 
 ## Constraints
 
-- Household tool, builder mode. No customers, no pricing. One agent per household with one identity, one memory, one data store; people who want separate assistants install separately (Bill's call).
-- Runs on any always-on box Bill owns: his Mac today, an Ubuntu machine or a Pi later. No cloud service of ours.
+- Household tool, builder mode. No customers, no pricing. One agent per household with one identity, one memory, one data store; people who want separate assistants install separately (the owner's call).
+- Runs on any always-on box the owner has: a Mac today, an Ubuntu machine or a Pi later. No cloud service of ours.
 - Plaid Trial plan: 10 Items max, free, real data. Transactions + Balance first. Exact per-product call limits and whether Recurring Transactions is included are verified in The Assignment before the cadence is fixed.
 - Detection never touches an LLM. Rules fire on SQL alone. The only LLM work in the unattended path is anomaly triage, a Claude Code skill that runs only when candidates exist; zero tokens otherwise.
 - Reproducibility, stated precisely: transaction-derived detectors replay from the DB with the stored `as_of` (all joins to `merchant_alias` and `suppressions` are time-scoped to `as_of`). Item- and stream-derived detectors (`sync_health`, `new_recurring`, `recurring_changed`) replay from `payload_json`, because `items` and `recurring` are upserted in place. Triage verdicts are stored, never recomputed.
@@ -52,10 +52,10 @@ The 10x arc, all of which this design leaves room for:
 
 ## Premises (agreed)
 
-1. No standing dashboard. Telegram out (text, and chart PNGs on demand), Claude Code in. Bill: "I don't need a UI there every minute, but I might want the agent to show me something in charts not words."
+1. No standing dashboard. Telegram out (text, and chart PNGs on demand), Claude Code in. The owner: "I don't need a UI there every minute, but I might want the agent to show me something in charts not words."
 2. Plaid Trial plan is the data source; institutions fit in 10 Items. Investments/Liabilities added later (billing only matters if we ever upgrade past trial).
-3. Two tiers of detection. **Rules** (duplicate, new recurring, low balance, budget pace, sync health) are deterministic SQL over Plaid-normalized fields and fire on their own. **Anomalies** ("this looks strange," "no clear source") are SQL candidates triaged by an LLM that decides whether a competent assistant would mention it, with what confidence, and why; it can promote or suppress a candidate, never invent one, and every verdict is logged. Merchant aliases and suppressions are written only by Bill (CLI or reply parsers), never by the LLM. (Amended after Gemini's challenge and after Bill named "things I don't know" as the differentiator, D13.)
-4. Delivery is a Telegram bot in one household chat (a DM while there is one owner, a group once there are two). Replaces iMessage (D3) after Bill asked about Android and Ubuntu: iMessage locks the sender to a Mac and the receiver to Apple devices; Telegram's Bot API is plain HTTPS from anywhere, sends text and photos, and delivers replies by long-poll with no OS permissions. Known cost: bot messages are not end-to-end encrypted, so merchant names and amounts transit Telegram's servers. No account numbers or credentials are ever sent. Bill accepted this.
+3. Two tiers of detection. **Rules** (duplicate, new recurring, low balance, budget pace, sync health) are deterministic SQL over Plaid-normalized fields and fire on their own. **Anomalies** ("this looks strange," "no clear source") are SQL candidates triaged by an LLM that decides whether a competent assistant would mention it, with what confidence, and why; it can promote or suppress a candidate, never invent one, and every verdict is logged. Merchant aliases and suppressions are written only by the owner (CLI or reply parsers), never by the LLM. (Amended after Gemini's challenge and after the owner named "things I don't know" as the differentiator, D13.)
+4. Delivery is a Telegram bot in one household chat (a DM while there is one owner, a group once there are two). Replaces iMessage (D3) after the owner asked about Android and Ubuntu: iMessage locks the sender to a Mac and the receiver to Apple devices; Telegram's Bot API is plain HTTPS from anywhere, sends text and photos, and delivers replies by long-poll with no OS permissions. Known cost: bot messages are not end-to-end encrypted, so merchant names and amounts transit Telegram's servers. No account numbers or credentials are ever sent. The owner accepted this.
 5. Scheduling is launchd on macOS, a systemd timer on Linux, plain cron only on a host that never sleeps. Reason: cron skips a job the machine slept through; launchd `StartCalendarInterval` and systemd `Persistent=true` run it on wake. `finnamon init` detects the OS and installs the right one.
 6. The web app goes away entirely: FastAPI, Next.js, Celery, Postgres, Vercel, Cloud Run, both submodules. Old `backend/app/services/plaid.py` is kept as `reference/old_plaid.py` for the sign-convention tests until `sync.py` passes them, then deleted.
 7. Doing nothing = a deployed app nobody opens and a sync nobody trusts. Real pain.
@@ -65,7 +65,7 @@ The 10x arc, all of which this design leaves room for:
 ## Cross-Model Perspective (Gemini CLI 0.55.1, cold read)
 
 - Coolest unconsidered version: reply "watch for X" and the LLM writes a new SQL detector on the fly. Adopted as the north star for the reply loop, with a guard: generated detectors are read-only SELECTs reviewed in Claude Code before they go live.
-- Most revealing thing Bill said: "the first text should be a genuine catch." High-signal utility, not vanity metrics.
+- Most revealing thing the owner said: "the first text should be a genuine catch." High-signal utility, not vanity metrics.
 - Challenged the SQL-only premise: merchant strings like "Netflix.com" vs "NFLX* SUB" will defeat pure SQL. Accepted in part; premise 3 amended. Plaid's normalized fields and recurring endpoint do most of the work; the alias table and the anomaly tier catch the rest.
 - Suggested Open Finance as a 50% base. Rejected; see below.
 - Recommendation: "Delete the old repo today and write a single Python script that texts you your balance." Spirit accepted (delete the old app now); letter rejected (the first message is a catch, not a balance).
@@ -78,16 +78,16 @@ Checked by cloning `DeseretSaint/open-finance` v0.3.15 (46.7k lines TS, MIT) dur
 - No alert rules, no duplicate or recurring detection, no pace alerts, no anomaly triage. `transactions` has `merchant_name` and `personal_finance_category` but no `merchant_entity_id`, and there is no recurring-streams table.
 - The MCP layer (30 tools, scoped tokens, guardrails, agent manual) is the best part and is prior art for milestone 5.
 
-What distinguishes this design: push-first (no place to go), the agent notices what you don't know, detectors as reviewable SQL artifacts, two-way in chat, and no UI to maintain. The Plaid sync we'd have borrowed is one file. If the goal were "a finance app Claude can query," Open Finance is the right answer and this rewrite shouldn't happen; Bill confirmed the push loop is the product (D11).
+What distinguishes this design: push-first (no place to go), the agent notices what you don't know, detectors as reviewable SQL artifacts, two-way in chat, and no UI to maintain. The Plaid sync we'd have borrowed is one file. If the goal were "a finance app Claude can query," Open Finance is the right answer and this rewrite shouldn't happen; the owner confirmed the push loop is the product (D11).
 
 ## Approaches Considered
 
-- A: Three scripts + a scheduler, B's schema up front. Minimal loop, zero-token cron, first catch this weekend. Ruled out by Bill in favor of B: he wants every 10x direction to have a home now (D10).
+- A: Three scripts + a scheduler, B's schema up front. Minimal loop, zero-token cron, first catch this weekend. Ruled out by the owner in favor of B: they want every 10x direction to have a home now (D10).
 - C: Claude Code is the cron (the scheduler runs `claude -p "/watchdog"` headless). Ruled out for unattended alerts: tokens on every run, and a permission prompt at 6am means no message and no error. Its trick (a skill that runs the whole loop by hand) is kept for the reply side, with the invocation pinned down in milestone 4.
 - iMessage delivery (D3): superseded by Telegram (premise 4). It would have needed osascript, two macOS TCC grants, and a `chat.db` parser for replies, and it could never reach an Android phone.
 - Prose composition of rule alerts via `claude -p`: considered and dropped. Five rule templates are five sentences, anomalies already carry a triage reason, and it would put an LLM in the rules path.
 
-## User Workflow (walked step by step with Bill; extended as each step is reviewed)
+## User Workflow (walked step by step with the owner; extended as each step is reviewed)
 
 ### Step 1: Install, keys, bot, schedule (reviewed)
 
@@ -107,8 +107,8 @@ Step 1 of 4: Plaid keys
 Step 2 of 4: Telegram bot
   In Telegram, message @BotFather, send /newbot, name it whatever you like.
   Paste the token it gives you: ________
-  ✓ token valid (bot: @bills_finnamon_bot)
-  Now open https://t.me/bills_finnamon_bot and tap Start.
+  ✓ token valid (bot: @your_finnamon_bot)
+  Now open https://t.me/your_finnamon_bot and tap Start.
   waiting... ✓ got it. This DM is the household chat until you add a second person.
 
 Step 3 of 4: Dashboard
@@ -126,7 +126,7 @@ Done. In a few seconds the dashboard is up: open http://localhost:8888/?token=3f
 Sent you a message on Telegram too.
 ```
 
-Underneath: `~/.finnamon/secrets.toml` (0600, written atomically, only ever by `init` and `link`) with Plaid keys and the bot token; `~/.finnamon/web-token` (0600, the dashboard's key, minted by whichever of the server and `finnamon open` runs first); `~/.finnamon/finnamon.db` with the full schema, the chat id in `state`, and defaults in `settings`; one Plaid call and one Telegram `getMe` to prove both work; the bot waits on `getUpdates` for the `/start` so Bill never types a handle; `init` checks `which finnamon` and prints the PATH fix if `uv tool install` didn't land on PATH; the dashboard's `npm install` when Node is on PATH (skipped with the manual steps otherwise); scheduler installed for the detected OS (launchd here; on Ubuntu, `finnamon-daemon.service` + `finnamon-heartbeat.timer` + `finnamon-web.service` as user units). **The daemon is the only sync scheduler**; the OS keeps it and the dashboard alive and runs the heartbeat, nothing else. Nothing synced yet.
+Underneath: `~/.finnamon/secrets.toml` (0600, written atomically, only ever by `init` and `link`) with Plaid keys and the bot token; `~/.finnamon/web-token` (0600, the dashboard's key, minted by whichever of the server and `finnamon open` runs first); `~/.finnamon/finnamon.db` with the full schema, the chat id in `state`, and defaults in `settings`; one Plaid call and one Telegram `getMe` to prove both work; the bot waits on `getUpdates` for the `/start` so the owner never types a handle; `init` checks `which finnamon` and prints the PATH fix if `uv tool install` didn't land on PATH; the dashboard's `npm install` when Node is on PATH (skipped with the manual steps otherwise); scheduler installed for the detected OS (launchd here; on Ubuntu, `finnamon-daemon.service` + `finnamon-heartbeat.timer` + `finnamon-web.service` as user units). **The daemon is the only sync scheduler**; the OS keeps it and the dashboard alive and runs the heartbeat, nothing else. Nothing synced yet.
 
 ### Step 2: Link the first bank (reviewed)
 
@@ -152,7 +152,7 @@ Baseline set: nothing before today counts as new. Summary sent to Telegram.
 Next: finnamon link  (add another bank)  or  finnamon budget set groceries 600
 ```
 
-Telegram, one time per Item (Bill asked for this so the first message is useful, not just "linked"):
+Telegram, one time per Item (the owner asked for this so the first message is useful, not just "linked"):
 
 > **Linked Chase** (3 accounts):
 > • Checking …4821 (checking)
@@ -181,7 +181,7 @@ Open from this step: whether `duplicate_charge` should look back 30 days on firs
 
 ### Step 3: Claude proposes budgets from history (reviewed)
 
-Bill's point: Steps 1 and 2 involve credentials so a human does them; budgeting is tedious and an AI should do the work. Claude Code is the interactive surface, and nobody has to learn Plaid's category names.
+The owner's point: Steps 1 and 2 involve credentials so a human does them; budgeting is tedious and an AI should do the work. Claude Code is the interactive surface, and nobody has to learn Plaid's category names.
 
 ```
 $ cd ~/finnamon && claude
@@ -222,7 +222,7 @@ Consequences for the design:
 
 ### Step 4: The first week, unattended (reviewed)
 
-Bill closes the terminal. Over seven typical days, Telegram shows four messages, zero tokens:
+The owner closes the terminal. Over seven typical days, Telegram shows four messages, zero tokens:
 
 > 🔁 **New recurring charge:** Peloton $44.00/mo on Sapphire, first seen Sep 20.
 
@@ -232,7 +232,7 @@ Bill closes the terminal. Over seven typical days, Telegram shows four messages,
 
 > 🔌 **Chase needs a re-login.** Reply *fix Chase* and I'll send the login link here. Until then Checking, Savings, and Sapphire aren't updating.
 
-And, had a plist been unloaded: "🩺 Last sync was 9 hours ago (expected every 6)." No daily summaries, no balances, no charts, no anomalies yet (milestone 2). The Shell one is the week's one tolerated false alert; Bill: "those are fine for now as we can adjust along the way." `dup_min_amount` stays at $10 until it annoys.
+And, had a plist been unloaded: "🩺 Last sync was 9 hours ago (expected every 6)." No daily summaries, no balances, no charts, no anomalies yet (milestone 2). The Shell one is the week's one tolerated false alert; the owner: "those are fine for now as we can adjust along the way." `dup_min_amount` stays at $10 until it annoys.
 
 ### Step 5: Add a second person (reviewed)
 
@@ -240,33 +240,33 @@ Plaid `account_id`s are Item-scoped, so a joint account linked from two logins a
 
 ```
 $ finnamon owner add jane
-  Create a Telegram group with you, Jane, and @bills_finnamon_bot, then send any message in it.
+  Create a Telegram group with you, Jane, and @your_finnamon_bot, then send any message in it.
   Waiting... ✓ group found, jane's Telegram id recorded. All messages now go to the group.
 $ finnamon link --owner jane
 ✓ Linked Chase (item_def) for jane
   3 accounts found. Two look like accounts already linked:
-    Chase Checking (...4821)  matches bill's: same mask, same subtype, 412 of 412 transactions
+    Chase Checking (...4821)  matches alex's: same mask, same subtype, 412 of 412 transactions
                               in the last 90 days identical
-    Chase Savings  (...0093)  matches bill's: 31 of 31 identical
+    Chase Savings  (...0093)  matches alex's: 31 of 31 identical
   Mark both as joint and skip syncing them again from jane's login? [Y/n] y
-  ✓ Chase Checking, Chase Savings → owner: joint (jane's copies stored but hidden as mirrors of bill's)
+  ✓ Chase Checking, Chase Savings → owner: joint (jane's copies stored but hidden as mirrors of alex's)
   ✓ Chase Freedom (...2210) → owner: jane
 ```
 
 In the group: "Jane is linked. Chase Checking and Savings are joint. Everything I notice goes here from now on."
 
 Rules from then on:
-- **Everyone is notified about everything, in one chat** (Bill's decision on the last question of the walkthrough). One identity, one memory, one thread; the group on your phones is the agent's record. Per-owner routing was dropped because a reply in a private DM would put knowledge into the shared session that the other person never saw. Each person can mute the group in Telegram; alerts are a few a week by design.
-- **The whole household shares visibility** (Bill: "No need for access control. The whole household share visibility. If two people in the household want separate assistants, they should just install it separately"). Jane can ask what Bill spent on the Sapphire and get an answer.
-- `accounts.owner` is a fact the agent knows ("that's Bill's card"), used in message text and queries, not for routing.
-- **Budgets are household-level. There is one set of budgets, no owner column** (Bill: "No need for personal budget. Just one budget for now"). Every account of every owner counts toward them. Budget pace alerts go to every owner.
+- **Everyone is notified about everything, in one chat** (the owner's decision on the last question of the walkthrough). One identity, one memory, one thread; the group on your phones is the agent's record. Per-owner routing was dropped because a reply in a private DM would put knowledge into the shared session that the other person never saw. Each person can mute the group in Telegram; alerts are a few a week by design.
+- **The whole household shares visibility** (the owner: "No need for access control. The whole household share visibility. If two people in the household want separate assistants, they should just install it separately"). Jane can ask what the owner spent on the Sapphire and get an answer.
+- `accounts.owner` is a fact the agent knows ("that's Alex's card"), used in message text and queries, not for routing.
+- **Budgets are household-level. There is one set of budgets, no owner column** (the owner: "No need for personal budget. Just one budget for now"). Every account of every owner counts toward them. Budget pace alerts go to every owner.
 - Match heuristic at link, in order: Plaid `persistent_account_id` when the institution supplies it; else same institution + `mask` + `subtype` + at least 90% of the last 90 days' transactions matching on (date, amount, name). Below that: distinct, no prompt. `finnamon account merge|unmerge` fixes mistakes.
 - Both Items sync every account fully; nothing is skipped. The duplicate account row carries `mirror_of = <primary account_id>`, and `_prelude.sql` excludes transactions whose account is a mirror. If the primary Item breaks and the mirror's Item is healthy, failover is flipping which row is the mirror; no cursor reset, no re-backfill, no gap (eng review, Gemini tension 3).
-- Knowledge is shared: suppressions, category overrides, budgets, and the conversation itself belong to the household. When Jane says "it is normal," the agent does not ask Bill about that merchant later.
+- Knowledge is shared: suppressions, category overrides, budgets, and the conversation itself belong to the household. When Jane says "it is normal," the agent does not ask the owner about that merchant later.
 
 ### Step 6: The first weeks, everything on (reviewed)
 
-Bill: "I want this in the beginning when building. You can separate the building into phases. But after it is built, I [want] those even in the first week." So milestones are build order only. From the first day the system runs, rules, anomaly triage, and the Sunday roundup are all on. What the first weeks look like:
+The owner: "I want this in the beginning when building. You can separate the building into phases. But after it is built, I [want] those even in the first week." So milestones are build order only. From the first day the system runs, rules, anomaly triage, and the Sunday roundup are all on. What the first weeks look like:
 
 Immediate (high confidence, next run after the transaction posts):
 
@@ -282,13 +282,13 @@ Sunday 18:00, batched:
 > 3. Comcast came in at $104.99 instead of the usual $89.99. Promo expired?
 > 4. No Peloton charge this month; it was due Oct 1 and hasn't posted.
 
-Week 3: four suppressions added by replying; the immediate messages are rare and the roundup is two items. Week 4 check: `finnamon triage --suppressed --since 30d` shows nothing Bill would have wanted. Cost: a few candidates a week, one `claude -p` triage call per run that has any.
+Week 3: four suppressions added by replying; the immediate messages are rare and the roundup is two items. Week 4 check: `finnamon triage --suppressed --since 30d` shows nothing the owner would have wanted. Cost: a few candidates a week, one `claude -p` triage call per run that has any.
 
 Bounded on purpose: nothing is ever mentioned that the candidate SQL didn't flag. "Watch for X" (Step 7) is how the candidate list widens.
 
-### Step 7: Talking to it (reviewed; architecture settled with Bill)
+### Step 7: Talking to it (reviewed; architecture settled with the owner)
 
-Bill: "we shouldn't rebuild a harness, claude code is already a really good one and we should use it as much as we can." So replies are not parsed by keyword; every message goes to Claude Code, which is the harness.
+The owner: "we shouldn't rebuild a harness, claude code is already a really good one and we should use it as much as we can." So replies are not parsed by keyword; every message goes to Claude Code, which is the harness.
 
 **Process model.** One long-running `finnamon daemon` (kept alive by launchd/systemd) long-polls Telegram and runs sync on its own 6-hour clock. A separate hourly heartbeat timer watches the daemon. Claude Code is on demand: `cd ~/finnamon && claude` picks up the skill from the repo.
 
@@ -298,7 +298,7 @@ Bill: "we shouldn't rebuild a harness, claude code is already a really good one 
 
 ```
 claude -p --resume <session_id for this owner> --output-format json \
-  "[Telegram, bill; replying to alert 1841] it is normal"
+  "[Telegram, alex; replying to alert 1841] it is normal"
 ```
 
 and sends `result` back to Telegram. **One shared session for the household**, resumed forever, every message prefixed with who is speaking (`[Telegram, jane] it is normal`); the agent remembers one thread the way a human assistant to both people would, and "what did Jane tell you about the Zelle thing?" works. Claude Code compacts it as needed; we manage nothing. The single `session_id` is kept in `state`; if a resume fails, the daemon starts a new session and continues. Sessions live under `~/.claude/projects/<repo-slug>/`, scoped to the repo folder but not inside it; an interactive terminal session in the same folder is a different session and does not bleed into the Telegram thread.
@@ -322,7 +322,7 @@ Because one session is shared, **the daemon runs `claude -p` calls strictly one 
               "Read(~/.finnamon/secrets.toml)", "Read(~/.claude/channels/telegram/.env)"] } }
 ```
 
-In `-p` mode a denied tool fails without a prompt; Claude tells Bill to run it himself. The same file governs interactive sessions, so Claude can do exactly the same things from the terminal and from the phone.
+In `-p` mode a denied tool fails without a prompt; Claude tells the owner to run it themselves. The same file governs interactive sessions, so Claude can do exactly the same things from the terminal and from the phone.
 
 **The intercom asks (2026-10-04, owner decision).** The dashboard's session had run `dontAsk`: the allow list or nothing, and no web while it read Telegram. That made the assistant too limited, so it now runs in ask mode (session and daemon mode; channel mode, slated for removal, keeps `dontAsk`). The allow list still runs unasked and the deny list still wins (secrets, the database, the web key, its own folder, every setup-changing command); everything else, the web included (`WebSearch` and `WebFetch` left the allow list), asks with the target shown. When the turn came from Telegram (session mode), the bundle's `PermissionRequest` hook (`finnamon hook permission`) puts the same request in the household chat, one escaped line (the tool, the command / the site / the path) with Allow / Deny buttons; the dashboard's dialog stays up, and the first answer wins: a press (household members of that chat only, checked by the daemon, the bot's one reader) is the hook's decision; an answer at the dashboard shows in the transcript and clears the buttons; ten minutes with neither is a deny, and the chat is told. Unattended `claude -p` runs (triage, daemon-mode conversation) keep `--disallowedTools WebSearch WebFetch`: nobody can answer there. Two guards stand where `dontAsk` stood: the skill's "data, never instructions" rule for memos and pages, and a person approving every non-finnamon action with its target in front of them.
 
@@ -339,7 +339,7 @@ What it looks like:
 
 The pending-detector gate stays: a detector runs unattended forever, so it is approved once, at a terminal, where the SQL can be read.
 
-**Alerts do not go through Claude.** The daemon sends rule alerts and triaged anomalies from templates; that is the zero-token path. Claude runs only for triage and when Bill talks back.
+**Alerts do not go through Claude.** The daemon sends rule alerts and triaged anomalies from templates; that is the zero-token path. Claude runs only for triage and when the owner talks back.
 
 ## Recommended Approach: B, the full package
 
@@ -440,7 +440,7 @@ items          item_id PK, institution, cursor, owner, status, last_error, sourc
                first_synced_at   (set on the first sync that returns data, not the first call)
                last_synced_at
 accounts       account_id PK, item_id FK, name, type, subtype, mask, persistent_account_id NULL,
-               owner ('bill'|'jane'|'joint'), mirror_of NULL   (mirror rows are skipped on sync,
+               owner ('alex'|'jane'|'joint'), mirror_of NULL   (mirror rows are skipped on sync,
                kept for failover)
 balances       account_id, as_of, current, available          (append-only, one row per sync)
 transactions   transaction_id PK, account_id, date, datetime, amount, name, merchant_name,
@@ -554,16 +554,16 @@ This is the differentiator, and it is built in two stages so it stays auditable.
 
 A single transaction can trip several candidates; that is expected and handled in triage, not by narrowing the SQL.
 
-**Stage 2, triage (a Claude Code skill, `/triage`).** Bill: use Claude Code as the harness here too. After detect, if any anomaly alerts have `verdict IS NULL`, the daemon runs `claude -p "/triage" --output-format json` in the repo (a fresh session each time, not the household conversation session; triage is a batch job and its tool calls would pollute the thread). The skill:
+**Stage 2, triage (a Claude Code skill, `/triage`).** The owner: use Claude Code as the harness here too. After detect, if any anomaly alerts have `verdict IS NULL`, the daemon runs `claude -p "/triage" --output-format json` in the repo (a fresh session each time, not the household conversation session; triage is a batch job and its tool calls would pollute the thread). The skill:
 
 1. `finnamon alerts --untriaged --json` to get candidates grouped by transaction.
-2. For each group, whatever lookups it needs: `finnamon query "..."` (read-only SQL) for the merchant's history, the account's typical amounts, recent similar transactions; `finnamon budget list`; `finnamon normal --list` to see what Bill already called normal.
+2. For each group, whatever lookups it needs: `finnamon query "..."` (read-only SQL) for the merchant's history, the account's typical amounts, recent similar transactions; `finnamon budget list`; `finnamon normal --list` to see what the owner already called normal.
 3. Decide, as this person's finance assistant reading their statement, whether to mention each transaction, with confidence high (looks like fraud, an error, or money leaving with no clear source) or low (unusual but plausible), and one sentence why.
 4. `finnamon triage set <transaction_id> promote|suppress high|low -` per group, the reason on stdin through a quoted heredoc. It refuses a reason given as an argument: a double-quoted one has lost its `$` signs before the command sees it (#63). Run by a person (never a Claude session: triage or chat) on a group with nothing left untriaged, the same verdict replaces only the reason of its stamped candidates (a repair); verdict, confidence and sent state stay. That command is the only write; it stamps every candidate in the group, and a single candidate's key stamps its whole transaction, so two detectors on one transaction can never split promote/suppress. A detector that fires after its transaction was judged or resolved takes that verdict and resolution (`detect.join_family`).
 
-`triage.py` shrinks to: run the skill, then verify every untriaged group now has a verdict. Any group still `NULL` after the run increments `triage_attempts`; on the third consecutive failure the group is marked `suppress` with reason `triage_unavailable` AND a rule alert `health:triage:<local date>` is inserted so Bill is messaged that triage is down, the same way he'd be messaged about a dead sync.
+`triage.py` shrinks to: run the skill, then verify every untriaged group now has a verdict. Any group still `NULL` after the run increments `triage_attempts`; on the third consecutive failure the group is marked `suppress` with reason `triage_unavailable` AND a rule alert `health:triage:<local date>` is inserted so the owner is messaged that triage is down, the same way they'd be messaged about a dead sync.
 
-Cost is a handful of tool calls per candidate group instead of one shot; a few candidates a week after the first month. The trade is more tokens for less code and a prompt that lives in `SKILL.md` where Bill can edit it in plain English.
+Cost is a handful of tool calls per candidate group instead of one shot; a few candidates a week after the first month. The trade is more tokens for less code and a prompt that lives in `SKILL.md` where the owner can edit it in plain English.
 
 The LLM can only promote or suppress rows that SQL produced. Every suppression is kept with its reason; `finnamon triage --suppressed` lists what it chose not to tell you.
 
@@ -616,17 +616,17 @@ Read-only tools over the same functions the CLI exposes, for clients that aren't
 
 ## Open Questions
 
-- How many institutions does Bill actually have? Above 10 Items means SimpleFIN or a paid plan for the overflow.
+- How many institutions does the owner actually have? Above 10 Items means SimpleFIN or a paid plan for the overflow.
 - Which box runs it? The Mac today. If it's a laptop that closes, launchd catches up on wake but a closed weekend means no messages until Monday. An Ubuntu box or a Pi with a systemd timer removes that.
 - Plaid Trial specifics to verify in The Assignment: per-product call caps, whether `/transactions/recurring/get` is included or a separate add-on, and whether Chase-style OAuth institutions work on a trial key or need full Production approval. The 4x/day cadence and the recurring detector depend on the answers.
-- Budget categories: Plaid's `pfc_primary` has 16 values. Enough, or does Bill want `pfc_detailed` (groceries vs restaurants)? Default `pfc_primary`; switch per budget if asked.
+- Budget categories: Plaid's `pfc_primary` has 16 values. Enough, or does the owner want `pfc_detailed` (groceries vs restaurants)? Default `pfc_primary`; switch per budget if asked.
 - Triage cost: as a skill it makes several tool calls per candidate group. Measure tokens per run in the first month; if it's more than a few cents a day, add a `finnamon alerts --untriaged --with-context` that pre-bundles the 90-day summary so the skill needs fewer lookups.
 - `unmatched_transfer` will surface payments to accounts we don't hold (a card not on Plaid, rent to a landlord). Expect to suppress those in week one; if it's more than a handful, add a `known_counterparties` setting.
 
 ## Success Criteria
 
-- Milestone 1: the scheduler has run unattended for 7 days; at least one rule alert was a genuine catch Bill did not already know about; no more than one false alert in the week; zero tokens spent.
-- Milestone 2: in its first month, at least one anomaly message made Bill look something up he would not otherwise have noticed; the low-confidence roundup is one message a week; `finnamon triage --suppressed` shows nothing Bill would have wanted to hear about.
+- Milestone 1: the scheduler has run unattended for 7 days; at least one rule alert was a genuine catch the owner did not already know about; no more than one false alert in the week; zero tokens spent.
+- Milestone 2: in its first month, at least one anomaly message made the owner look something up they would not otherwise have noticed; the low-confidence roundup is one message a week; `finnamon triage --suppressed` shows nothing the owner would have wanted to hear about.
 - Every transaction-derived alert can be reproduced by rerunning its detector with the stored `as_of`; every item/stream alert can be explained from its `payload_json`.
 - A deliberately revoked Item produces a `sync_health` message within 12 hours; an unloaded run plist or timer produces a heartbeat message within 9 hours; a broken `claude` login produces a `health:triage` message within three runs of the next candidate.
 - The old web app is torn down and the repo has no Next.js, FastAPI, Celery, or Postgres.
@@ -638,7 +638,7 @@ Household for now: `uv tool install -e .`, `finnamon init`. `pyproject.toml` (en
 ## Next Steps
 
 1. The Assignment (below).
-2. Finish walking the user workflow with Bill (Step 2 onward) and record it in this doc.
+2. Finish walking the user workflow with the owner (Step 2 onward) and record it in this doc.
 3. `store.py` with the full schema; `sync.py` with the sync semantics above; `tests/test_sync.py`. Run by hand until transactions match the bank site.
 4. `telegram.py`, `cli.py init`, `scheduler.py`. Five rule detectors with `tests/test_detectors.py` fixtures, `detect.py`, `notify.py`, `run.py`, `heartbeat.py`. First unattended message.
 5. 7-day trust period. Revoke an Item on purpose to prove `sync_health`; unload the run plist for a day to prove the heartbeat.
@@ -657,7 +657,7 @@ Verified by `scripts/check_setup.py` (since retired for `finnamon doctor`; stdli
 - Sign convention confirmed: positive = money out; a refund is negative.
 - `merchant_name`, `merchant_entity_id`, `personal_finance_category.{primary,detailed,confidence_level}` present. `confidence_level` is worth storing for the anomaly tier.
 - Bot created; `can_read_all_group_messages=True` (privacy mode off). First owner's `/start` received in private chat `1234567890`; outbound `sendMessage` delivered.
-- Still open: whether Bill's specific banks are OAuth-gated on a trial key; resolved by the first `finnamon link`.
+- Still open: whether the owner's specific banks are OAuth-gated on a trial key; resolved by the first `finnamon link`.
 
 ## Build log (2026-09-19)
 
@@ -681,7 +681,7 @@ Three adversarial review rounds on the iMessage-era draft (6/10 → 7/10 → 7/1
 
 ## Engineering Review (2026-09-19, /plan-eng-review)
 
-Scope: milestone 1 as listed, with both launchd and systemd installers (D1). Ten findings, all resolved by Bill; four cross-model tensions from Gemini resolved; every decision folded into the sections above.
+Scope: milestone 1 as listed, with both launchd and systemd installers (D1). Ten findings, all resolved by the owner; four cross-model tensions from Gemini resolved; every decision folded into the sections above.
 
 ### Decisions
 | # | Finding | Decision |
