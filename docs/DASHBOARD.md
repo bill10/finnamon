@@ -38,17 +38,13 @@ finnamon install             # adds the dashboard job next to the daemon and the
 or run it by hand: `node web/server.js` (not both at once: the second cannot take the port and quits). The session
 inside the intercom runs in ask mode (`claude --permission-mode default`: allow-listed commands run unasked, the deny list is
 refused, anything else, a web search or fetch included, shows Claude Code's Allow / Deny dialog; when a Telegram message
-started the turn, the same request goes to the chat with Allow / Deny buttons, and the first answer wins ("don't ask again" lasts until the dashboard restarts); with the Telegram
-channel attached it stays `dontAsk` with `--disallowedTools WebSearch WebFetch`, since it then reads the chat with nobody at the page) and resumes the
+started the turn, the same request goes to the chat with Allow / Deny buttons, and the first answer wins ("don't ask again" lasts until the dashboard restarts)) and resumes the
 household's session id from `~/.finnamon/intercom.json`, so a restart costs you the scrollback and not the
-conversation (a restart that cut a Telegram reply short tells the chat to resend its last minute), with the Telegram
-channel attached when `finnamon channel status` said `channel` at start-up, so the page, the phone and a terminal
-share one conversation. `session` gives the same one conversation without the plugin: the daemon keeps reading the bot and
-posts each household message to `POST /api/telegram/turn` (bearer key only), which types it into this session as
-`[telegram · <owner>] …` and answers with the reply read off the session's transcript (the same reading Talk does); a web
-search or fetch asks there as it does at the page, and the chat gets the Allow / Deny buttons too. After `finnamon channel on|session|off` restart it (`finnamon update --no-pull` restarts in place
-and the assistant comes back knowing the thread; `finnamon install` also works but starts it fresh), the health
-pill says so.
+conversation (a restart that cuts a Telegram reply short gets the chat a "send that again" line). Telegram shares
+this conversation: the daemon reads the bot and posts each household message to `POST /api/telegram/turn` (bearer key
+only), which types it into this session as `[telegram · <owner>] …` and answers with the reply read off the session's
+transcript (the same reading Talk does), so the page, the phone and a terminal share one conversation. Without the
+dashboard the chat still gets alerts but no answers; `finnamon doctor` says so.
 
 **On Codex** (`finnamon settings set assistant codex`, or `finnamon init`'s Codex path; Settings shows which assistant
 runs), the intercom runs OpenAI's `codex` instead, in the same directory, under Finnamon's own Codex home
@@ -56,8 +52,8 @@ runs), the intercom runs OpenAI's `codex` instead, in the same directory, under 
 profile pinned on its command line. Anything off the assistant's allow list shows Codex's own approval prompt in the
 terminal; for a turn that came from Telegram the chat gets the Allow / Deny buttons first and the terminal shows "Running
 hook" until someone taps (or, after 10 minutes, it is denied). Codex names its own session, so `intercom.json` learns
-the id from the session's first message, and a restart resumes it (`codex resume`). Talk and session-mode Telegram work
-the same way; channel mode is Claude Code's plugin and is refused on Codex (`finnamon channel session`).
+the id from the session's first message, and a restart resumes it (`codex resume`). Talk and Telegram work
+the same way.
 
 Banks that use OAuth (Chase and friends) log in through a popup; Plaid only accepts an HTTPS return address, so
 the page sends none on plain http. Over Tailscale (below) the page is HTTPS and sends its own address as the

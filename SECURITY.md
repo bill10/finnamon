@@ -15,7 +15,7 @@ Finnamon is self-hosted: it runs on your own machine and holds your bank data in
 - Anything that exposes the dashboard beyond localhost plus its key cookie (it is meant to be reached on localhost, or
   over Tailscale; never Tailscale Funnel or the public internet).
 - Escapes from the assistant's sealed permission set: the allow/deny list, the read-only headless triage, the
-  reply-guard hook, or the rule that unattended runs have no web access.
+  secret-guard and permission hooks, or the rule that unattended runs have no web access.
 - Getting past the dashboard session's permission prompts: an action off the allow list that runs without a person's
   Allow, a Telegram Allow / Deny press that counts though it is forged, replayed, out of time or from someone who is not
   a household member of that chat, or a phone prompt that shows something other than what would run.
