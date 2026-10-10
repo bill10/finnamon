@@ -133,7 +133,7 @@ export function readTurn(entries, prompt, idle = false) {
     if (e?.isSidechain || e?.isMeta) continue;
     if (e?.type === 'user') {
       const text = squash(userText(e));
-      if (!text || text.startsWith('<')) continue;   // tool results; tags are Claude Code's own (command output, a channel message)
+      if (!text || text.startsWith('<')) continue;   // tool results; tags are Claude Code's own (command output)
       if (started) { cut = true; break; }
       started = text.includes(want);
       continue;
@@ -324,9 +324,9 @@ export function createTalk({ write, transcript, broadcast, idle = () => false, a
   return { setup, heard, utterance, audio, poll, stop: () => { clearInterval(timer); timer = null; } };
 }
 
-// Telegram through the intercom (inbound=session, `finnamon channel session`): the daemon still owns the bot's one getUpdates
+// Telegram always goes through the intercom: the daemon owns the bot's one getUpdates
 // slot and hands each household message here; it is typed into the same session as Talk's lines, under a tag naming the
-// channel and the sender, and the reply is read back off the transcript the same way. One turn at a time: the daemon
+// source and the sender, and the reply is read back off the transcript the same way. One turn at a time: the daemon
 // already sends them in order, and a second caller with the key waits its turn rather than typing over the first.
 // The runner seam: write/type are the pty, transcript() names the file a turn's entries land in, read() turns those entries
 // into { started, reply, done } (readTurn: Claude Code's jsonl), open() says a tool call is still waiting. server.js AGENTS

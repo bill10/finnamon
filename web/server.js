@@ -125,21 +125,15 @@ export function csp(host) {
 export const SIGNED_OUT = { claude: 'Sign in to Claude Code first: run `claude` in a terminal', codex: 'Sign in to Codex first: run `codex login` in a terminal' };
 export const signedOutText = (why) => `\r\n\x1b[1m${why}\x1b[0m\r\nThe chat starts by itself within 30 seconds of signing in.\r\n`;
 
-// One line a person can read instead of "inbound daemon": what needs attention, if anything.
-export function health(status, inbound = status.inbound) {
+// One line a person can read: what needs attention, if anything.
+export function health(status) {
   if (status.demo) return { level: 'ok', label: 'Demo household: made-up data' };   // `finnamon demo`: no daemon, no bot, nothing to warn about
-  if (status.inbound && inbound && status.inbound !== inbound) return { level: 'warn', label: 'Telegram mode changed: restart finnamon web' };
-  // A dead daemon comes first: it is the only thing that clears channel_deaf_since, so a stamp left behind by one
-  // would otherwise name the wrong process forever. It now also outranks a sync warning below, which is the right way
-  // round: nothing syncs while the daemon is down anyway.
+  // A dead daemon outranks a sync warning below: nothing syncs, and Telegram goes unread, while it is down.
   if (status.daemon_alive === false) return { level: 'down', label: 'Daemon stopped' };
   // The session in the corner runs in ~/.finnamon/assistant; without its files or claude's trust in the directory it has
   // no allow list and answers nothing useful, and nothing else on this page would say why.
   if (Array.isArray(status.assistant_problems) && status.assistant_problems.length) return { level: 'down', label: 'Assistant directory not ready: finnamon install' };
   if (status.login_problem) return { level: 'down', label: status.login_problem };   // main(): the session waits for a sign-in instead of showing claude's first-run screens
-  // This pill is the one surface a person is looking at while the chat goes unanswered. It said "All good" through two
-  // real outages, so a chat nobody is reading outranks a sync warning.
-  if (status.channel_deaf_since) return { level: 'down', label: 'Telegram is not being read: finnamon update --no-pull' };
   const bad = (status.items || []).find(i => i.status && i.status !== 'good');
   if (bad) return { level: 'warn', label: bad.status === 'ITEM_LOGIN_REQUIRED' ? `${bad.institution} needs a re-login` : `${bad.institution} sync error` };
   if ((status.items || []).length && status.last_run && Date.now() - new Date(status.last_run.replace(' ', 'T')).getTime() > 24 * 3600e3) return { level: 'warn', label: 'Sync overdue' };
@@ -276,26 +270,20 @@ export function guardKey(ws, token = webToken) {
 
 // ---- the household's Claude Code session ------------------------------------------------------------------------
 
-export function claudeArgs(inbound, session = null) {
+export function claudeArgs(session = null) {
   // Ask mode (Claude Code's default, named so a person's own defaultMode cannot change it): the bundle's allow list runs
   // unasked, its deny list is refused outright, and anything else (the web, other Bash, reading a file) shows a dialog in
   // the terminal. When the turn came from Telegram, the bundle's PermissionRequest hook puts the same request in the chat
-  // with Allow / Deny (finnamon/approval.py); the first answer wins. Channel mode stays on dontAsk: the plugin would relay
-  // every dialog to paired phones with no household check, and that mode is on its way out.
-  const args = ['--permission-mode', inbound === 'channel' ? 'dontAsk' : 'default'];
+  // with Allow / Deny (finnamon/approval.py); the first answer wins. The web stays: every fetch and search asks first.
+  // The daemon is the bot's one reader. The Telegram plugin, enabled anywhere in the person's Claude Code config, would
+  // start in this session too and long-poll the same bot: 409s, and the messages go to it instead of the relay. So the
+  // seal every other claude Finnamon spawns carries (claude_runner.run): no MCP server, and only the assistant
+  // directory's own settings, so no plugin is enabled at all.
+  const args = ['--permission-mode', 'default', '--setting-sources', 'project', '--strict-mcp-config'];
   // The household's session outlives this process. --session-id mints it the first time and is refused ever after
-  // ("already in use"); --resume picks it back up. In channel mode this is the session Telegram talks to as well, so a
-  // fresh one would cost the chat its context too, not just the page its scrollback.
+  // ("already in use"); --resume picks it back up. Telegram talks to this session as well, so a fresh one would cost the
+  // chat its context too, not just the page its scrollback.
   if (session) args.push(...(session.created ? ['--resume', session.id] : ['--session-id', session.id]));
-  // Channel mode makes this session the phone's reader with no dialog anyone sees, and it reads bank memos, text the other
-  // party to the transaction wrote. So the web goes, the way it is gone from every `claude -p` (claude_runner.UNATTENDED_DISALLOWED).
-  // Session mode keeps it: every fetch and search asks first, naming the site, at the dashboard and on the phone.
-  if (inbound === 'channel') args.push('--channels', 'plugin:telegram@claude-plugins-official', '--disallowedTools', 'WebSearch', 'WebFetch');
-  // Outside channel mode the daemon is the bot's one reader. The Telegram plugin, enabled anywhere in the person's Claude
-  // Code config, would start in this session too and long-poll the same bot: 409s, and the messages go to it instead of
-  // the relay. So the seal every other claude Finnamon spawns carries (claude_runner.run): no MCP server, and only the
-  // assistant directory's own settings, so no plugin is enabled at all.
-  if (inbound !== 'channel') args.splice(2, 0, '--setting-sources', 'project', '--strict-mcp-config');
   return args;
 }
 
@@ -310,15 +298,15 @@ const claudeAsking = (s) => /Esc\s*to\s*cancel/i.test(s.lastLine);
 const real = (p) => { try { return realpathSync(p); } catch { return p; } };
 export const AGENTS = {
   claude: { cmd: config.claude, args: claudeArgs, env: {}, mintsId: true, transcriptPath, readTurn, asking: claudeAsking, open: openToolCall },
-  codex: { cmd: config.codex, args: (inbound, session) => codexArgs(real(config.assistant))(inbound, session), env: codexEnv(config.home), mintsId: false, steers: true,
+  codex: { cmd: config.codex, args: (session) => codexArgs(real(config.assistant))(session), env: codexEnv(config.home), mintsId: false, steers: true,
            transcriptPath: (_cwd, id) => rolloutPath(codexHome(config.home), id), readTurn: readCodexTurn,
            asking: (s) => codexAsking(s.tail), turnOver: codexTurnOver, open: openCodexCall,
            learnId: (since) => codexSessionId(codexHome(config.home), real(config.assistant), since) },
 };
-export function agentArgs(kind, inbound, session = null) {
+export function agentArgs(kind, session = null) {
   const a = AGENTS[kind];
   if (!a) throw new Error(`assistant ${kind}: not a CLI this release can drive`);
-  return a.args(inbound, session);
+  return a.args(session);
 }
 
 // The id lives in a file rather than the database: the page's own writes all go through the CLI, and this one is the
@@ -343,8 +331,7 @@ export function intercomSession({ home = config.home, read = null, write = null,
     catch (e) { console.warn(`intercom session: ${e.message}`); }
   });
   const stored = load();
-  let interruptedAt = Number(stored?.interruptedAt) || 0;   // see restartNotice
-  // prev rides along: the stamp below rewrites the file, and prev is the only handle left on a replaced transcript
+  // prev rides along: every save rewrites the file, and prev is the only handle left on a replaced transcript
   // A session belongs to the CLI that made it (`kind`, claude when unrecorded): after `settings set assistant` the other
   // one starts fresh, and the old id is kept as prev, like any other replaced conversation.
   const same = (stored?.kind || 'claude') === kind;
@@ -354,9 +341,6 @@ export function intercomSession({ home = config.home, read = null, write = null,
   let resumed = false;   // what the start now running actually asked for; state.created has already moved on by the time it exits
   return {
     get: () => ({ ...state }),
-    // Shutdown stamps it when the session was mid-turn; the next start takes it, once. Any later save drops it too.
-    interrupted: (at = Date.now()) => save({ ...state, interruptedAt: at }),
-    takeInterrupted: () => { const at = interruptedAt; interruptedAt = 0; if (at) save(state); return at; },
     // Called once the spawn succeeded: an id we asked claude to mint is one we must resume next time.
     started: () => { resumed = state.created; if (!state.created) { state = { ...state, created: true }; save(state); } },
     // A CLI that names its own session (codex): the id read off its rollout once it started. Only a uuid, and only once.
@@ -374,24 +358,8 @@ export function intercomSession({ home = config.home, read = null, write = null,
   };
 }
 
-// In channel mode the session is the bot's only reader and the plugin acks a batch as it takes it, so a restart mid-turn
-// loses the message it was answering: not at Telegram, not in any log. The restarted session has the context but not the
-// message, so the chat is told to resend. Only after a restart that interrupted a live turn, and only while that is recent.
-export const RESTART_NOTICE_MS = 10 * 60_000;
-const BUSY_MS = 60_000;   // output this recent at shutdown counts as mid-turn
-// ponytail: output is the only sign of a turn the server sees, so a turn typed at the dashboard or a resize in the last
-// minute counts too (a needless notice, never a missed one); telling a Telegram turn apart needs the plugin to say so.
-// The banner a fresh start prints does not: only output after STARTUP_OK_MS of uptime does.
-export const midTurn = (s, now = Date.now()) => !!s?.pty && now - s.lastOutputAt < BUSY_MS && s.lastOutputAt - s.startedAt > STARTUP_OK_MS;
-export async function restartNotice({ inbound, intercom, send, now = Date.now() }) {
-  const at = intercom.takeInterrupted();   // taken in every mode, so a stamp never outlives the start after it
-  if (inbound !== 'channel' || !at || now - at > RESTART_NOTICE_MS) return false;
-  await send();
-  return true;
-}
-
 // A browser import runs in its own Claude session (a person logs into the bank in the window it opens), never in the
-// household's: that one would carry the whole transcript into every later chat and, in channel mode, keep Telegram waiting.
+// household's: that one would carry the whole transcript into every later chat and keep Telegram waiting.
 // The CLI owns that session's argv (`finnamon import --browser` execs claude on the skill with its allow list), so the
 // server spawns the CLI rather than keeping a second copy of the list here. Never --attach: a Chrome answering on 9222
 // may be another program's (an automation browser), and the bank login would land in its profile; Finnamon's own window.
@@ -410,7 +378,7 @@ export function importCommand(bank, { noCdp = false, extension = false } = {}) {
 // once: a session that ends when the process exits (the import), instead of one kept alive for the household (the intercom)
 // args may be a function: the household session recomputes its argv on every start, because the id it minted the first
 // time has to be resumed on the next one.
-export function createSession({ spawn = spawnPty, inbound = 'daemon', cmd = config.claude, args = claudeArgs(inbound), cwd = config.assistant, extraEnv = {}, asking = claudeAsking, gate = null, once = false, onOutput = () => {}, onState = () => {}, onStart = () => {}, onExit = () => {}, log = console } = {}) {
+export function createSession({ spawn = spawnPty, cmd = config.claude, args = claudeArgs(), cwd = config.assistant, extraEnv = {}, asking = claudeAsking, gate = null, once = false, onOutput = () => {}, onState = () => {}, onStart = () => {}, onExit = () => {}, log = console } = {}) {
   const session = { pty: null, buffer: [], bufferBytes: 0, state: 'STARTING', lastOutputAt: 0, lastLine: '', tail: '', exits: 0, startedAt: 0, stopped: false };
   const MAX_BUFFER = 256 * 1024;   // scrollback replayed to a page that (re)connects
   const TAIL_CHARS = 4000;   // the screen text a Codex dialog is read from: its question, its options and its footer
@@ -568,7 +536,7 @@ export function updater({ call = cli, spawn = spawnChild, home = config.home, no
 // ---- routes -----------------------------------------------------------------------------------------------------
 
 // The routes alone, with the CLI and the host check injectable, so tests can drive them without a PTY or a shell.
-export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon', allowHost = loopback(config.port).host, allowOrigin = loopback(config.port).origin, token = webToken, spec = specPath, home = config.home, startImport = null, talk = null, relay = null, update = null, loginProblem = () => null } = {}) {
+export function buildApp({ cli: call = cli, exec: sh = exec, allowHost = loopback(config.port).host, allowOrigin = loopback(config.port).origin, token = webToken, spec = specPath, home = config.home, startImport = null, talk = null, relay = null, update = null, loginProblem = () => null } = {}) {
   let linkOwner = null;   // whose bank that token is for (null: the CLI's default owner); it must survive the OAuth round trip with the token
   let linkToken = null;   // the last Plaid Link token minted: an OAuth return (HTTPS only) may land in a new tab, whose sessionStorage is empty
   const app = express();
@@ -633,12 +601,10 @@ export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon',
     res.set({ 'Content-Type': 'audio/mp4', 'X-Pieces': String(r.count), 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }).send(r.audio);
   });
 
-  // Telegram through this session (inbound=session): the daemon's hand-off, one phone message in, its reply out. The bearer
-  // key only (the daemon reads the same web-token file), never the page's cookie: a page has nothing to relay. A dashboard
-  // that started in another mode refuses rather than answer the chat from a session started for something else.
+  // Telegram through this session: the daemon's hand-off, one phone message in, its reply out. The bearer key only (the
+  // daemon reads the same web-token file), never the page's cookie: a page has nothing to relay.
   app.post('/api/telegram/turn', async (req, res) => {
     if (req.auth !== 'bearer') return res.status(403).json({ error: 'only the Finnamon daemon relays Telegram messages' });
-    if (inbound !== 'session') return res.status(409).json({ error: `this dashboard started with inbound=${inbound}; restart it (finnamon update --no-pull)` });
     if (!relay) return res.status(503).json({ error: 'this server has no session to relay to' });
     const { from, text, note, timeout } = req.body || {};
     const r = await relay.ask({ from, text, note }, Number(timeout) * 1000);
@@ -657,7 +623,7 @@ export function buildApp({ cli: call = cli, exec: sh = exec, inbound = 'daemon',
         call('property', 'list'), call('networth', '--history', '--months', '12').catch(() => []),
         call('budget', 'overall').catch(() => null)]);   // a charge two budgets share, once; and how many rows have no category
       const owners = await call('owner', 'list').catch(() => []);   // the Link account picker asks whose bank it is when there are several
-      res.json({ owners: Array.isArray(owners) ? owners : [], status, accounts, budgets, overall, networth, alerts, resolved, properties, inbound, health: health({ ...status, login_problem: loginProblem() }, inbound), delta: delta(history), history: Array.isArray(history) ? history : [] });
+      res.json({ owners: Array.isArray(owners) ? owners : [], status, accounts, budgets, overall, networth, alerts, resolved, properties, health: health({ ...status, login_problem: loginProblem() }), delta: delta(history), history: Array.isArray(history) ? history : [] });
     } catch (e) { fail(res, e, 500); }
   });
   app.get('/api/chart', async (_req, res) => {   // the board: a list of specs; a pre-0.7.5 file holds one object
@@ -907,8 +873,6 @@ export function transcriptOf(term, intercom, agent, cwd = config.assistant) {
 
 export async function main() {
   mkdirSync(chartsDir, { recursive: true });
-  let inbound = 'daemon';
-  try { inbound = (await cli('channel', 'status')).inbound; } catch (e) { console.warn(`finnamon channel status: ${e.message}`); }
   // Which CLI runs the session: read before the first start, never guessed. A read that fails (a database busy under
   // `finnamon update`) is retried, not taken as claude: a Codex household's dashboard must not start Claude, and a
   // fresh Claude record would push the Codex conversation's id out of intercom.json.
@@ -929,7 +893,7 @@ export async function main() {
   let term = null;   // created once the port is ours: a port we cannot take must never spawn Claude
   let intercom = null, learning = null;
   let loginProblem = null;   // the assistant's CLI is signed out: the session is held back and the page says so
-  // Talk to Finnamon, and in session mode Telegram, type into the household session and read the answer off its own transcript.
+  // Talk to Finnamon, and Telegram, type into the household session and read the answer off its own transcript.
   const sessionTranscript = () => transcriptOf(term, intercom, agent);
   const read = (...a) => agent.readTurn(...a), open = (...a) => agent.open(...a);   // only called once a session runs, so agent is set
   // Codex takes Enter during a turn as a steer into it, not a queued line (Claude Code queues it): Talk waits for the turn there.
@@ -938,7 +902,7 @@ export async function main() {
                             since: () => term?.session.startedAt || 0, transcript: sessionTranscript, read, open });
   const relay = createRelay({ write: (d) => term?.write(d), idle: () => term?.session.state === 'WAITING', asking: () => term?.session.state === 'QUESTION',
                               since: () => term?.session.startedAt || 0, transcript: sessionTranscript, read, open });
-  const app = buildApp({ inbound, allowHost: lo.host, allowOrigin: lo.origin, startImport: (bank, opts) => imports.start(bank, opts), talk, relay, update: process.env.FINNAMON_DEMO ? null : updater(), loginProblem: () => loginProblem });   // a demo has nothing to update: `finnamon update` would act on the household
+  const app = buildApp({ allowHost: lo.host, allowOrigin: lo.origin, startImport: (bank, opts) => imports.start(bank, opts), talk, relay, update: process.env.FINNAMON_DEMO ? null : updater(), loginProblem: () => loginProblem });   // a demo has nothing to update: `finnamon update` would act on the household
   const server = createServer(app);
   // A browser sends the page's Origin; a non-browser client on this machine (wscat, a test) sends none. Any other origin
   // is a hostile tab, whatever Host it managed to resolve to. Either way the handshake carries the key or is refused.
@@ -947,7 +911,7 @@ export async function main() {
   wss.on('connection', (ws, req) => {
     console.log(`${stamp()} intercom connect from ${peer(req)} via ${req.auth}`);   // who reached the shell, and how; never the key itself
     clients.add(ws);
-    ws.send(JSON.stringify({ type: 'hello', state: loginProblem ? 'SIGNED_OUT' : term ? term.session.state : 'STARTING', inbound,
+    ws.send(JSON.stringify({ type: 'hello', state: loginProblem ? 'SIGNED_OUT' : term ? term.session.state : 'STARTING',
                              replay: term ? term.replay() + (loginProblem ? signedOutText(loginProblem) : '') : loginProblem ? signedOutText(loginProblem) : '',
                              import: imports.current ? { state: imports.current.session.state, replay: imports.current.replay() } : null }));
     ws.key = req.key;
@@ -1009,11 +973,9 @@ export async function main() {
       agent = AGENTS[kind];
       intercom = intercomSession({ kind, uuid: agent.mintsId ? randomUUID : () => null });   // the household's assistant survives this process: `finnamon update` restarts us, not the conversation
       if (!(await ready())) { setTimeout(startTerm, 30_000); return; }
-      console.log(`finnamon web on http://${config.host}:${config.port}, key in ${join(config.home, TOKEN_FILE)}: \`finnamon open\` opens it (${intercom.get().created ? 'resuming' : 'new'} session in ${config.assistant}: ${agent.cmd} ${agentArgs(kind, inbound, intercom.get()).join(' ')})`);
-      restartNotice({ inbound, intercom, send: () => cli('notify', '--restarted') })
-        .catch((e) => console.warn(`restart notice not sent: ${e.message}`));
+      console.log(`finnamon web on http://${config.host}:${config.port}, key in ${join(config.home, TOKEN_FILE)}: \`finnamon open\` opens it (${intercom.get().created ? 'resuming' : 'new'} session in ${config.assistant}: ${agent.cmd} ${agentArgs(kind, intercom.get()).join(' ')})`);
       term = createSession({
-        inbound, cmd: agent.cmd, args: () => agentArgs(kind, inbound, intercom.get()), extraEnv: agent.env, gate: ready,
+        cmd: agent.cmd, args: () => agentArgs(kind, intercom.get()), extraEnv: agent.env, gate: ready,
         asking: agent.turnOver ? (s) => agent.asking(s) && !agent.turnOver(transcriptOf(term, intercom, agent)) : agent.asking,
         onStart: () => { intercom.started(); clearInterval(learning); learning = agent.learnId ? learnId(agent, intercom, Date.now()) : null; },
         onExit: ({ uptimeMs }) => { clearInterval(learning); intercom.noteExit(uptimeMs); },
@@ -1026,7 +988,6 @@ export async function main() {
   // and it resumes the same session id. An overlap there is the one thing that corrupts a conversation.
   const shutdown = async () => {
     server.close(); talk.stop();
-    if (term && midTurn(term.session)) intercom?.interrupted();
     await Promise.race([Promise.all([term?.stop(SHUTDOWN_GRACE_MS), imports.current?.stop(SHUTDOWN_GRACE_MS)]),
                         new Promise((r) => setTimeout(r, SHUTDOWN_GRACE_MS + 500))]);
     process.exit(0);

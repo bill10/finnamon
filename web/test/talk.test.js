@@ -27,7 +27,7 @@ test('a turn is found by its line, reports each step, and ends at end_turn with 
   assert.equal(readTurn(quiet, p, true).done, true, 'a quiet session after it said something is done');
   const cut = [...working, user('stop, something else')];
   assert.equal(readTurn(cut, p).done, true, 'the next prompt ends it');
-  assert.equal(readTurn([...working, user('<channel source="telegram">hi</channel>')], p).done, false, 'a channel message is not the owner\'s next prompt');
+  assert.equal(readTurn([...working, user('<local-command-stdout>hi</local-command-stdout>')], p).done, false, 'a tagged entry is not the owner\'s next prompt');
 });
 
 test('progress phrases: only a clean Bash description, said whole; nothing derived from tools, commands or prose', () => {
@@ -383,7 +383,7 @@ test('the page on a loudspeaker: speech over the reply ducks it; its own echo is
   }
 });
 
-// Telegram through the intercom (inbound=session): the daemon's hand-off, typed like Talk's lines, the reply read off the transcript.
+// Telegram through the intercom: the daemon's hand-off, typed like Talk's lines, the reply read off the transcript.
 test('relay: a Telegram turn is typed under its tag and answered from the transcript; two wait their turn; a slow one times out', async () => {
   const { createRelay, telegramPrompt } = await import('../talk.js');
   assert.equal(telegramPrompt({ from: 'sam', text: 'how much\x1b[201~ on dining?', note: 'replying to alert 7' }), '[telegram · sam; replying to alert 7] how much [201~ on dining?');
@@ -419,13 +419,13 @@ test('relay: a Telegram turn is typed under its tag and answered from the transc
   } finally { rmSync(d, { recursive: true, force: true }); }
 });
 
-test('relay route: bearer key only, only in session mode, and the relay\'s answer passes through', async () => {
+test('relay route: bearer key only, and the relay\'s answer passes through', async () => {
   const key = 'k'.repeat(64), asked = [];
   const relay = { ask: async (m, ms) => { asked.push([m, ms]); return m.text === 'slow' ? { status: 504, error: 'timeout' } : { reply: 'ok' }; } };
-  const serve = async (inbound) => { const s = buildApp({ token: () => key, cli: async () => ({}), allowHost: () => true, inbound, relay }).listen(0, '127.0.0.1'); await new Promise(r => s.once('listening', r)); return s; };
+  const serve = async () => { const s = buildApp({ token: () => key, cli: async () => ({}), allowHost: () => true, relay }).listen(0, '127.0.0.1'); await new Promise(r => s.once('listening', r)); return s; };
   const post = (srv, headers, body) => fetch(`http://127.0.0.1:${srv.address().port}/api/telegram/turn`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
   const bearer = { authorization: `Bearer ${key}` };
-  const session = await serve('session'), daemon = await serve('daemon');
+  const session = await serve();
   try {
     const r = await post(session, bearer, { from: 'bill', text: 'hi', note: '', timeout: 45 });
     assert.equal(r.status, 200); assert.deepEqual(await r.json(), { reply: 'ok' });
@@ -434,10 +434,8 @@ test('relay route: bearer key only, only in session mode, and the relay\'s answe
     assert.equal((await post(session, {}, { text: 'hi' })).status, 401, 'no key');
     assert.equal((await post(session, { cookie: `finnamon_token_8888=${key}` }, { text: 'hi' })).status, 403, 'the page has nothing to relay');
     assert.equal((await fetch(`http://127.0.0.1:${session.address().port}/api/telegram/turn`, { headers: bearer })).status, 404, 'POST only');
-    const wrong = await post(daemon, bearer, { from: 'bill', text: 'hi' });
-    assert.equal(wrong.status, 409); assert.match((await wrong.json()).error, /restart/);
     assert.equal(asked.length, 2);
-  } finally { session.close(); daemon.close(); }
+  } finally { session.close(); }
 });
 
 test('an open tool call is a dialog nothing may type into, until its result, the turn\'s end, or a restart of the session', async () => {
