@@ -46,7 +46,6 @@ AGENTS_MD_MAX = 32 * 1024   # Codex's project_doc_max_bytes: past it the instruc
 
 # Per-CLI snippets. Skill invocations are `$name` in Codex; the skill names come from the bundle itself.
 SWAPS = ((".claude/skills/", ".agents/skills/"), ("claude -p", "codex exec"))
-CHANNEL_ONLY = re.compile(r"Claude Code's (own )?Telegram channel")   # the channel plugin is Claude Code's; a Codex household never has it
 # Codex's sandbox keeps the shell away from the database, so on Codex every `finnamon …` is the finnamon(argv) MCP tool
 # (finnamon/mcp_server.py); the skills keep one wording for both CLIs and this line, after AGENTS.md's title, says so.
 CODEX_TOOL_NOTE = ("**On Codex, every `finnamon …` command in these instructions and the skills is a call to the `finnamon` tool**"
@@ -72,7 +71,6 @@ CLAUDE_ONLY_SKILLS = (".claude/skills/import-extension/",)   # drives the Claude
 
 
 def to_codex(text: str, skills: list[str]) -> str:
-    text = "\n".join(l for item in _items(text) if not CHANNEL_ONLY.search(" ".join(item)) for l in item)
     for a, b in SWAPS:
         text = text.replace(a, b)
     if skills:
@@ -217,57 +215,69 @@ def ensure() -> dict | None:
     return None
 
 
-CHANNEL_PLUGIN = "telegram@claude-plugins-official"
+TELEGRAM_PLUGIN = "telegram@claude-plugins-official"   # Claude Code's own Telegram plugin: Finnamon's retired channel mode ran it
 # A management subcommand: it edits the plugin registry and the directory's .claude/settings.local.json and starts no
-# session, so no MCP server and none of the second-copy hazard --strict-mcp-config exists for (`claude plugin --help`).
-CHANNEL_PLUGIN_ARGS = ("plugin", "install", CHANNEL_PLUGIN, "--scope", "local")
-CHANNEL_PLUGIN_INSTALL = "claude " + " ".join(CHANNEL_PLUGIN_ARGS)   # the by-hand form of the argv below, minus --yes (`-y, --yes` per `claude plugin install --help`: a person answers the prompt)
-PLUGIN_INSTALL_TIMEOUT_S = 120
+# session, so no MCP server (`claude plugin --help`).
+PLUGIN_UNINSTALL = ("plugin", "uninstall", TELEGRAM_PLUGIN, "--scope", "local")
+PLUGIN_TIMEOUT_S = 120
 
 
-def channel_plugin_registered(d: Path | None = None) -> bool:
+def telegram_plugin_registered(d: Path | None = None) -> bool:
     try:
-        return json.loads(((d or dir()) / ".claude/settings.local.json").read_text())["enabledPlugins"][CHANNEL_PLUGIN] is True
+        return json.loads(((d or dir()) / ".claude/settings.local.json").read_text())["enabledPlugins"][TELEGRAM_PLUGIN] is True
     except (OSError, ValueError, KeyError, TypeError, RecursionError):
         return False
 
 
-def plugin_dir_problem(d: Path) -> str | None:
-    """Why the Telegram plugin must not be registered for `d`, or None when `d` is the household's own assistant directory.
-    Any `claude` started in a folder the plugin is registered for loads it and polls the bot, stealing the household's
-    updates (2026-09-26: a board worker in a worktree did). So only the default ~/.finnamon/assistant qualifies: not a
-    scratch FINNAMON_HOME or a FINNAMON_ASSISTANT override, not under a temp dir, not inside a git checkout or worktree."""
-    d = Path(d).resolve()
-    if os.environ.get("FINNAMON_ASSISTANT") or config.home().resolve() != (Path.home() / ".finnamon").resolve():
-        return f"{d} is not the household's ~/.finnamon/assistant (FINNAMON_HOME or FINNAMON_ASSISTANT is overridden)"
-    if any(d.is_relative_to(t) for t in {Path(tempfile.gettempdir()).resolve(), Path("/tmp").resolve()}):
-        return f"{d} is under a temp directory"
-    home = Path.home().resolve()   # home and above are not "a checkout": a dotfiles repo at ~/.git must not refuse the household
-    if any((p / ".git").exists() for p in (d, *d.parents) if not home.is_relative_to(p)):
-        return f"{d} is inside a git checkout or worktree"
-    return None
-
-
-def register_channel_plugin(exe: str | None, d: Path | None = None, force: bool = False) -> tuple[bool | None, str]:
-    """Channel mode runs Claude Code's Telegram plugin inside the dashboard's session, and a local-scope plugin belongs to
-    the directory the session runs in: this one. (True, msg) registered, (False, msg) already was, (None, msg) could not
-    or would not (plugin_dir_problem; `force` skips that check), the message naming the by-hand step."""
-    d = d or dir()
-    how = f"cd {d} && {CHANNEL_PLUGIN_INSTALL}"
-    if channel_plugin_registered(d):
-        return False, f"the Telegram channel plugin is already registered for {d}"
-    why = None if force else plugin_dir_problem(d)
-    if why:
-        return None, f"not registering the Telegram channel plugin: {why}; a claude started there would steal the bot's updates (--force to do it anyway)"
-    if not exe:
-        return None, f"`claude` is not on PATH, so the Telegram channel plugin is not registered for {d}; when it is: {how}"
+def _telegram_regs() -> list[dict]:
+    """The registry's entries for the Telegram plugin; a registry that is missing or unparseable has none."""
     try:
-        r = subprocess.run([exe, *CHANNEL_PLUGIN_ARGS, "--yes"], cwd=d, capture_output=True, text=True, timeout=PLUGIN_INSTALL_TIMEOUT_S)
-    except (OSError, subprocess.SubprocessError) as e:
-        return None, f"could not register the Telegram channel plugin for {d} ({e}); by hand: {how}"
-    if r.returncode:
-        return None, f"registering the Telegram channel plugin for {d} failed: {(r.stderr or r.stdout).strip()[-300:]}\n  by hand: {how}"
-    return True, f"registered the Telegram channel plugin for {d}"
+        regs = json.loads(plugins_file().read_text())["plugins"].get(TELEGRAM_PLUGIN) or []
+        return [r for r in regs if isinstance(r, dict)]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
+        return []
+
+
+def _registered_locally(d: Path) -> bool:
+    """The plugin registry names `d` as a local-scope home of the Telegram plugin."""
+    try:
+        return any(r.get("scope") == "local" and r.get("projectPath") and Path(r["projectPath"]).resolve() == d.resolve()
+                   for r in _telegram_regs())
+    except (OSError, TypeError, RecursionError):
+        return False
+
+
+def unregister_telegram_plugin(exe: str | None, d: Path | None = None) -> list[str]:
+    """`finnamon update`: channel mode registered the Telegram plugin for the assistant directory, and a `claude` started
+    there would still poll the household's bot. Take it off: `claude plugin uninstall --scope local` run there ("not
+    installed" is fine), then its enabledPlugins entry in .claude/settings.local.json if the uninstall left one. A user-scope
+    registration and ~/.claude/channels/ are the person's and are never touched. The lines to print; [] when there was none."""
+    d = d or dir()
+    local = d / ".claude/settings.local.json"
+    if not telegram_plugin_registered(d) and not _registered_locally(d):
+        return []
+    out, how = [], f"cd {d} && claude {' '.join(PLUGIN_UNINSTALL)}"
+    if not exe:
+        out.append(f"warning: `claude` is not on PATH, so the retired Telegram channel plugin is still registered for {d}; when it is: {how}")
+    else:
+        try:
+            r = subprocess.run([exe, *PLUGIN_UNINSTALL], cwd=d, capture_output=True, text=True, timeout=PLUGIN_TIMEOUT_S)
+            said = (r.stderr or r.stdout).strip()
+            if r.returncode and not re.search(r"not (installed|found)", said, re.IGNORECASE):
+                out.append(f"warning: could not unregister the retired Telegram channel plugin for {d}: {said[-300:]}\n  by hand: {how}")
+            else:
+                out.append(f"unregistered the retired Telegram channel plugin for {d}")
+        except (OSError, subprocess.SubprocessError) as e:
+            out.append(f"warning: could not unregister the retired Telegram channel plugin for {d} ({e}); by hand: {how}")
+    try:   # the uninstall usually takes the entry with it; re-read, so a write of its own in between is not undone
+        settings = json.loads(local.read_text())
+        if TELEGRAM_PLUGIN in settings.get("enabledPlugins", {}):
+            del settings["enabledPlugins"][TELEGRAM_PLUGIN]
+            _write_atomic(local, (json.dumps(settings, indent=2) + "\n").encode())
+            out.append(f"removed the Telegram plugin from {local}")
+    except (OSError, ValueError, TypeError, AttributeError, RecursionError):
+        pass
+    return out
 
 
 def plugins_file() -> Path:
@@ -275,15 +285,13 @@ def plugins_file() -> Path:
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "plugins" / "installed_plugins.json"
 
 
-def stray_channel_plugins() -> list[str]:
+def stray_telegram_plugins() -> list[str]:
     """Where the Telegram plugin is registered other than the assistant directory. Read only: fixing it is the person's."""
     home = dir()
-    try:   # a registry that is missing or unparseable is not a finding
-        regs = json.loads(plugins_file().read_text())["plugins"].get(CHANNEL_PLUGIN) or []
-        return sorted({"(user scope: every folder)" if r.get("scope") == "user" else str(r.get("projectPath"))
-                       for r in regs if isinstance(r, dict)
-                       and (r.get("scope") == "user" or (r.get("projectPath") and Path(r["projectPath"]).resolve() != home))})
-    except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
+    try:
+        return sorted({"(user scope: every folder)" if r.get("scope") == "user" else str(r.get("projectPath")) for r in _telegram_regs()
+                       if r.get("scope") == "user" or (r.get("projectPath") and Path(r["projectPath"]).resolve() != home)})
+    except (OSError, TypeError, RecursionError):
         return []
 
 
@@ -294,7 +302,7 @@ def claude_config_path() -> Path:
 
 def trust(d: Path | None = None) -> bool | None:
     """Mark the assistant directory trusted in ~/.claude.json: Claude Code ignores a workspace's .claude/settings.json (the
-    allow list, the reply-guard hook) until the directory has been trusted, interactively once or by this key, which is
+    allow list, the hooks) until the directory has been trusted, interactively once or by this key, which is
     the fix its own warning names. True = written, False = already trusted, None = could not (the caller says how to do
     it by hand). Read-modify-replace of the one key; everything else in the file is left as it was."""
     d = str(d or dir())
@@ -352,7 +360,7 @@ TRUST_FIX = "run `finnamon install` or `finnamon update`, or `claude` once in th
 
 def problems(claude_trust: bool = True) -> list[str]:
     """What a sealed `claude -p` would be missing in the assistant directory: a file, or Claude Code's trust in the
-    directory, without which it ignores the settings there (the allow list, the reply-guard hook) and every command is
+    directory, without which it ignores the settings there (the allow list, the hooks) and every command is
     "requires approval" with nobody to approve it."""
     d = dir()
     out = [f"missing {d / rel} (run `finnamon install`, or `finnamon update`, to write the assistant bundle)" for rel in REQUIRED if not (d / rel).is_file()]

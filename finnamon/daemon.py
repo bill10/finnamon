@@ -2,26 +2,22 @@
 
     ┌─ sync thread ───────────────────────┐  ┌─ telegram thread ─────────────────┐  ┌─ converse thread ──────────────────────┐
     │ every sync_interval_hours           │  │ getUpdates long-poll (offset in   │  │ inbox queue, strictly one at a time:    │
-    │   (state.last_run); 15 min retry    │  │   state); stamps daemon_alive_at  │  │   claude -p --resume <household session>│
-    │   after a failed cycle              │  │ drop: non-owner, bot, service,    │  │   hard timeout + kill → failure message │
-    │                                     │  │ (inbound=channel: ack last batch, │  │                                         │
-    │                                     │  │  then stamp alive only; the       │  │                                         │
-    │                                     │  │  Claude plugin polls)             │  │                                         │
+    │   (state.last_run); 15 min retry    │  │   state); stamps daemon_alive_at  │  │   POST /api/telegram/turn: the dashboard│
+    │   after a failed cycle              │  │ drop: non-owner, bot, service,    │  │   types it into its intercom session    │
+    │                                     │  │   wrong-chat messages             │  │   and answers off its transcript        │
     │                                     │  │ 409 ×3 → one notice; status shows │  │                                         │
     │                                     │  │   inbound_conflict_at             │  │                                         │
-    │ run.cycle(): sync→detect→triage→    │  │   wrong-chat messages             │  │   2 timeouts in a row → fresh session   │
-    │   notify, under the run lock        │  │ pending_owner + code → enroll     │  │   NO_REPLY → send nothing               │
-    │ each tick: link.check_pending       │  │ owner messages → inbox            │  │   result → sendMessage; charts → photo  │
+    │ run.cycle(): sync→detect→triage→    │  │ pending_owner + code → enroll     │  │   NO_REPLY → send nothing               │
+    │   notify, under the run lock        │  │ owner messages → inbox            │  │   result → sendMessage; charts → photo  │
+    │ each tick: link.check_pending       │  │                                   │  │                                         │
     │   (finish a `link --start` add) and │  │                                   │  │                                         │
     │   link.check_updates (a re-login)   │  │                                   │  │                                         │
     └─────────────────────────────────────┘  └───────────────────────────────────┘  └─────────────────────────────────────────┘
 
-inbound=session (`finnamon channel session`): the converse thread hands each message to the dashboard instead
-(POST /api/telegram/turn), which types it into its live intercom session and answers with the reply off that session's
-transcript; Telegram and the dashboard then share one conversation, with no `claude -p` and no channel plugin.
+Telegram and the dashboard share one conversation: the daemon is the bot's one reader and the intercom session answers.
 
-Why three threads: a stuck `claude -p` must never delay a due sync or the Telegram poll (eng review 1A).
-Why one at a time: two concurrent --resume calls on one session corrupt it.
+Why three threads: a stuck turn must never delay a due sync or the Telegram poll (eng review 1A).
+Why one at a time: the intercom session takes one turn at a time.
 If any thread dies, the process exits non-zero so launchd/systemd restart it; a dead thread is never silent.
 """
 from __future__ import annotations
@@ -40,7 +36,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from . import approval, assistant, claude_runner, config, link, notify, owners, run, store, telegram
+from . import approval, assistant, claude_runner, config, link, owners, run, store, telegram
 from .telegram import esc
 
 log = logging.getLogger("finnamon.daemon")
@@ -48,17 +44,10 @@ log = logging.getLogger("finnamon.daemon")
 CHART_PATH_RE = re.compile(r"(?P<p>(?:~|/)[^\s'\"`]*?/charts/[^\s'\"`]+\.png)")
 RETRY_AFTER_ERROR_MIN = 15
 TICK_S = 60   # the sync thread's loop period; the "within a minute" the assistant promises for a pending link
-TIMEOUTS_BEFORE_FRESH_SESSION = 2
-CHANNEL_IDLE_S = 30      # channel mode: re-read state.inbound this often; must stay under owners.DAEMON_ALIVE_S (90)
+NO_BOT_IDLE_S = 30       # no bot yet: stamp alive this often; must stay under owners.DAEMON_ALIVE_S (90)
 CONFLICT_FIRST_BACKOFF_S = 10  # first getUpdates 409: an `install` restart overlaps its predecessor's long-poll for a few seconds
 CONFLICT_BACKOFF_S = 60  # 409 twice in a row: another consumer owns the bot's updates
 CONFLICTS_BEFORE_NOTICE = 3  # consecutive 409s before the household is told (once per episode) and status shows inbound_conflict_at
-ACK_TRIES = 3  # hand-off acks retried on the idle tick; each failed try kicks the plugin's long-poll, so not forever
-DEAF_CHECK_S = 60        # channel mode: how often to ask Telegram whether anything is collecting the chat
-DEAF_AFTER_S = 300       # ... and how long a backlog may sit before the household is told nobody is reading it. A live
-                         # reader that is mid-answer may not be collecting either, and a Claude turn can be slow, so this
-                         # is well past the slowest turn: a late telling beats telling a working system it is broken.
-DEAF_REPEAT_H = 6        # ... and the floor between two tellings, however many outages there were
 STABLE_S = 600           # up this long and the start is not part of a crash loop: state.daemon_starts is cleared
 INTERCOM_MAX_S = 300     # session mode: the longest turn the dashboard waits for (web/talk.js RELAY_TIMEOUT_MS)
 INTERCOM_PERMISSION_S = 660   # session mode: the most a turn's clock is stopped for a permission dialog (web/talk.js PERMISSION_WAIT_MS)
@@ -75,12 +64,34 @@ def bot_configured() -> bool:
     return bool(config.telegram_token())
 
 
+def migrate_inbound(conn: sqlite3.Connection) -> str | None:
+    """Telegram has one mode since v0.57: it shares the dashboard's conversation. A household left on Claude Code's
+    channel plugin or on the daemon's own `claude -p` session (state.inbound 'channel' or unset) moves to it, once; the
+    line to tell them, or None when there is nothing to move or no bot to tell about. `finnamon update`, `install`, `init`
+    and the daemon's start all run it; state.inbound = 'session' is only the mark that it has run."""
+    was = store.get_state(conn, "inbound")
+    if was == "session":
+        return None
+    for k in ("channel_deaf_since", "inbound_off_at", "session", "session_tip_shown"):   # the retired modes' leftovers
+        store.set_state(conn, k, None)
+    if was == "channel":   # the plugin may have answered a batch it never confirmed: Telegram replays it to us (handle_update drops it)
+        store.set_state(conn, "inbound_off_at", int(time.time()))
+    store.set_state(conn, "inbound", "session")
+    # channel mode's "I stopped hearing this chat" notice has no wording any more: one still open is moot, not news
+    conn.execute("UPDATE alerts SET resolved_at=datetime('now','localtime'), resolution='superseded' WHERE kind='channel_deaf' AND resolved_at IS NULL")
+    if not bot_configured():
+        return None
+    return ("Telegram now always shares the dashboard's conversation: it was on "
+            + ("Claude Code's Telegram channel plugin" if was == "channel" else "the daemon's own separate session") + ", which is retired."
+            + (" Stop any `claude --channels` session you started by hand: the daemon reads the bot now. The copy of the bot token in"
+               " ~/.claude/channels/telegram/.env is no longer used; delete it when you like." if was == "channel" else ""))
+
+
 class Daemon:
     def __init__(self, conn_factory=store.connect):
         self.conn_factory = conn_factory
         self.stop = threading.Event()
         self.inbox: queue.Queue = queue.Queue()
-        self.consecutive_timeouts = 0
         self.strangers: dict = {}   # Telegram user id -> when they were last told how to join (once a day, so a chatty one is not answered every line)
         self.died = False   # _start ended by a failure (harness check, dead thread), not a clean stop
 
@@ -150,31 +161,17 @@ class Daemon:
         conn = self._connect("telegram")
         if conn:
             self.verify_privacy(conn)
-        ack_tries = 0       # < ACK_TRIES = we still owe Telegram an ack for the last batch (state on disk decides, not this process's history)
-        last_deaf_check = None   # the first idle tick after the ack hand-off asks; not 0.0: monotonic counts from boot, so a box up under a minute would skip it
         conflicts = 0       # consecutive 409s
         while conn and not self.stop.is_set():
             try:
                 store.set_state(conn, "daemon_alive_at", store.now_local())
                 if not bot_configured():   # init skipped the bot (#111): nothing to poll until `finnamon init` adds one
-                    self.stop.wait(CHANNEL_IDLE_S)
-                    continue
-                if store.get_state(conn, "inbound") == "channel":
-                    # Telegram allows one getUpdates consumer per bot; in channel mode the Claude Code Telegram
-                    # channel plugin is that consumer and handles conversation. We only send.
-                    if ack_tries < ACK_TRIES:
-                        ack_tries = ACK_TRIES if self.ack_updates(conn) else ack_tries + 1   # else the plugin's first poll replays what we already handled
-                        conflicts = 0; store.set_state(conn, "inbound_conflict_at", None)   # `channel on` is the resolution the notice asked for
-                    elif last_deaf_check is None or time.monotonic() - last_deaf_check >= DEAF_CHECK_S:
-                        last_deaf_check = time.monotonic()
-                        self.check_channel_heard(conn)
-                    self.stop.wait(CHANNEL_IDLE_S)
+                    self.stop.wait(NO_BOT_IDLE_S)
                     continue
                 offset = store.get_state(conn, "telegram_offset")
                 updates = telegram.get_updates(int(offset) if offset else None)
-                ack_tries = 0
-                if store.get_state(conn, "inbound_off_at") and not updates:
-                    store.set_state(conn, "inbound_off_at", None)   # backlog drained: a wrong clock can hurt at most one backlog
+                if not updates and store.get_state(conn, "inbound_off_at"):
+                    store.set_state(conn, "inbound_off_at", None)   # the replayed backlog is drained: a wrong clock can hurt at most one
                 if conflicts:
                     conflicts = 0; store.set_state(conn, "inbound_conflict_at", None)
                 for u in updates:
@@ -186,9 +183,9 @@ class Daemon:
                         log.exception("dropping update %s", u.get("update_id"))
                     store.set_state(conn, "telegram_offset", u["update_id"] + 1)
             except telegram.TelegramError as e:
-                if e.code == 409:   # another getUpdates consumer on this bot: the Claude Code channel session, most likely
+                if e.code == 409:   # another getUpdates consumer on this bot: a `claude` with the Telegram plugin, most likely
                     conflicts += 1
-                    log.warning("getUpdates: 409 Conflict (%s in a row); if the Claude channel session is running, run `finnamon channel on`", conflicts)
+                    log.warning("getUpdates: 409 Conflict (%s in a row); `finnamon status` lists stray Telegram plugin registrations", conflicts)
                     if conflicts == CONFLICTS_BEFORE_NOTICE:
                         self.conflict_notice(conn)
                     self.stop.wait(CONFLICT_FIRST_BACKOFF_S if conflicts == 1 else CONFLICT_BACKOFF_S)
@@ -199,77 +196,6 @@ class Daemon:
                 log.exception("poll loop error")
                 self.stop.wait(10)
 
-    def check_channel_heard(self, conn) -> str | None:
-        """In channel mode the plugin inside the dashboard's Claude session is the bot's only reader. When it dies the
-        household sees nothing at all: the session stays up and answers the dashboard's own terminal, sending still
-        works, and every status surface says fine. Telegram is the one place that knows, so ask it.
-
-        getWebhookInfo reads without consuming, so this cannot take the slot from a plugin that is alive. Returns the
-        state stamped, or None while the chat is being read."""
-        try:
-            pending = telegram.pending_updates(timeout=10)   # a metadata read, not a long-poll: stay well inside owners.DAEMON_ALIVE_S
-        except Exception as e:   # noqa: BLE001 - a Telegram hiccup is not evidence of a dead reader
-            log.warning("could not ask Telegram whether the chat is being read: %s", e)
-            return None
-        since = store.get_state(conn, "channel_deaf_since")
-        if not pending:
-            if since:
-                store.set_state(conn, "channel_deaf_since", None)
-                log.info("the chat is being read again")
-            return None
-        if not since:
-            store.set_state(conn, "channel_deaf_since", store.now_local())   # a message just arrived; the plugin gets a moment
-            return None
-        # Compared in SQL as everywhere else (owners.daemon_alive), so a clock that steps back cannot make the elapsed
-        # time negative in Python and skip the telling. It does delay it: `since` lands in the future and the grace
-        # holds until the wall clock catches up. A delayed telling beats a missed one.
-        if conn.execute("SELECT ? > datetime('now','localtime', ?)", (since, f"-{DEAF_AFTER_S} seconds")).fetchone()[0] == 1:
-            return since   # a reader still has a moment to collect it
-        # The key carries the whole `since`, which is stamped once per outage and does not move, so a continuous outage
-        # is told once. That alone is not enough: a reader that crash-loops collects the backlog, dies, and begins a
-        # fresh outage every few minutes, each with a new `since` and each a new message. DEAF_REPEAT_H is the floor
-        # between two tellings however many outages there were; the advice is the same every time anyway.
-        if conn.execute("SELECT 1 FROM alerts WHERE kind='channel_deaf' AND as_of > datetime('now','localtime',?)",
-                        (f"-{DEAF_REPEAT_H} hours",)).fetchone():
-            return since
-        chat = store.get_state(conn, "chat_id")
-        key = f"health:channel_deaf:{since}"
-        try:
-            # send_pending runs on the sync thread against its own connection, and store.connect is autocommit: without
-            # this the row is visible to its SELECT the instant it is inserted, and a cycle landing inside the send below
-            # sends the same message twice. The lock is non-blocking; a cycle holding it just defers us a check.
-            held = run.lock()
-        except run.Locked:
-            return since
-        try:
-            cur = conn.execute("INSERT OR IGNORE INTO alerts (tier, kind, key, payload_json, as_of) VALUES ('rule','channel_deaf',?,?,?)",
-                               (key, json.dumps({"pending": pending, "since": since, "chat": chat}), store.now_local()))
-            if cur.rowcount:   # newly raised, not the dedupe swallowing a repeat
-                # Sending still works while receiving is broken, which is the only reason this is reportable at all. It
-                # goes now rather than waiting for run.cycle, which the sync interval can put six hours away.
-                row = conn.execute("SELECT * FROM alerts WHERE key=?", (key,)).fetchone()
-                try:
-                    if not notify.send_one(conn, row, chat):
-                        log.warning("channel_deaf raised, but there is no chat_id to send it to")
-                except Exception as e:   # noqa: BLE001 - the row stays pending and the next cycle retries it
-                    log.warning("channel_deaf raised but not sent: %s", e)
-        finally:
-            held.close()
-        return since
-
-    def ack_updates(self, conn: sqlite3.Connection) -> bool:
-        """Confirm our last batch to Telegram before the channel plugin takes over. Anything new this returns is
-        left unconfirmed, so the plugin receives it. False = try again next tick."""
-        offset = store.get_state(conn, "telegram_offset")
-        if not offset:
-            return True
-        try:
-            telegram.get_updates(int(offset), timeout=0)
-            return True
-        except Exception as e:  # noqa: BLE001
-            log.warning("could not acknowledge updates before handing off: %s", e)
-            return False
-
     def conflict_notice(self, conn: sqlite3.Connection) -> None:
         """Two programs are reading the bot: messages get answered by whichever polls first, some twice, some never.
         Say so once in the chat and leave a mark for `finnamon status`."""
@@ -278,8 +204,8 @@ class Daemon:
         if not chat_id:
             return
         try:
-            telegram.send_message(chat_id, "Another program is reading this bot's messages (a Claude Code channel session?), so replies "
-                                           "may be missed or doubled. In a terminal on the Finnamon box: finnamon channel on, or stop that program.")
+            telegram.send_message(chat_id, "Another program is reading this bot's messages (a Claude Code session with the Telegram plugin?), so replies "
+                                           "may be missed or doubled. Stop that program; in a terminal on the Finnamon box, finnamon status lists stray plugin registrations.")
         except Exception as e:  # noqa: BLE001
             log.warning("conflict notice not sent: %s", e)
 
@@ -314,7 +240,7 @@ class Daemon:
             return
         off_at = store.get_state(conn, "inbound_off_at")
         if off_at and m.get("date", 0) < int(off_at):
-            log.info("dropping replayed message %s: sent at %s, before channel off at %s (the plugin answered it)", m.get("message_id"), m.get("date"), off_at)
+            log.info("dropping replayed message %s: sent before the move off channel mode (the plugin answered it)", m.get("message_id"))
             return
         chat_id = str(m["chat"]["id"])
         pending = store.get_state(conn, "pending_owner")
@@ -331,6 +257,8 @@ class Daemon:
                 return
         if chat_id != str(store.get_state(conn, "chat_id")):
             log.info("ignoring message from chat %s", chat_id)
+            if m["chat"].get("type") == "private" and conn.execute("SELECT 1 FROM owners WHERE telegram_user_id=?", (sender.get("id"),)).fetchone():
+                self.tell_member_dm(chat_id, sender)   # channel mode answered members' DMs; now only the household chat is read
             return
         owner = conn.execute("SELECT owner FROM owners WHERE telegram_user_id=?", (sender.get("id"),)).fetchone()
         if not owner:
@@ -341,6 +269,17 @@ class Daemon:
         self.inbox.put({"owner": owner[0], "text": m["text"], "reply_to": reply_to, "message_id": m["message_id"], "chat_id": chat_id})
 
     STRANGER_EVERY_S = 86400
+
+    def tell_member_dm(self, chat_id: str, sender: dict) -> None:
+        """A household member writing to the bot privately: once a day, say where it answers."""
+        key, now = ("dm", sender.get("id")), time.time()
+        if now - self.strangers.get(key, 0) < self.STRANGER_EVERY_S:
+            return
+        self.strangers[key] = now
+        try:
+            telegram.send_message(chat_id, "I only answer in the household group; ask me there.")
+        except telegram.TelegramError as e:
+            log.warning("could not tell member %s where I answer: %s", sender.get("id"), e)
 
     def tell_stranger(self, chat_id: str, sender: dict) -> None:
         """Someone in the household chat who is not a member gets no answer from the assistant; say once why, and how to join."""
@@ -384,47 +323,15 @@ class Daemon:
         chat = msg.get("chat_id") or store.get_state(conn, "chat_id")
         note, alert_id = self.note_for(conn, msg)
         timeout = int(store.setting_num(conn, "claude_timeout_seconds", 120))
-        if store.get_state(conn, "inbound") == "session":
-            text, trouble = self.ask_intercom(msg, note, timeout)
-            if trouble:
-                conn.execute("INSERT INTO feedback (alert_id, owner, text, parsed_action) VALUES (?,?,?,?)", (alert_id, msg["owner"], msg["text"], "intercom_error"))
-                telegram.send_message(chat, trouble)
-                return
-            return self.reply(conn, chat, msg, alert_id, text)
-        prompt = f"[Telegram, {msg['owner']}{'; ' + note if note else ''}] {msg['text']}"
-        session = store.get_state(conn, "session")
-        res = claude_runner.run(prompt, resume=session, timeout=timeout)
-        kind = claude_runner.classify_error(res.error) if not res.ok else None
-        if kind == "session lost" and session:
-            store.set_state(conn, "session", None)
-            res = claude_runner.run(prompt, resume=None, timeout=timeout)
-            kind = claude_runner.classify_error(res.error) if not res.ok else None
-        if kind == "timeout":
-            self.consecutive_timeouts += 1
-            if self.consecutive_timeouts >= TIMEOUTS_BEFORE_FRESH_SESSION and session:
-                log.warning("%d timeouts in a row; starting a fresh session", self.consecutive_timeouts)
-                store.set_state(conn, "session", None)
-                self.consecutive_timeouts = 0
-                res = claude_runner.run(prompt, resume=None, timeout=timeout)
-                kind = claude_runner.classify_error(res.error) if not res.ok else None
-        else:
-            self.consecutive_timeouts = 0
-        if not res.ok:
-            conn.execute("INSERT INTO feedback (alert_id, owner, text, parsed_action) VALUES (?,?,?,?)",
-                         (alert_id, msg["owner"], msg["text"], f"claude_error:{kind}"))   # the key for either CLI
-            codex = claude_runner.kind() == "codex"
-            hint = ("it may have partially completed; check <code>finnamon alerts</code> and <code>finnamon normal --list</code> in a terminal on the Finnamon box" if kind == "timeout"
-                    else "it is busy or out of usage for now; try again later" if kind == "busy"
-                    else "run <code>finnamon doctor</code> on the Finnamon box" if codex
-                    else f"run <code>claude --strict-mcp-config</code> in <code>{esc(str(assistant.dir()))}</code> on the Finnamon box to check the login")
-            telegram.send_message(chat, f"🩺 {'Codex' if codex else 'Claude'} is unavailable ({esc(kind)}); {hint}.")
+        text, trouble = self.ask_intercom(msg, note, timeout)
+        if trouble:
+            conn.execute("INSERT INTO feedback (alert_id, owner, text, parsed_action) VALUES (?,?,?,?)", (alert_id, msg["owner"], msg["text"], "intercom_error"))
+            telegram.send_message(chat, trouble)
             return
-        if res.session_id:
-            store.set_state(conn, "session", res.session_id)
-        self.reply(conn, chat, msg, alert_id, res.text)
+        self.reply(conn, chat, msg, alert_id, text)
 
     def ask_intercom(self, msg: dict, note: str, timeout: int) -> tuple[str, str | None]:
-        """inbound=session: the dashboard types the message into its live session and answers with what the session said
+        """The dashboard types the message into its live session and answers with what the session said
         (web/server.js /api/telegram/turn). (reply, None), or ('', the line the chat gets instead)."""
         timeout = min(max(timeout, 1), INTERCOM_MAX_S)   # what the dashboard will actually wait, so the chat is told the truth
         body = json.dumps({"from": msg["owner"], "text": msg["text"], "note": note, "timeout": timeout}).encode()
@@ -523,6 +430,11 @@ class Daemon:
                          ", ".join(wrote["backed_up"]) or "none", ", ".join(wrote["removed"]) or "none")
         except OSError as e:
             log.error("could not write the assistant bundle: %s", e)
+        try:
+            if (moved := migrate_inbound(self.conn_factory())):
+                log.info("%s", moved)
+        except sqlite3.Error as e:
+            log.warning("could not move Telegram to the dashboard's conversation: %s", e)
         problems = claude_runner.harness_problems()
         if problems:   # the dashboard's claude restarts beside us under `finnamon update` and writes ~/.claude.json: read it once more
             time.sleep(1)
@@ -549,21 +461,13 @@ class Daemon:
                 signal.signal(_sig, _bye)
             except ValueError:   # not the main thread (a test, an embedded run): the handler is a nicety, not a requirement
                 pass
-        # In channel mode the dashboard's session, which restarts into the new directory as we do, is Telegram's only reader,
-        # and a local-scope plugin belongs to a directory: register it here too (whenever it is missing, not only on the
-        # start that wrote the bundle: a start that died in between must not leave it unregistered), or the first update
-        # across the bundle release leaves the chat with nobody reading it until someone runs `finnamon update` again.
-        # After the threads and the signal handlers: it fetches a marketplace, up to PLUGIN_INSTALL_TIMEOUT_S, syncing need not
-        # wait for that, and a SIGTERM meanwhile must still reach _bye, or a triage child started by the first sync is orphaned.
-        # In a thread of its own: a stop must not wait behind the marketplace fetch (launchd would SIGKILL a daemon that did).
-        def _register():
-            try:
-                if store.get_state(self.conn_factory(), "inbound") == "channel" and not assistant.channel_plugin_registered():
-                    ok, msg = assistant.register_channel_plugin(claude_runner.binary())
-                    (log.info if ok is not None else log.warning)("%s", msg)
-            except (OSError, sqlite3.Error) as e:
-                log.warning("could not register the Telegram channel plugin: %s", e)
-        threading.Thread(target=_register, name="plugin", daemon=True).start()
+        # Channel mode registered Claude Code's Telegram plugin for the assistant directory. `finnamon update` takes it off,
+        # but the update that brings this release runs the previous release's code, so the first start after it does it
+        # too. In a thread of its own (a hung `claude plugin uninstall` must not hold up a stop), after the signal handlers.
+        def _unregister():
+            for line in assistant.unregister_telegram_plugin(claude_runner.binary()):
+                (log.warning if line.startswith("warning:") else log.info)("%s", line)
+        threading.Thread(target=_unregister, name="plugin", daemon=True).start()
         log.info("finnamon daemon up")
         up_at, stable = time.monotonic(), False
         try:

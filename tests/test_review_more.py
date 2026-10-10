@@ -13,13 +13,11 @@ def test_converse_refuses_chart_outside_charts_dir(conn, tg, fake_claude, monkey
     seed(conn)
     evil = tmp_path / "evil" / "charts" / "x.png"
     evil.parent.mkdir(parents=True); evil.write_bytes(b"png")
-    monkeypatch.setenv("CLAUDE_FAKE_RESULT", json.dumps({"result": f"see {evil}", "session_id": "s"}))
-    make_daemon(conn).converse(conn, {"owner": "bill", "text": "chart", "reply_to": None, "message_id": 1})
+    make_daemon(conn).reply(conn, "1234567890", {"owner": "bill", "text": "chart", "message_id": 1}, None, f"see {evil}")
     assert tg.photos == [] and str(evil) in tg.sent[-1]["text"]
     # traversal out of the real charts dir is refused too
     trav = config.charts_dir() / ".." / ".." / "evil" / "charts" / "x.png"
-    monkeypatch.setenv("CLAUDE_FAKE_RESULT", json.dumps({"result": f"see {trav}", "session_id": "s"}))
-    make_daemon(conn).converse(conn, {"owner": "bill", "text": "chart", "reply_to": None, "message_id": 2})
+    make_daemon(conn).reply(conn, "1234567890", {"owner": "bill", "text": "chart", "message_id": 2}, None, f"see {trav}")
     assert tg.photos == []
 
 
@@ -173,22 +171,6 @@ def test_daemon_start_records_a_crash_and_survives_a_broken_state_db(conn, monke
     monkeypatch.setattr(claude_runner, "harness_problems", lambda: ["no .claude/"])
     daemon.Daemon(conn_factory=broken).start(exit=exits.append)       # bookkeeping fails; the start still runs
     assert exits == [2]
-
-
-def test_two_timeouts_rotate_the_session(conn, tg, monkeypatch):
-    from finnamon import daemon, claude_runner, store
-    seed(conn)
-    store.set_state(conn, "session", "old")
-    calls = []
-    def fake(prompt, resume=None, timeout=120):
-        calls.append(resume)
-        return claude_runner.Result(False, "", None, error="timeout after 1s") if resume else claude_runner.Result(True, "fresh", "new")
-    monkeypatch.setattr(claude_runner, "run", fake)
-    d = daemon.Daemon(conn_factory=lambda: conn)
-    d.converse(conn, {"owner": "bill", "text": "a", "reply_to": None, "message_id": 1, "chat_id": "1234567890"})
-    assert calls == ["old"] and "timeout" in tg.sent[-1]["text"] and "partially" in tg.sent[-1]["text"]
-    d.converse(conn, {"owner": "bill", "text": "b", "reply_to": None, "message_id": 2, "chat_id": "1234567890"})
-    assert calls == ["old", "old", None] and store.get_state(conn, "session") == "new" and tg.sent[-1]["text"] == "fresh"
 
 
 def test_roundup_is_chunked_and_survives_a_send_failure(conn, tg, monkeypatch):

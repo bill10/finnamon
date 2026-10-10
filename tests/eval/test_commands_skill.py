@@ -53,7 +53,7 @@ def test_roundup_reply_normal_n(fixture_home):
     for n, aid in ((1, a1), (2, a2)):
         conn.execute("INSERT INTO roundup_items VALUES ('1234567890', 777, ?, ?)", (n, aid))
     conn.execute("UPDATE alerts SET telegram_message_id=777, telegram_chat_id='1234567890' WHERE id IN (?,?)", (a1, a2))
-    run_claude("[Telegram, bill, reply to message 777, the Sunday roundup]: normal 2", env)
+    run_claude("[telegram · bill; replying to roundup message 777 (items 1..2; use finnamon normal --roundup-item)] normal 2", env)
     assert conn.execute("SELECT resolution FROM alerts WHERE id=?", (a2,)).fetchone()[0] == "normal"
     assert conn.execute("SELECT resolved_at FROM alerts WHERE id=?", (a1,)).fetchone()[0] is None, "only item 2"
 

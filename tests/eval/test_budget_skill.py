@@ -114,8 +114,8 @@ def run_claude(prompt: str, env: dict, extra: list[str] = ()) -> dict:
     # cwd: the assistant bundle from this tree, installed the way `finnamon install` installs it (assistant.install) into
     # the fixture home, so the run reads exactly what a household's session reads: the bundle's CLAUDE.md, settings and
     # skills, and not the checkout's developer CLAUDE.md, which Claude Code would pick up from a parent directory.
-    # --strict-mcp-config: the same seal every household spawn carries; a plain claude in a directory where the Telegram
-    # channel plugin is registered starts a second copy of its server and kills the household's (measured: it did).
+    # --strict-mcp-config: the same seal every household spawn carries; a plain claude in a directory where a Telegram
+    # plugin is registered would poll the household's bot.
     # --setting-sources project: the household's session is sealed the same way; unsealed, the child read the developer's
     # own settings and hooks and answered a money question as a code reviewer.
     # PYTHONPATH: `finnamon` on PATH is an editable install of one checkout; without it a worktree's eval runs another's CLI.

@@ -66,14 +66,11 @@ def test_set_up_household_is_all_good(home, units, fake_claude, tg, capsys, monk
             continue
         assert line(out, what).startswith("✓"), line(out, what)
     assert "1 linked" in out and "daemon running" in out and "(sandbox)" in out
-    assert line(out, "Telegram inbound").startswith("✓ Telegram inbound: daemon")
+    assert line(out, "Telegram replies").startswith("✓ Telegram replies: the dashboard's intercom session")
     assert line(out, "Assistant").startswith("✓ Assistant: claude runs"), "which CLI is the assistant, named"
-    store.set_state(conn, "inbound", "session")
-    assert line(doctor(capsys)[1], "Telegram inbound").startswith("✓ Telegram inbound: session")
-    monkeypatch.setattr(scheduler, "web_args", lambda: [])   # session mode with no dashboard to type into
+    monkeypatch.setattr(scheduler, "web_args", lambda: [])   # no dashboard to answer the chat
     out2 = doctor(capsys)[1]
-    assert line(out2, "Telegram inbound").startswith("✗") and "not installed" in out2
-    store.set_state(conn, "inbound", None)
+    assert line(out2, "Telegram replies").startswith("✗") and "not installed" in out2
     # Node and the checkout's packages depend on the machine running the suite; every other line is this test's
     machine = ("Node", "Dashboard packages", "finnamon on PATH", "Linger")   # Linger: the real loginctl on Linux (off in a fresh WSL)
     assert not [l for l in out.splitlines() if l.startswith("✗") and not l[2:].startswith(machine)]

@@ -7,7 +7,6 @@ import pytest
 
 from finnamon import store
 from finnamon.daemon import bot_configured as REAL_BOT_CONFIGURED  # noqa: N812, F401 - the real guard, before the autouse fixture stubs it
-from finnamon.assistant import plugin_dir_problem as REAL_PLUGIN_DIR_PROBLEM  # noqa: N812 - the real guard, before the autouse fixture stubs it
 from finnamon.remote import tailscale_bin as REAL_TAILSCALE_BIN  # noqa: N812, F401 - for tests/test_remote.py
 from finnamon.cli import chrome_builds as REAL_CHROME_BUILDS, _ps as REAL_PS  # noqa: N812, F401 - for tests/test_import.py, under faked --version and ps
 from finnamon.scheduler import log_dir as REAL_LOG_DIR, unit_dir as REAL_UNIT_DIR  # noqa: N812 - for the tests of these themselves, under a scratch Path.home
@@ -82,10 +81,6 @@ def _not_inside_claude(monkeypatch, tmp_path):
     monkeypatch.delenv("FINNAMON_ASSISTANT", raising=False)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
     (tmp_path / "claude-config").mkdir(exist_ok=True)
-    # Every test's assistant directory is a scratch one, which the plugin guard rightly refuses; the tests of the
-    # registration itself need it to pass (the fake claude registers nothing). The guard's own test uses REAL_PLUGIN_DIR_PROBLEM.
-    from finnamon import assistant
-    monkeypatch.setattr(assistant, "plugin_dir_problem", lambda d: None)
     from finnamon import scheduler   # the heartbeat and daemon rotate ~/Library/Logs/finnamon: never the household's real logs
     monkeypatch.setattr(scheduler, "log_dir", lambda: tmp_path / "Logs")
     monkeypatch.setattr(scheduler, "unit_dir", lambda os_name=None: tmp_path / "units")   # nor read or write the real LaunchAgents / systemd units

@@ -167,11 +167,6 @@ def render(alert: sqlite3.Row, page: bool = False, cue: bool = True) -> str:
     if k == "recurring_price":
         return (f"🔁 <b>{esc(tidy(p.get('merchant')) or 'A subscription')} went from {money(p.get('old_amount'))} to {money(p.get('amount'))}</b> "
                 f"on {acct}, {day(p.get('date'))}.")
-    if k == "channel_deaf":
-        n = int(p.get("pending") or 0)
-        return (f"🔇 <b>I stopped hearing this chat.</b> {n} message{'' if n == 1 else 's'} {'is' if n == 1 else 'are'} waiting and nothing is collecting them, "
-                f"since {esc(p.get('since') or 'a few minutes ago')}. I can still send, which is how you are reading this. "
-                "In a terminal on the Finnamon box: <code>finnamon update --no-pull</code> restarts Finnamon and I pick the chat back up.")
     if k == "low_balance":
         return f"💧 <b>{acct} is at {money(p.get('available'))}</b>, below your {money(p.get('threshold'))} threshold."
     if k == "budget_pace":
@@ -201,9 +196,6 @@ def render(alert: sqlite3.Row, page: bool = False, cue: bool = True) -> str:
             head += f": first time at {esc(what)}"
         return f"{head}. {esc(alert['reason'] or '')}".strip() + (EXPECTED if cue else "")
     return f"ℹ️ {esc(k)}: <code>{esc(json.dumps(p)[:500])}</code>"
-
-
-RESTARTED = "The assistant restarted; resend anything from the last minute."
 
 
 def pending(conn: sqlite3.Connection) -> list[sqlite3.Row]:

@@ -191,7 +191,6 @@ def test_import_browser_execs_claude_on_the_skill_with_a_permission_set_of_its_o
     assert not any(v in a for a in allowed for v in ("eval", "fill", " type", "cookies", "storage", "upload", "download", " find", " wait")), "typing, scripting and files prompt the person"
     assert "Bash(agent-browser --session finnamon-import tab *)" in allowed, "binding to the bank's tab; the hook refuses every other tab, list or new one"
     assert argv[2:4] == ["--setting-sources", "project"], "the person's own ~/.claude/settings.json (which may allow Bash outright) never reaches this session"
-    # This session runs in the checkout too, and a second copy of the Telegram plugin's MCP server kills the household's.
     assert "--strict-mcp-config" in argv and "--mcp-config" not in argv, "no MCP server of its own: the skill drives agent-browser over Bash"
     assert argv.index("--strict-mcp-config") < argv.index("--allowedTools"), "before the variadic tails, or it is just another tool name"
     hook = json.loads(argv[argv.index("--settings") + 1])["hooks"]["PreToolUse"][0]
@@ -199,7 +198,7 @@ def test_import_browser_execs_claude_on_the_skill_with_a_permission_set_of_its_o
     household = json.loads((assistant.dir() / ".claude/settings.json").read_text())["permissions"]["allow"]
     for t in household:
         assert t in allowed or t in disallowed, f"{t}: a household permission the import session neither needs nor refuses"
-    assert {"Bash(finnamon normal *)", "Bash(finnamon query *)", "Bash(finnamon link --start)", "mcp__plugin_telegram_telegram__reply", "WebFetch", "WebSearch", "Read"} <= set(disallowed)
+    assert {"Bash(finnamon normal *)", "Bash(finnamon query *)", "Bash(finnamon link --start)", "WebFetch", "WebSearch", "Read"} <= set(disallowed)
     assert calls[0] == ("cd", str(assistant.dir())) and (assistant.dir() / ".claude/skills/import-browser/SKILL.md").exists(), "the skill lives in the assistant directory, never the checkout"
     with pytest.raises(SystemExit):
         cli.main(["import", "--browser", "hsbc", "--to", "mac.tailnet.ts.net"])   # a URL, not a hostname

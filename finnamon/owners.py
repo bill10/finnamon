@@ -137,18 +137,11 @@ def _poll_direct(conn: sqlite3.Connection, owner: str, code: str, want_group: bo
 
 def add_first(conn: sqlite3.Connection, owner: str, code: str, wait_s: int = 600, sleep=time.sleep) -> dict:
     """First owner (init): a private /start <code> or the bare code. The daemon isn't installed yet."""
-    _no_polling_in_channel_mode(conn)
     return _poll_direct(conn, owner, code, want_group=False, wait_s=wait_s, sleep=sleep)
 
 
-def _no_polling_in_channel_mode(conn: sqlite3.Connection) -> None:
-    if store.get_state(conn, "inbound") == "channel":
-        raise RuntimeError("inbound is the Claude Code channel, which owns the bot's updates; use `finnamon owner add <name> --user-id <id>`")
-
-
 def add_by_id(conn: sqlite3.Connection, owner: str, telegram_user_id: int) -> dict:
-    """Channel mode: the Claude Code Telegram plugin already gates who may talk (pairing); Finnamon only needs the
-    id to attribute what they say. `/telegram:access` in the channel session lists the ids."""
+    """A member whose Telegram user id is already known (the daemon tells a stranger in the household chat theirs): no code dance."""
     other = conn.execute("SELECT owner FROM owners WHERE telegram_user_id=? AND owner<>?", (telegram_user_id, owner)).fetchone()
     if other:
         raise ValueError(f"Telegram user {telegram_user_id} is already {other[0]}")
@@ -164,7 +157,6 @@ def add_by_id(conn: sqlite3.Connection, owner: str, telegram_user_id: int) -> di
 
 def add_member(conn: sqlite3.Connection, owner: str, code: str, wait_s: int = 600, sleep=time.sleep, switch: bool = False) -> dict:
     """Second+ owner: the code must be sent in a group the bot is in. Via the daemon if it is polling, else directly."""
-    _no_polling_in_channel_mode(conn)
     me = telegram.get_me()
     if not me.get("can_read_all_group_messages"):
         raise RuntimeError("privacy mode is on: in @BotFather run /setprivacy → Disable, then remove and re-add the bot to the group")

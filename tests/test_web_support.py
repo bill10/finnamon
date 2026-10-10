@@ -356,7 +356,7 @@ def test_web_args_needs_node_server_and_node_modules(monkeypatch, tmp_path):
     assert scheduler.web_args() is None                                    # not npm-installed
     (tmp_path / "web" / "node_modules").mkdir()
     assert scheduler.web_args() == ["/opt/node/bin/node", str(tmp_path / "web" / "server.js")]
-    assert {"/opt/node/bin", "/opt/bun/bin"} <= set(scheduler.env_path().split(":"))   # the units can find node, and bun for the Telegram channel plugin
+    assert {"/opt/node/bin", "/opt/bun/bin"} <= set(scheduler.env_path().split(":"))   # the units can find node, and bun (kept so installed units do not drift)
     which.pop("node")
     assert scheduler.web_args() is None                                    # no node at all
 

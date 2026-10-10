@@ -122,10 +122,10 @@ def test_summary_of_a_bank_whose_accounts_are_all_mirrors_is_not_empty(conn):
     assert conn.execute("SELECT count(*) FROM tx_now WHERE item_id='item2'").fetchone()[0] == 0   # tx_now still hides it from every money total
 
 def test_send_one_without_a_chat_id_sends_nothing(conn):
-    """The daemon raises channel_deaf before it knows there is anywhere to send it; the row stays pending."""
+    """An alert raised before there is anywhere to send it: the row stays pending."""
     seed(conn)
     store.set_state(conn, "chat_id", None)
-    conn.execute("INSERT INTO alerts (tier, kind, key, payload_json, as_of) VALUES ('rule','channel_deaf','k','{}',?)", (AS_OF,))
+    conn.execute("INSERT INTO alerts (tier, kind, key, payload_json, as_of) VALUES ('rule','sync_health','k','{}',?)", (AS_OF,))
     row = conn.execute("SELECT * FROM alerts WHERE key='k'").fetchone()
     assert notify.send_one(conn, row) is None and row["sent_at"] is None
 
@@ -443,18 +443,6 @@ def test_income_headline_is_unsigned_and_the_payload_keeps_its_sign(conn):
     row = conn.execute("SELECT * FROM alerts WHERE key='inc1'").fetchone()
     assert notify.render(row).startswith("🔍 <b>$1,234.56 from Acme Corp (PAYROLL)</b> on Checking …0000, Jan 15.")
     assert json.loads(row["payload_json"])["amount"] == -1234.56
-
-
-def test_the_deaf_notice_says_how_many_are_waiting_and_how_to_be_heard_again(conn):
-    """It is sent into the chat nobody is reading, so it has to be worth finding later: the count and the one command."""
-    seed(conn)
-    alert(conn, "channel_deaf", "cd1", payload={"pending": 1, "since": "2026-09-23 18:40:00"})
-    alert(conn, "channel_deaf", "cd2", payload={"pending": 4, "since": "2026-09-23 18:40:00"})
-    one, many = (notify.render(conn.execute("SELECT * FROM alerts WHERE key=?", (k,)).fetchone()) for k in ("cd1", "cd2"))
-    assert "1 message is waiting" in one
-    assert "4 messages are waiting" in many                                 # the plural is built, not guessed
-    assert "2026-09-23 18:40:00" in one                                     # when it went quiet, so a person can match it to what they sent
-    assert "finnamon update --no-pull" in many                              # the fix, in the message itself
 
 
 def test_empty_week_sends_the_all_quiet_line(conn, tg):

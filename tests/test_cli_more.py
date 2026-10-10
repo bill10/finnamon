@@ -872,9 +872,8 @@ def test_the_id_the_dashboard_could_not_resume_is_printed_too(home, capsys, monk
 
 
 def test_the_way_back_is_sealed_against_the_telegram_plugin(home, capsys, monkeypatch):
-    """The transcript lives under this directory, so the printed command runs here, and a plain `claude` here starts a
-    second copy of the channel plugin's server that kills the household session's. The way back must not cost them
-    Telegram (v0.7.1.0)."""
+    """The transcript lives under this directory, so the printed command runs here, and a plain `claude` here would load
+    a Telegram plugin left registered for it, which polls the household's bot. The way back must not cost them Telegram."""
     monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: [])
     (config.home() / config.INTERCOM_FILE).write_text(json.dumps(
         {"id": "11111111-2222-3333-4444-555555555555", "prev": "99999999-8888-7777-6666-555555555555"}))
@@ -884,7 +883,7 @@ def test_the_way_back_is_sealed_against_the_telegram_plugin(home, capsys, monkey
 
 def test_install_refuses_to_run_from_a_claude_session(home, capsys, monkeypatch):
     """AGENTS.md lists install among the commands that refuse a Claude session, and this is what makes that true: the
-    conversation it retires is, in channel mode, the one the assistant is speaking in."""
+    conversation it retires is the one the assistant is speaking in."""
     monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: [])
     f = config.home() / config.INTERCOM_FILE
     f.write_text(json.dumps({"id": "11111111-2222-3333-4444-555555555555", "created": True}))
@@ -984,7 +983,7 @@ def test_the_assistant_may_not_allow_networth_sync():
         assert hits(perms["deny"], cmd) or not hits(perms["allow"], cmd)
 
 
-HELP_ONLY = [["init"], ["link"], ["owner", "add", "x"], ["channel", "on"], ["channel", "off"], ["account", "merge", "a", "b"],
+HELP_ONLY = [["init"], ["link"], ["owner", "add", "x"], ["account", "merge", "a", "b"],
              ["account", "failover", "a"], ["sync"], ["install"], ["update"], ["detect", "--review"], ["run"], ["daemon"], ["notify"], ["networth", "--sync"]]
 
 
@@ -1000,8 +999,8 @@ def test_help_is_readable_from_a_claude_session_and_runs_nothing(monkeypatch, ca
             assert "usage: finnamon " + argv[0] in capsys.readouterr().out, form
     for argv in (["help"], ["help", "--version"], ["help", "-x"]):   # a flag first: top-level usage, no reparse crash
         cli.main(argv); assert "usage: finnamon" in capsys.readouterr().out
-    for cmd, says in [("owner", ["--user-id", "/telegram:access", "--new-group", "link --start --owner"]), ("link", ["--remove <item_id>"]),
-                      ("account", ["merge <new_id>", "failover <id>"]), ("detect", ["--review"]), ("channel", ["owner add"])]:
+    for cmd, says in [("owner", ["--user-id", "--new-group", "link --start --owner"]), ("link", ["--remove <item_id>"]),
+                      ("account", ["merge <new_id>", "failover <id>"]), ("detect", ["--review"]), ("channel", ["shares the dashboard's conversation"])]:
         cli.main(["help", cmd]); out = capsys.readouterr().out
         assert all(w in out for w in says), (cmd, out)
     with pytest.raises(SystemExit):
@@ -1034,17 +1033,6 @@ def test_owner_add_asks_for_the_household_group_unless_new_group(conn, monkeypat
     assert "household group" in run_cli(capsys, "owner", "add", "jane")
     assert "Create a Telegram group" in run_cli(capsys, "owner", "add", "jane", "--new-group")
     assert seen == [False, False, True]
-
-
-def test_notify_restarted_sends_the_one_line_and_nothing_else(conn, tg, capsys, monkeypatch):
-    assert json.loads(run_cli(capsys, "notify", "--restarted"))["sent"] is None and not tg.sent   # no chat yet: nothing to tell
-    store.set_state(conn, "chat_id", "-100")
-    run_cli(capsys, "notify", "--restarted")
-    assert [m["text"] for m in tg.sent] == [notify.RESTARTED]   # not the pending alerts, not the roundup
-    monkeypatch.setenv("CLAUDECODE", "1")
-    with pytest.raises(SystemExit):
-        cli.main(["notify", "--restarted"])                     # the household's session cannot post it
-    assert len(tg.sent) == 1
 
 
 def test_only_the_release_script_is_inert_under_scripts():
@@ -1103,41 +1091,24 @@ def _init_with_dashboard(home, tg, capsys, monkeypatch, tmp_path, *vals):
     return run_cli(capsys, "init", "--owner", "bill", "--yes")
 
 
-def test_init_defaults_a_new_bot_to_session_but_keeps_an_existing_mode(home, tg, capsys, monkeypatch, tmp_path):
+def test_init_puts_the_bot_on_the_one_mode_without_announcing_it(home, tg, capsys, monkeypatch, tmp_path):
     out = _init_with_dashboard(home, tg, capsys, monkeypatch, tmp_path, "cid", "prod-sec", "", "123:token")
-    assert store.get_state(store.connect(), "inbound") == "session" and "session mode (the default)" in out
-    store.set_state(store.connect(), "inbound", None)   # a household on the legacy mode re-runs init: the bot is not new
+    assert store.get_state(store.connect(), "inbound") == "session" and "Telegram now" not in out and "no replies" not in out
+    store.set_state(store.connect(), "inbound", None)   # a household on the legacy mode re-runs init
     _init_with_dashboard(home, tg, capsys, monkeypatch, tmp_path)
-    assert store.get_state(store.connect(), "inbound") is None
+    assert store.get_state(store.connect(), "inbound") == "session"
 
 
-def test_init_without_a_dashboard_leaves_inbound_alone(home, tg, capsys, monkeypatch, tmp_path):
+def test_init_without_a_dashboard_says_the_chat_gets_no_replies(home, tg, capsys, monkeypatch, tmp_path):
     monkeypatch.setattr(plaid_api, "institution_get", lambda i, env=None: {"institution": {"name": "Chase"}})
     monkeypatch.setattr(scheduler, "install", lambda osn=None, dry_run=False, force=False: [])
     monkeypatch.setattr(owners, "add_first", lambda conn, owner, code, **kw: (store.set_state(conn, "chat_id", 555), {"chat_id": 555})[1])
     monkeypatch.setattr(scheduler, "repo_dir", lambda: str(tmp_path))
-    monkeypatch.setattr(cli.shutil, "which", lambda exe: None)   # no Node: session mode would have nothing to type into
+    monkeypatch.setattr(cli.shutil, "which", lambda exe: None)   # no Node: nothing to answer the chat
     monkeypatch.delenv("FINNAMON_CLAUDE_BIN")
     answers(monkeypatch, "cid", "prod-sec", "", "123:token")
-    run_cli(capsys, "init", "--owner", "bill", "--yes")
-    assert store.get_state(store.connect(), "inbound") is None
-
-
-@pytest.mark.parametrize("mode,tip", [(None, True), ("daemon", True), ("channel", True), ("session", False)])
-def test_session_tip_is_shown_once_and_only_off_session(home, tg, capsys, mode, tip):
-    conn = store.connect()
-    cli.secrets.update(telegram={"bot_token": "123:token"})
-    store.set_state(conn, "inbound", mode)
-    cli._session_tip(conn)
-    assert ("channel session" in capsys.readouterr().out) is tip
-    cli._session_tip(conn)
-    assert capsys.readouterr().out == "", "once"
-    assert store.get_state(conn, "inbound") == mode, "never switches the mode"
-
-
-def test_session_tip_needs_a_bot(home, capsys):
-    cli._session_tip(store.connect())
-    assert capsys.readouterr().out == ""
+    out = run_cli(capsys, "init", "--owner", "bill", "--yes")
+    assert "the chat gets alerts but no replies" in out
 
 
 def test_status_login_says_whether_the_assistant_is_signed_in(home, fake_claude, capsys, monkeypatch):
