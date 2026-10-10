@@ -87,12 +87,10 @@ def denied() -> list[str]:
 
 
 def _hooks(settings: dict) -> list[tuple[str, str, dict]]:
-    """(event, matcher, handler) from settings.json, minus the Telegram channel plugin's own (Claude Code only)."""
+    """(event, matcher, handler) from settings.json."""
     out = []
     for event in ("PreToolUse", "PermissionRequest"):
         for group in (settings.get("hooks") or {}).get(event) or []:
-            if str(group.get("matcher", "")).startswith("mcp__plugin_telegram"):
-                continue
             out.append((event, group.get("matcher", "*"), [h for h in group.get("hooks") or [] if h.get("type") == "command"]))
     return out
 

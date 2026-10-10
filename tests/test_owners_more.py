@@ -144,10 +144,6 @@ def test_owner_add_no_telegram(home, conn, tg, monkeypatch, capsys):
     for sender in ({"id": 777, "first_name": "X"}, {"first_name": "no id"}):
         d.handle_update(conn, {"update_id": 1, "message": {"message_id": 1, "date": 1, "text": "hi", "chat": {"id": 555, "type": "private"}, "from": sender}})
     assert d.inbox.empty()
-    # reply guard: no private chat for jane, and no "None" chat either
-    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(json.dumps({"tool_input": {"chat_id": "None"}})))
-    with pytest.raises(SystemExit):
-        cli.main(["hook", "reply-guard"])
     # a Claude session may attribute banks to her
     secrets.write({"client_id": "c", "sandbox_secret": "s"}, {}, {})
     monkeypatch.setattr(plaid_api, "link_token_create", lambda *a, **k: {"link_token": "lt", "hosted_link_url": "https://h/x", "expiration": "2026-09-20T00:00:00Z"})

@@ -114,17 +114,3 @@ def test_plaid_call_credentials_and_errors(home, monkeypatch):
     assert plaid_api.item_remove("tok") == {"removed": True}
     body = json.loads(fake.requests[5].data)
     assert fake.requests[5].full_url.endswith("/item/remove") and body["access_token"] == "tok" and body["client_id"] == "cid"
-
-
-def test_pending_updates_reads_the_backlog_without_consuming_it(monkeypatch):
-    """The channel plugin owns the one getUpdates slot this bot has; asking how big the backlog is must not take it."""
-    monkeypatch.setenv("FINNAMON_TELEGRAM_BASE", "http://fake")
-    ok = lambda result: json.dumps({"ok": True, "result": result}).encode()  # noqa: E731
-    fake = FakeHTTP([ok({"pending_update_count": 4}), ok({"url": ""}), ok({"pending_update_count": None}), ok({"pending_update_count": "3"})])
-    monkeypatch.setattr(urllib.request, "urlopen", fake)
-    assert telegram.pending_updates(token="T") == 4
-    assert fake.requests[0].full_url == "http://fake/botT/getWebhookInfo"   # getUpdates here would steal the plugin's slot
-    assert fake.requests[0].data is None                                   # a plain GET: nothing is acknowledged, nothing consumed
-    assert telegram.pending_updates(token="T") == 0                        # a bot with no webhook set can omit the key
-    assert telegram.pending_updates(token="T") == 0                        # an explicit null is not a backlog either
-    assert telegram.pending_updates(token="T") == 3                        # a count that arrives as a string still counts

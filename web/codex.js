@@ -30,8 +30,8 @@ export function codexArgs(dir) {
     `default_permissions="${PROFILE}"`, `permissions.${PROFILE}.extends=":workspace"`,
     `projects={${JSON.stringify(dir)}={trust_level="trusted"}}`,   // an inline table merges; a dotted key would split the path at its dots
     'shell_environment_policy.set.FINNAMON_FROM_AGENT="1"', 'mcp_servers.finnamon.env.FINNAMON_FROM_AGENT="1"'].flatMap(v => ['-c', v]);
-  // inbound has no say: channel mode is refused on Codex (`finnamon channel on`), and the web is off in every mode
-  return (_inbound, session = null) => [...lock, ...(session?.created && session.id ? ['resume', '--no-daemon', session.id] : ['--no-daemon'])];
+  // the web is off: web_search above
+  return (session = null) => [...lock, ...(session?.created && session.id ? ['resume', '--no-daemon', session.id] : ['--no-daemon'])];
 }
 
 // A rollout's first line, parsed, or null. Bounded: session_meta carries the base instructions (some 20 KB). A first

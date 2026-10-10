@@ -105,10 +105,9 @@ shows the whole thing on a made-up household meanwhile.
 
 If you skip step 5, `finnamon install` does it later (and again after any release that changes the jobs).
 
-A new household's Telegram chat shares the dashboard's conversation (`session` mode, the default: the daemon reads the bot
-and types each message into the dashboard's session; no plugin). Without the dashboard, or with `finnamon channel off`,
-the daemon answers with its own separate session (the legacy `daemon` mode). The Claude Code Telegram channel plugin
-(`finnamon channel on`, [CHANNEL-MODE.md](CHANNEL-MODE.md)) is an option you choose later, not part of setup.
+Your Telegram chat shares the dashboard's conversation: the daemon reads the bot and types each household message into
+the dashboard's session, so the dashboard is what answers. Without it the chat still gets alerts but no replies
+(`finnamon doctor` says so).
 
 ### Codex instead of Claude Code
 
@@ -138,9 +137,6 @@ Switch either way later with `finnamon settings set assistant codex|claude` (at 
 ### Codex: what v1 does not do
 
 - **No web lookups.** Codex sessions run with web search off; Claude asks you before each fetch at the dashboard.
-- **Telegram through Finnamon's daemon only**: session mode, where it types each message into the dashboard's Codex
-  session (init sets it for Codex), or `finnamon channel off`'s separate `codex exec resume` thread. No channel mode: the
-  Telegram channel plugin is Claude Code's ([CHANNEL-MODE.md](CHANNEL-MODE.md)).
 - **No "Fetch by AI" import** (`finnamon import --browser`): it still runs `claude`. CSV import works the same.
 - **Codex 0.157 or newer.** Older versions are refused; Claude Code stays the assistant.
 
@@ -232,9 +228,9 @@ first if you want to keep your history: step 5 deletes it and its backups.
    removes nothing. It only touches this home's jobs: if a job under those names was written for another Finnamon home
    (another `FINNAMON_HOME`), or your shell's `HOME` is not your login's, it refuses and says why. Add `--force` only when
    that other home is gone and the jobs really are yours to remove.
-4. **Channel mode**, if you turned it on (`finnamon channel on`): `cd ~/.finnamon/assistant && claude plugin uninstall
-   telegram@claude-plugins-official --scope local`, then delete `~/.claude/channels/telegram/` unless you use the
-   Telegram plugin for something else (it holds the bot token).
+4. **The old channel mode's leftovers**, if you ever ran `finnamon channel on` (before it was removed): `finnamon update`
+   (or the daemon's next start) unregisters the plugin, but `~/.claude/channels/telegram/` still holds the bot token; delete it unless you use
+   Claude Code's Telegram plugin for something else.
 5. **Finnamon's data**: `rm -rf ~/.finnamon`. That is the database, `secrets.toml` (Plaid keys, bot token), backups,
    the assistant directory, Finnamon's Chrome profiles (`chrome/`, `chrome-extension-test/`), downloads and imports,
    the voice model, and the Codex home (`codex/`, whose login is a link to yours: removing the folder is fine, but never

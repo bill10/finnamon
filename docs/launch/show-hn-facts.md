@@ -44,8 +44,7 @@ Suggested title shape (owner's call): `Show HN: Finnamon – turn Claude or Code
 - **Two assistant CLIs:** Claude Code or OpenAI's Codex CLI (0.157+), picked at `finnamon init` and switchable with
   `finnamon settings set assistant codex|claude`. The same instructions, skills and allow list on both; on Codex the
   assistant reaches `finnamon` only through an MCP tool, under a sealed Codex home that shares your existing Codex login.
-  **Claude-only for now:** web lookups (none on Codex), Telegram channel mode (Codex uses the daemon's relay, which is
-  the default anyway), and the "Fetch by AI" import. Evals run on both CLIs.
+  **Claude-only for now:** web lookups (none on Codex) and the "Fetch by AI" import. Evals run on both CLIs.
 - **Banks Plaid can't reach: Fetch by AI.** You log in to the bank's own site yourself in a Chrome window of
   Finnamon's own; a sealed Claude Code session then clicks through to the bank's CSV export and imports it. It is
   told to wait, with no browser call, until you say you're in, and it can never type text into the page. HSBC US (not

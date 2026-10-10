@@ -55,7 +55,6 @@ def cmd_init(a) -> None:
     os.chmod(home, 0o700)
     cur = config.load_secrets()
     plaid, tg = dict(cur.get("plaid", {})), dict(cur.get("telegram", {}))
-    fresh_bot = not tg.get("bot_token")   # an existing bot keeps its inbound mode: no silent switch
     skipped = []   # steps left for later: init runs again any time and keeps what is already set up
     replace = bool(getattr(a, "plaid", False))   # `init --plaid`: change the keys on file (Sandbox → Production) without the other steps
     print("Plaid keys (Enter on a blank line keeps what is on file)" if replace else "Step 1 of 5: Plaid keys (Enter on a blank line skips this for now)")
@@ -143,13 +142,11 @@ def cmd_init(a) -> None:
 
     print("Step 4 of 5: Dashboard")
     dashboard = _setup_dashboard(a)
-    if me is not None and fresh_bot and dashboard and store.get_state(conn, "inbound") is None:   # session mode types into the dashboard, so it needs one
-        store.set_state(conn, "inbound", "session")
-        store.set_state(conn, "session_tip_shown", 1)   # nothing to advertise to a household already on it
-        print("  Telegram: session mode (the default), the chat shares the dashboard's conversation. `finnamon channel off` for the legacy separate session.")
-    if which == "codex" and me is not None and store.get_state(conn, "inbound") != "session":   # channel mode is Claude Code's plugin; session mode keeps one conversation with the dashboard
-        store.set_state(conn, "inbound", "session")
-        print("  Telegram: session mode, the chat shares the dashboard's Codex conversation (channel mode is Claude Code only).")
+    if me is not None:
+        from .daemon import migrate_inbound
+        migrate_inbound(conn)   # a bot from an older init may still be on a retired mode; nothing to announce here
+        if not dashboard:
+            print("  ! Telegram is answered by the dashboard's conversation: without the dashboard the chat gets alerts but no replies.")
 
     print("Step 5 of 5: Schedule")
     if not shutil.which("finnamon"):
@@ -418,8 +415,8 @@ def _claude_code_status() -> tuple[bool, str]:
                        "FINNAMON_CLAUDE_BIN/CLAUDE_BIN to its path.")
     try:
         # --strict-mcp-config: the same seal every other claude child Finnamon spawns carries (claude_runner.run,
-        # the eval lane); a plain `claude` in this checkout loads the project-local Telegram channel plugin, whose
-        # second MCP server copy kills the household session's copy (CLAUDE.md, docs/DEVELOPMENT.md).
+        # the eval lane); a plain `claude` here could load a Telegram plugin registered for this folder, which polls the
+        # household's bot (CLAUDE.md, docs/DEVELOPMENT.md).
         status = _claude_auth(exe)
     except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, ValueError) as e:
         return False, f"could not check whether Claude Code is logged in: {e}"
@@ -639,9 +636,6 @@ def cmd_owner(a) -> None:
             except ValueError as e:
                 die(str(e))
             return
-        if store.get_state(conn, "inbound") == "channel":
-            die("inbound is the Claude Code channel, which owns the bot's updates; add the person with their Telegram user id instead:\n"
-                f"  finnamon owner add {a.name} --user-id <id>   (the id is in /telegram:access in the channel session)")
         code = owners.new_code()
         if a.new_group or not owners.household_is_group(conn):
             print(f"Create a Telegram group with you, {a.name}, and the bot; make the bot an admin. It becomes the household chat.")
@@ -656,51 +650,8 @@ def cmd_owner(a) -> None:
 
 
 def cmd_channel(a) -> None:
-    """Who answers Telegram: the daemon's own `claude -p` (off), the dashboard's intercom session through the daemon (session),
-    or Claude Code's own Telegram channel plugin (on, an experiment). The daemon keeps sending alerts in every mode."""
-    if a.action != "status" and _from_agent():
-        die("switching the Telegram inbound is for a person at a terminal")
-    conn = store.connect()
-    if a.action == "on" and store.assistant_kind(conn) == "codex":
-        die("channel mode is Claude Code's own Telegram plugin; with Codex as the assistant the chat goes through the dashboard's session: finnamon channel session")
-    if a.action == "on":
-        store.set_state(conn, "inbound", "channel")
-        print("inbound = channel. The daemon stops polling the bot within a minute (no restart needed). Then, once")
-        print("(slash commands go in the Claude session; finnamon commands in another terminal):")
-        print(f"  1. Register the plugin for the assistant directory ({assistant.dir()}): `finnamon install` (or `finnamon update`)")
-        print(f"     does it now, or by hand:  cd {assistant.dir()} && {assistant.CHANNEL_PLUGIN_INSTALL}")
-        print("  2. Write the bot token (from ~/.finnamon/secrets.toml) to ~/.claude/channels/telegram/.env as")
-        print("       TELEGRAM_BOT_TOKEN=...            (by hand, mode 0600; never paste it into a Claude session)")
-        print("  3. With the dashboard installed: finnamon install (its intercom session attaches the channel).")
-        print(f"     Otherwise keep this running in a persistent terminal (tmux/screen), in {assistant.dir()}:")
-        print("       claude --permission-mode dontAsk --channels plugin:telegram@claude-plugins-official --disallowedTools WebSearch WebFetch")
-        print("     dontAsk = allow-listed commands only, no Allow/Deny buttons on anyone's phone; no web = it reads bank memos unattended.")
-        print("  4. DM the bot, then in that session: /telegram:access pair <code>; for the household group (the same group the")
-        print(f"     daemon sends alerts to, chat id {store.get_state(conn, 'chat_id') or '<see finnamon status>'}):")
-        print("       /telegram:access group add <group chat id> --no-mention --allow <user ids>")
-        print("       /telegram:access policy allowlist")
-        print("  5. Tell Finnamon who is who: finnamon owner add <name> --user-id <telegram user id>")
-        print("  Note: the token now lives in two places; after `finnamon init` rotates it, update the .env too.")
-        _warn_no_bun_for_channel(conn)
-    elif a.action in ("off", "session"):
-        was = store.get_state(conn, "inbound") or "daemon"
-        if was == "channel":
-            store.set_state(conn, "inbound_off_at", int(time.time()))   # the daemon drops messages older than this: the plugin answered them
-        store.set_state(conn, "inbound", "session" if a.action == "session" else None)
-        store.set_state(conn, "channel_deaf_since", None)   # only the channel branch of the poll loop clears this; leaving the mode would strand it
-        if a.action == "session":
-            print("inbound = session. The daemon keeps reading Telegram (resumes polling within a minute) and types each household message into")
-            print("the dashboard's intercom session, so the chat and the dashboard share one conversation. No channel plugin is used.")
-        else:
-            print("inbound = daemon. The daemon reads Telegram and answers each message with its own `claude -p` session (resumes polling within a minute).")
-        if was == "channel":
-            print("Stop the channel session first (two pollers on one bot collide): the dashboard's session reads the bot until it restarts.")
-        # The intercom's argv (--channels, the MCP seal, the web tools) is fixed when the dashboard starts it, and a session
-        # still carrying the channel plugin keeps reading the bot under the daemon (409s, messages the relay never sees).
-        if was != "daemon" or a.action == "session":
-            _restart_web("its intercom session runs in this mode")
-    else:
-        out({"inbound": store.get_state(conn, "inbound") or "daemon"})
+    """Retired: Telegram's inbound modes (Claude Code's channel plugin, the daemon's own session) are gone (v0.57)."""
+    print("Telegram always shares the dashboard's conversation; there is nothing to switch.")
 
 
 def _restart_web(why: str) -> None:
@@ -717,30 +668,29 @@ def _restart_web(why: str) -> None:
 
 def _codex_selectable(conn) -> None:
     """`settings set assistant codex`: only once init (or update) has set Codex up and it would start sealed."""
-    if store.get_state(conn, "inbound") == "channel":
-        die("channel mode is Claude Code's own Telegram plugin; switch the chat first: finnamon channel session")
     probs = codex.problems() or codex.config_problems()
     if probs:
         die("Codex is not ready to run the household's assistant: " + "; ".join(probs) + " (`finnamon init` sets it up)")
 
 
-def _register_channel_plugin(conn, force: bool = False) -> None:
-    """install/update, once inbound is channel: register the Telegram plugin for the assistant directory (assistant.py)."""
+def _retire_channel_mode(conn) -> None:
+    """update/install: move a household off the retired Telegram modes (daemon.migrate_inbound) and take Claude Code's
+    Telegram plugin off the assistant directory, where channel mode registered it (assistant.unregister_telegram_plugin)."""
+    from .daemon import migrate_inbound
     try:
-        if store.get_state(conn, "inbound") != "channel":
-            return
-    except sqlite3.Error:   # a locked or mid-migration database: nothing to register for (before init, callers do not get here: cmd_install checks db_path() first, cmd_update runs after the migration)
-        return
-    ok, msg = assistant.register_channel_plugin(claude_runner.binary(), force=force)
-    if ok:
-        print(msg)
-    elif ok is None:
-        print(f"warning: {msg}", file=sys.stderr)
+        if (moved := migrate_inbound(conn)):
+            print(moved)
+    except sqlite3.Error:   # a locked or mid-migration database: the daemon's start moves it instead
+        pass
+    for line in assistant.unregister_telegram_plugin(claude_runner.binary()):
+        print(line, file=sys.stderr if line.startswith("warning:") else sys.stdout)
+    if config.telegram_token() and not scheduler.web_args():
+        print("warning: the dashboard is not installed, and Telegram is answered by its conversation: the chat gets alerts but no replies "
+              "until it is (cd web && npm install && finnamon install).", file=sys.stderr)
 
 
 def cmd_hook(a) -> None:
-    """Claude Code PreToolUse hooks (see the assistant bundle's .claude/settings.json). reply-guard: the channel plugin's `reply` tool takes any chat
-    id and any file path, and the session runs with dontAsk. browser-guard: in the browser-import session every Bash
+    """Claude Code PreToolUse hooks (see the assistant bundle's .claude/settings.json). browser-guard: in the browser-import session every Bash
     command must fit browser_command_ok; outside it the hook is a no-op. Exit 2 blocks the call; the message goes back
     to the assistant. permission: the intercom's PermissionRequest hook (finnamon/approval.py); it prints a decision or
     nothing, and nothing (also on any error) leaves the dialog to the person at the dashboard."""
@@ -814,22 +764,10 @@ def cmd_hook(a) -> None:
                 if not open_:
                     die("blocked: the bank's tab is gone (closed, or the browser quit); start the import again", 2)
                 marker.write_text(tab)
-            return
-        conn = store.connect()
-        chat = store.get_state(conn, "chat_id")
-        chats = ({str(chat)} if chat is not None else set()) | {str(r[0]) for r in conn.execute("SELECT telegram_user_id FROM owners WHERE telegram_user_id IS NOT NULL")}
-        target = tool_input.get("chat_id")
-        if target is None or str(target) not in chats:
-            die(f"reply blocked: chat {target} is not the household group or a member's private chat", 2)
-        charts = config.charts_dir().resolve()
-        for f in tool_input.get("files") or []:
-            p = Path(str(f)).expanduser().resolve()
-            if not p.is_relative_to(charts) or p.suffix.lower() != ".png":
-                die(f"reply blocked: only charts from `finnamon chart` (under {charts}) may be attached, not {f}", 2)
     except SystemExit:
         raise
     except Exception as e:  # noqa: BLE001
-        die(f"reply blocked: reply-guard could not run ({e})", 2)
+        die(f"blocked: browser-guard could not run ({e})", 2)
 
 
 def cmd_property(a) -> None:
@@ -1848,10 +1786,8 @@ def cmd_import(a) -> None:
         # --setting-sources project: the person's own ~/.claude/settings.json (which may allow Bash outright) does not reach this
         # session. --settings: the Bash guard hook rides this command line, so it exists in this session and nowhere else
         # (a checked-in hook would run in every session in the checkout, against whatever `finnamon` is on PATH).
-        # --strict-mcp-config: this session runs in the assistant directory too, and a second copy of the Telegram channel plugin's
-        # server kills the household's. `--setting-sources project` should already keep it out (the plugin is enabled in
-        # .claude/settings.local.json, a local source), but that is a guard held for another reason, and the skill drives
-        # agent-browser over Bash and wants no MCP server of its own.
+        # --strict-mcp-config: the skill drives agent-browser over Bash and wants no MCP server of its own (a Telegram plugin
+        # left registered for the directory would poll the household's bot).
         # The window is already open (chrome_launch) on a Chrome profile of Finnamon's own, so the bank's known-device state
         # survives between runs, or (--attach) one new tab is open in the person's own Chrome; FINNAMON_IMPORT_CDP is the
         # browser's address and FINNAMON_IMPORT_TAB the bank's tab, and the guard hook lets `connect` name that address and
@@ -2087,9 +2023,6 @@ def cmd_notify(a) -> None:
     if a.list:
         out([{"id": r["id"], "kind": r["kind"], "text": notify.render(r)} for r in notify.pending(conn)]); return
     _human_only("notify")
-    if a.restarted:   # the dashboard, after a restart cut a channel-mode turn short (web/server.js restartNotice)
-        chat = store.get_state(conn, "chat_id")
-        out({"sent": telegram.send_message(chat, notify.RESTARTED) if chat else None}); return
     if not store.get_state(conn, "chat_id") and notify.pending(conn):
         die("notify: no household chat recorded yet, so nothing can be sent; finnamon init gives you a code to send the bot")
     notify.last_error = None
@@ -2132,7 +2065,7 @@ def cmd_heartbeat(a) -> None:
 def cmd_status(a) -> None:
     conn = store.connect()
     out({"version": __version__, "home": str(config.home()), "chat_id": store.get_state(conn, "chat_id"),
-         "last_run": store.get_state(conn, "last_run"), "last_backup_at": store.get_state(conn, "last_backup_at"), "backup_error": store.get_state(conn, "backup_error"), "session": store.get_state(conn, "session"), "inbound": store.get_state(conn, "inbound") or "daemon", "inbound_conflict_at": store.get_state(conn, "inbound_conflict_at"), "channel_deaf_since": store.get_state(conn, "channel_deaf_since"), "daemon_alive": owners.daemon_alive(conn), "demo": bool(store.get_state(conn, "demo")), "plaid_keys": all(config.plaid_auth().values()),
+         "last_run": store.get_state(conn, "last_run"), "last_backup_at": store.get_state(conn, "last_backup_at"), "backup_error": store.get_state(conn, "backup_error"), "inbound_conflict_at": store.get_state(conn, "inbound_conflict_at"), "daemon_alive": owners.daemon_alive(conn), "demo": bool(store.get_state(conn, "demo")), "plaid_keys": all(config.plaid_auth().values()),
          "items": [dict(r) for r in conn.execute("SELECT item_id, institution, owner, status, last_synced_at, last_error, "
                                                      "(SELECT group_concat(COALESCE(a.name, '') || COALESCE(' …' || a.mask, ''), ', ') FROM accounts a WHERE a.item_id=items.item_id) AS accounts FROM items")],
          "pending_alerts": conn.execute(f"SELECT count(*) FROM alerts WHERE {notify.SENDABLE}").fetchone()[0],
@@ -2290,13 +2223,10 @@ def cmd_doctor(a) -> None:
     ready, detail = voice.status()
     check(True if ready else "optional", "Voice", detail, "" if ready else "optional: finnamon voice setup")   # Talk still works through the browser
     if conn is not None and not no_telegram:
-        mode = store.get_state(conn, "inbound") or "daemon"
         web = bool(scheduler.web_args())
-        check(web or mode != "session", "Telegram inbound",
-              {"daemon": "daemon (legacy): it answers the chat with its own claude -p session",
-               "session": "session (default): the daemon types the chat into the dashboard's intercom session" + ("" if web else ", but the dashboard is not installed"),
-               "channel": "channel: Claude Code's Telegram channel plugin in the dashboard's session reads the chat"}.get(mode, mode),
-              "cd web && npm install && finnamon install, or finnamon channel off")
+        check(web, "Telegram replies", "the dashboard's intercom session answers the chat" if web
+              else "the dashboard is not installed, so the chat gets alerts but no answers (it shares the dashboard's conversation)",
+              "cd web && npm install && finnamon install")
     strays = _stray_plugin_report()
     if strays:
         check(False, "Telegram plugin", "registered outside the assistant: " + ", ".join(strays["stray_telegram_plugins"]), strays["stray_telegram_plugins_fix"])
@@ -2350,15 +2280,15 @@ def _doctor_codex(check) -> None:
 
 
 def _stray_plugin_report() -> dict:
-    strays = assistant.stray_channel_plugins()
+    strays = assistant.stray_telegram_plugins()
     if not strays:
         return {}
     # A registered folder whose .claude/settings.local.json also enables the plugin seeds more: Claude Code gives every
     # worktree of that repo and every subfolder a claude session starts in a registration of its own (reproduced 2026-09-27).
-    seeding = [p for p in strays if p.startswith("/") and assistant.channel_plugin_registered(Path(p))]
+    seeding = [p for p in strays if p.startswith("/") and assistant.telegram_plugin_registered(Path(p))]
     return ({"stray_telegram_plugins": strays,
             "stray_telegram_plugins_fix": f"a claude started in any of these steals the bot's updates; only {assistant.dir()} should carry the plugin. "
-                                          f"For each (seeding ones first): cd <folder> && claude plugin uninstall {assistant.CHANNEL_PLUGIN} --scope local"}
+                                          f"For each (seeding ones first): cd <folder> && claude plugin uninstall {assistant.TELEGRAM_PLUGIN} --scope local"}
             | ({"stray_telegram_plugins_seeding": seeding} if seeding else {}))
 
 
@@ -2366,27 +2296,14 @@ def _git(repo, *args, check: bool = True):
     return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=check)
 
 
-def _session_tip(conn) -> None:
-    """update: once, tell a household with a bot on `channel` or `daemon` that `session` exists (never switch it for them)."""
-    try:
-        if store.get_state(conn, "session_tip_shown") or not config.load_secrets().get("telegram", {}).get("bot_token"):
-            return
-        store.set_state(conn, "session_tip_shown", 1)
-        mode = store.get_state(conn, "inbound") or "daemon"
-    except sqlite3.Error:   # a locked or half-migrated database: the tip can wait for the next update
-        return
-    if mode in ("channel", "daemon"):
-        print("New: `finnamon channel session` puts Telegram in the same conversation as the dashboard — no plugin needed.")
-
-
 def cmd_update(a) -> None:
     """Adopt new code without reprovisioning: pull, migrate, restart what went stale.
 
     `install` rewrites the unit files and reloads every service, which costs the household its assistant: the dashboard's
-    Claude session is the household's (in channel mode it is also the one Telegram talks to). `update` leaves the units
+    Claude session is the household's, and the one Telegram talks to. `update` leaves the units
     alone and restarts in place, so the session comes back by id instead of starting a stranger."""
     if _from_agent():
-        die("`finnamon update` restarts the dashboard, and in channel mode that is the session you are talking to; run it in a terminal on the Finnamon box")
+        die("`finnamon update` restarts the dashboard, which is the session you are talking to; run it in a terminal on the Finnamon box")
     repo = Path(scheduler.repo_dir())
     if not (repo / ".git").exists():   # a file, not a directory, in a git worktree
         die(f"{repo} is not a git checkout, so there is nothing to pull; `finnamon install` reprovisions from whatever is there")
@@ -2473,8 +2390,7 @@ def cmd_update(a) -> None:
             die(f"could not write the assistant bundle to {assistant.dir()} ({e}), so nothing was restarted; the schema is migrated")
         if (moved := detect.migrate_drafts()):
             print(f"moved detector drafts out of the checkout into {detect.drafts_dir()}: {', '.join(moved)}")
-        _register_channel_plugin(store.connect(), force=a.force)
-        _session_tip(store.connect())
+        _retire_channel_mode(store.connect())
         if _npm_needed(changed):
             _npm_ci()
 
@@ -2520,7 +2436,7 @@ def _npm_ci() -> None:
 
 def cmd_install(a) -> None:
     if _from_agent():
-        die("`finnamon install` reprovisions the services and retires the household's conversation, which in channel mode is the session you are talking to; run it in a terminal on the Finnamon box")
+        die("`finnamon install` reprovisions the services and retires the household's conversation, which is the session you are talking to; run it in a terminal on the Finnamon box")
     if a.uninstall:
         try:
             gone = scheduler.uninstall(dry_run=a.dry_run, force=a.force)
@@ -2533,7 +2449,7 @@ def cmd_install(a) -> None:
         return
     _install_bundle(dry_run=a.dry_run)   # before the jobs come up: the daemon and the dashboard start their sessions in it
     if not a.dry_run and config.db_path().exists():
-        _register_channel_plugin(store.connect(), force=a.force)
+        _retire_channel_mode(store.connect())
     try:
         files = scheduler.install(dry_run=a.dry_run, force=a.force)
     except (RuntimeError, subprocess.CalledProcessError) as e:
@@ -2542,8 +2458,6 @@ def cmd_install(a) -> None:
         print(f)
     if not a.dry_run and scheduler.web_args():
         _announce_dashboard_port()
-    if config.db_path().exists():   # before init there is no inbound to speak of; install must not create the database
-        _warn_no_bun_for_channel(store.connect())
 
 
 def _retire_intercom_session(yes: bool = False, dry_run: bool = False) -> bool:
@@ -2569,7 +2483,7 @@ def _retire_intercom_session(yes: bool = False, dry_run: bool = False) -> bool:
         # The id is only useful after the decision, so it goes last: the line that has to stop a hand already typing
         # `install` out of habit is the one naming the other command.
         print("`install` reprovisions the services and starts the assistant over: it comes back knowing nothing,")
-        print("and in channel mode that conversation is the Telegram chat's thread too.")
+        print("and that conversation is the Telegram chat's thread too.")
         print("  To pick up new code and keep it, that is `finnamon update`.")
         print(f"  retiring: {old}")
         try:
@@ -2580,7 +2494,7 @@ def _retire_intercom_session(yes: bool = False, dry_run: bool = False) -> bool:
             die("install retires the assistant's conversation, so it needs a terminal to confirm (or pass --yes)")
     _retire_intercom_file()
     # --strict-mcp-config because this transcript lives under the assistant directory: a plain `claude` there starts a
-    # second copy of the Telegram plugin's server and kills the household session's copy (README, the channel-mode note).
+    # Telegram plugin registered for that folder, which polls the household's bot (CLAUDE.md).
     # Claude Code keeps a transcript under the directory the session ran in: the assistant directory since v0.8.0.0, the
     # checkout before it, so the one retirement across that release resumes from the checkout, not from here.
     where = f"in the directory that session ran in ({assistant.dir()}, or the checkout {scheduler.repo_dir()} for a session older than v0.8.0.0)"
@@ -2665,14 +2579,6 @@ def _install_bundle(dry_run: bool = False) -> dict | None:
         _retire_intercom_file()
         print("  the assistant's conversations start over: Claude Code keeps a session under the directory it ran in, and that is now this one")
     return res
-
-
-def _warn_no_bun_for_channel(conn) -> None:
-    """Channel mode runs the Telegram plugin on Bun inside the intercom session; without it the session shows the
-    channel banner and nothing polls the bot, with no error anywhere. Say so where it can still be fixed."""
-    if store.get_state(conn, "inbound") == "channel" and not shutil.which("bun", path=scheduler.env_path()):   # the jobs' PATH, not the terminal's
-        print("warning: inbound is the Claude Code channel but `bun` is not on your PATH, so the Telegram plugin cannot start; "
-              "install Bun (https://bun.sh), then run `finnamon install` again.", file=sys.stderr)
 
 
 # --- budgets / settings / categories / suppressions -------------------------------------------
@@ -2968,8 +2874,7 @@ Next, after --remove: the bank's alerts stop; link it again with finnamon link -
 rename <name> <new name> (every account follows) and remove <name> (refused while they own an account). Names match
 without regard to case; `joint` is reserved for shared accounts.
 Needs a name, and either:
-  --user-id <id>   in channel mode (finnamon channel status says "channel"): their Telegram user id. Have them message the bot,
-                   then run /telegram:access in the channel's Claude session; the id is listed there.
+  --user-id <id>   their Telegram user id, when you already know it (a stranger in the household chat is told theirs).
   (no --user-id)   the code dance: it prints a code and waits. Add them to the household Telegram group (no group yet,
                    or --new-group: create one with you, them and the bot, make the bot an admin; it becomes the
                    household chat), then have them send exactly that code there. The bot's privacy mode must be off
@@ -2977,13 +2882,7 @@ Needs a name, and either:
   --no-telegram    a member who doesn't chat with the bot (a spouse who only has banks and budgets here): no id yet.
                    Give them Telegram later with --user-id <id> or the code dance on the same name.
 Next: link their banks with finnamon link --start --owner <name>.""",
-    "channel": """status: who answers Telegram: daemon (its own `claude -p` session), session (the dashboard's intercom session, one
-conversation shared with the dashboard), or channel (Claude Code's Telegram channel plugin).
-on / session / off (a person at a terminal on the Finnamon box only): switch Telegram conversation to the channel plugin, to the
-dashboard's session, or back to the daemon; the daemon stays the bot's only reader except under `on`. After a switch involving
-session or channel, restart the dashboard (finnamon update --no-pull). `on` prints the setup steps (register the plugin with
-finnamon install, the bot token in ~/.claude/channels/telegram/.env, pairing with /telegram:access).
-Next, after on: add each member with finnamon owner add <name> --user-id <id>.""",
+    "channel": """Retired: Telegram always shares the dashboard's conversation, so there is nothing to switch.""",
     "account": """merge, unmerge, failover and remove are for a person at a terminal on the Finnamon box (ids from finnamon account list):
   merge <new_id> <existing_id>   the same account seen through two logins (e.g. a joint account): count it once, as joint.
                                  Refused for different types or very different balances unless --force
@@ -3003,8 +2902,7 @@ Next: finnamon networth or the dashboard shows the totals counted once.""",
     "sync": """Pull new transactions and balances from every linked bank now (--item <item_id>: one bank). The daemon already does
 this on its schedule; run it by hand in a terminal on the Finnamon box after a re-login or to see a change sooner.
 Next: new alerts go out with the daemon's next pass.""",
-    "install": """(Re)install the schedule: the daemon and the dashboard as services, the assistant's directory, and (channel mode)
-the Telegram plugin. Starts the household's Claude conversation fresh (asks first; --yes skips). --dry-run shows what it
+    "install": """(Re)install the schedule: the daemon and the dashboard as services, and the assistant's directory. Starts the household's Claude conversation fresh (asks first; --yes skips). --dry-run shows what it
 would do; --uninstall removes the services (with --dry-run, names them and removes nothing). Each FINNAMON_HOME has its
 own job names; one installed for another home is left alone unless --force. Run it in a terminal on the Finnamon box.
 Next: finnamon status to check the daemon is running.""",
@@ -3075,12 +2973,11 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--token", nargs="?", const="", metavar="REDIRECT_URI", help="web dashboard: print a plain Plaid Link token (OAuth banks return to the HTTPS REDIRECT_URI when given, else use a popup)")
     s.add_argument("--public-token", metavar="PUBLIC_TOKEN", help="web dashboard: finish a Plaid Link session with its public token")
     s.add_argument("--web", action="store_true", help="web dashboard, with --update: print the re-login URL as JSON (a session still open is reused); the daemon syncs the bank once the login is done")
-    s = sp.add_parser("owner"); s.add_argument("action", choices=["list", "add", "rename", "remove"]); s.add_argument("name", nargs="?"); s.add_argument("new_name", nargs="?"); s.add_argument("--user-id", type=int, help="Telegram user id (channel mode: no code dance)")
+    s = sp.add_parser("owner"); s.add_argument("action", choices=["list", "add", "rename", "remove"]); s.add_argument("name", nargs="?"); s.add_argument("new_name", nargs="?"); s.add_argument("--user-id", type=int, help="Telegram user id (no code dance)")
     s.add_argument("--no-telegram", action="store_true", help="a member who doesn't chat with the bot (add their Telegram id later with --user-id)")
     s.add_argument("--new-group", action="store_true", help="the code may come from a new group, which becomes the household chat"); s.set_defaults(fn=cmd_owner)
-    s = sp.add_parser("channel", help="who answers Telegram: session (default: the dashboard's conversation), on (Claude Code's channel plugin) or off (legacy: the daemon's own session)",
-                     description="session: the daemon polls Telegram and types each message into the dashboard's intercom session (the default for new installs, no plugin). on: Claude Code's Telegram channel plugin reads the chat. off: the legacy mode, the daemon answers with its own separate claude -p session."); s.add_argument("action", choices=["on", "session", "off", "status"]); s.set_defaults(fn=cmd_channel)
-    s = sp.add_parser("hook", help="Claude Code hooks (stdin: the hook event JSON)"); s.add_argument("name", choices=["reply-guard", "browser-guard", "chrome-guard", "chrome-restore", "permission", "secret-guard"]); s.set_defaults(fn=cmd_hook)
+    s = sp.add_parser("channel", help="retired: Telegram always shares the dashboard's conversation"); s.add_argument("old", nargs="*", help=argparse.SUPPRESS); s.set_defaults(fn=cmd_channel)
+    s = sp.add_parser("hook", help="Claude Code hooks (stdin: the hook event JSON)"); s.add_argument("name", choices=["browser-guard", "chrome-guard", "chrome-restore", "permission", "secret-guard"]); s.set_defaults(fn=cmd_hook)
     s = sp.add_parser("property", help="stated assets a bank doesn't report (house, car), counted into net worth"); s.add_argument("action", choices=["list", "set", "remove"], nargs="?", default="list"); s.add_argument("name", nargs="?"); s.add_argument("value", nargs="?"); s.add_argument("--json", action="store_true", help="JSON even on a terminal"); s.set_defaults(fn=cmd_property)
     s = sp.add_parser("account", help="list | add \"<name>\" --institution <bank> (a manual account, fed by import) | remove \"<name>\" (a manual account and its transactions) | type <account_id> <type>|--clear | balance \"<name>\" <amount> (a manual account's balance now) | merge | unmerge | failover | owner"); s.add_argument("action", choices=["list", "add", "remove", "type", "kind", "balance", "merge", "unmerge", "failover", "owner"]); s.add_argument("new", nargs="?"); s.add_argument("existing", nargs="?")
     s.add_argument("--institution", help="add: the bank's name (default: the first word of the account name)"); s.add_argument("--type", choices=list(imports.KINDS), default="checking"); s.add_argument("--owner"); s.add_argument("--mask", help="last 4 digits"); s.add_argument("--yes", action="store_true", help="remove: don't ask"); s.add_argument("--clear", action="store_true", help="type: back to the bank's own type"); s.add_argument("--force", action="store_true", help="merge: even when the types or balances differ")
@@ -3101,18 +2998,18 @@ def build_parser() -> argparse.ArgumentParser:
     s = sp.add_parser("detect"); s.add_argument("--as-of"); s.add_argument("--only", nargs="*"); s.add_argument("--sql", metavar="NAME", help="print the assembled query"); s.add_argument("--prelude", action="store_true", help="print _prelude.sql, the CTEs every detector selects from")
     s.add_argument("--review", action="store_true"); s.add_argument("--tier", choices=["rules", "candidates"], default="candidates")
     s.add_argument("--draft", metavar="FILE|-", help="save a detector draft to the household's detector-drafts/ (under FINNAMON_HOME)"); s.add_argument("--name"); s.set_defaults(fn=cmd_detect)
-    s = sp.add_parser("notify"); s.add_argument("--list", action="store_true"); s.add_argument("--roundup", action="store_true"); s.add_argument("--restarted", action="store_true", help=argparse.SUPPRESS); s.set_defaults(fn=cmd_notify)
+    s = sp.add_parser("notify"); s.add_argument("--list", action="store_true"); s.add_argument("--roundup", action="store_true"); s.set_defaults(fn=cmd_notify)
     s = sp.add_parser("run"); s.add_argument("--no-sync", action="store_true"); s.add_argument("--no-triage", action="store_true"); s.add_argument("--no-notify", action="store_true"); s.set_defaults(fn=cmd_run)
     sp.add_parser("daemon").set_defaults(fn=cmd_daemon)
     sp.add_parser("heartbeat").set_defaults(fn=cmd_heartbeat)
     s = sp.add_parser("status"); s.add_argument("--login", action="store_true", help="also ask whether the assistant's CLI is signed in (logged_in: true, false, or null when it cannot tell)"); s.set_defaults(fn=cmd_status)
     sp.add_parser("doctor", help="check each prerequisite and piece of setup, with the fix for each").set_defaults(fn=cmd_doctor)
-    s = sp.add_parser("install", help="(re)install the scheduler"); s.add_argument("--dry-run", action="store_true"); s.add_argument("--uninstall", action="store_true"); s.add_argument("--yes", action="store_true", help="do not ask before retiring the assistant's conversation"); s.add_argument("--force", action="store_true", help="register the Telegram channel plugin even outside ~/.finnamon/assistant, and take over (or remove) job names installed for another FINNAMON_HOME"); s.set_defaults(fn=cmd_install)
+    s = sp.add_parser("install", help="(re)install the scheduler"); s.add_argument("--dry-run", action="store_true"); s.add_argument("--uninstall", action="store_true"); s.add_argument("--yes", action="store_true", help="do not ask before retiring the assistant's conversation"); s.add_argument("--force", action="store_true", help="take over (or remove) job names installed for another FINNAMON_HOME"); s.set_defaults(fn=cmd_install)
     s = sp.add_parser("update", help="pull and restart what went stale, keeping the household's Claude session (install reprovisions and starts it fresh)")
     s.add_argument("--no-pull", action="store_true", help="adopt the tree as it stands, without pulling")
     s.add_argument("--all", action="store_true", help="restart the daemon and the dashboard whatever changed")
     s.add_argument("--check", action="store_true", help="fetch and print, as JSON, whether there is anything to pull (the dashboard's Update button); changes nothing")
-    s.add_argument("--dry-run", action="store_true", help="look only: fetch, then name the commits to pull and the services that would restart; nothing is pulled, migrated, installed or restarted"); s.add_argument("--force", action="store_true", help="register the Telegram channel plugin even outside ~/.finnamon/assistant"); s.set_defaults(fn=cmd_update)
+    s.add_argument("--dry-run", action="store_true", help="look only: fetch, then name the commits to pull and the services that would restart; nothing is pulled, migrated, installed or restarted"); s.set_defaults(fn=cmd_update)
 
     s = sp.add_parser("budget", help="monthly limits: list (default) | overall | suggest (what you spend, from history) | set <name> <amount> [--category C ...] [--merchant M ...] [--fixed] | remove <name>; amounts take $ and commas"); s.add_argument("action", choices=["list", "suggest", "set", "remove", "overall"], nargs="?", default="list")
     s.add_argument("name", nargs="?"); s.add_argument("amount", nargs="?")

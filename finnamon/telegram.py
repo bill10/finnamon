@@ -125,15 +125,6 @@ def send_photo(chat_id: int | str, path: str, caption: str = "", token: str | No
     return _call("sendPhoto", body, {"Content-Type": f"multipart/form-data; boundary={boundary}"}, timeout=60, token=token)["message_id"]
 
 
-def pending_updates(token: str | None = None, timeout: int = 30) -> int:
-    """How many updates Telegram is holding for a consumer that has not collected them.
-
-    getWebhookInfo reads; it never consumes, so it is safe to call while the channel plugin owns the one getUpdates
-    slot this bot has. A count that stays above zero means nobody is reading the chat."""
-    # max(0,...): a negative count would be truthy, and the caller reads truthy as "nobody is reading", which never clears.
-    return max(0, int(_call("getWebhookInfo", timeout=timeout, token=token).get("pending_update_count") or 0))
-
-
 def get_updates(offset: int | None = None, timeout: int = 25, token: str | None = None) -> list[dict]:
     q = urllib.parse.urlencode({k: v for k, v in {"offset": offset, "timeout": timeout, "allowed_updates": json.dumps(["message", "callback_query"])}.items() if v is not None})
     return _call(f"getUpdates?{q}", timeout=timeout + 10, token=token)

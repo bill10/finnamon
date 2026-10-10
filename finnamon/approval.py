@@ -225,7 +225,6 @@ _PROTECTED_RE = re.compile(rf"{_HOMES}/(?:{'|'.join(PROTECTED)})", re.IGNORECASE
 # A Bash command that names the folder and, anywhere, one of its protected files (`cd ~/.finnamon && cat secrets.toml`).
 _IN_FOLDER_RE = re.compile(r"\.finnamon\b.*\b(?:secrets\.toml|finnamon\.db|web-token|intercom\.json|imports|backups|chrome|claude-import|downloads)\b"
                            r"|\.claude/channels\b.*\.env\b", re.IGNORECASE | re.DOTALL)
-SAYS_ONLY = ("mcp__plugin_telegram_telegram__reply", "mcp__plugin_telegram_telegram__react")   # words to people, not file access
 FINNAMON_TOOL = "mcp__finnamon__finnamon"   # Codex's finnamon(argv) tool (finnamon/mcp_server.py)
 _PATCH_PATHS = re.compile(r"^\*\*\* (?:(?:Add|Update|Delete) File|Move to): *(.+?) *$", re.MULTILINE)
 
@@ -247,8 +246,6 @@ def _codex_paths(tool: str, inp, cwd: str | None) -> list[str]:
 def protected_path(tool: str, inp, home: str | None = None, cwd: str | None = None) -> str | None:
     """The protected path this call's input names, or None. Claude Code's and Codex's tool names and input shapes alike
     (tests/fixtures/codex/hooks): Bash with a command string, apply_patch, view_image, any MCP tool's arguments."""
-    if tool in SAYS_ONLY:
-        return None
     try:
         text = json.dumps(inp, ensure_ascii=False) if not isinstance(inp, str) else inp
     except (TypeError, ValueError):

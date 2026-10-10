@@ -32,9 +32,6 @@
       "Bash(finnamon networth --history)",
       "Bash(finnamon networth --history --months *)",
       "Bash(finnamon status)",
-      "Bash(finnamon channel status)",
-      "mcp__plugin_telegram_telegram__reply",
-      "mcp__plugin_telegram_telegram__react",
       "Bash(finnamon owner list)",
       "Bash(finnamon --version)",
       "Bash(finnamon help)",
@@ -50,8 +47,6 @@
       "Bash(finnamon owner rename*)",
       "Bash(finnamon owner remove*)",
       "Bash(finnamon account owner *)",
-      "Bash(finnamon channel on*)",
-      "Bash(finnamon channel off*)",
       "Bash(finnamon account remove*)",
       "Bash(finnamon account merge *)",
       "Bash(finnamon account unmerge *)",
@@ -141,15 +136,6 @@
           {
             "type": "command",
             "command": "finnamon hook secret-guard || exit 2"
-          }
-        ]
-      },
-      {
-        "matcher": "mcp__plugin_telegram_telegram__reply",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "finnamon hook reply-guard || exit 2"
           }
         ]
       }

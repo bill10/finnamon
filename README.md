@@ -63,7 +63,8 @@ I recategorized a lot by hand. Now the AI does it, and I can just ask how we're 
 > 📊 **Dining on pace to go over:** $248.00 spent by day 20, tracking to $372.00 against your $350.00 budget.
 
 (Made-up charges, in the alerts' real wording.) Reply in plain words: "it's normal", "set dining 400", "how much did we spend on the dog
-this year". Most days it says nothing; on Sunday you get a short roundup.
+this year". Most days it says nothing; on Sunday you get a short roundup. The answers come from the dashboard's
+assistant session, the same conversation as its intercom, so without the dashboard the chat gets alerts but no replies.
 
 ## Who it's for
 
@@ -150,7 +151,7 @@ SQL detectors and delivery. Design: [docs/designs/finance-watchdog-agent.md](doc
 ```
 finnamon daemon (always on)                      claude (on demand, in ~/.finnamon/assistant)
   sync every 6h → detect → triage → notify        interactive: the dashboard's intercom, or cd ~/.finnamon/assistant && claude --strict-mcp-config
-  long-poll Telegram → claude -p --resume         headless: invoked by the daemon per message
+  long-poll Telegram → the dashboard's session    Telegram and the intercom share one conversation
 heartbeat (hourly timer): is the daemon alive?    /triage: invoked by the daemon per run with candidates
 ```
 
@@ -160,7 +161,7 @@ heartbeat (hourly timer): is the daemon alive?    /triage: invoked by the daemon
 
 The household's assistant runs in `~/.finnamon/assistant/`: its instructions, permission set and skills, written there
 from `finnamon/assistant_bundle/` by `init`, `install` and `update`. It writes only through allow-listed `finnamon`
-commands. On a Codex household the same runs are `codex exec --json` (and `exec resume`), triage is `$triage`, and the
+commands. On a Codex household triage runs as `codex exec --json`, as `$triage`, and the
 assistant reaches `finnamon` only through Finnamon's `finnamon` MCP tool, under a sealed `~/.finnamon/codex` home. Secrets live in `~/.finnamon/secrets.toml` (0600); everything else is in `~/.finnamon/finnamon.db`, backed up
 weekly to `~/.finnamon/backups/` (restoring one: [docs/INSTALL.md](docs/INSTALL.md) section 7).
 
@@ -168,7 +169,6 @@ More:
 
 - [docs/COMMANDS.md](docs/COMMANDS.md): talking to it, and every command (adding banks and partners, Fetch by AI and CSV import for banks Plaid can't reach, updates).
 - [docs/DASHBOARD.md](docs/DASHBOARD.md): the web dashboard, its key, and your phone over Tailscale.
-- [docs/CHANNEL-MODE.md](docs/CHANNEL-MODE.md): who answers Telegram: `session` (the default, one conversation with the dashboard), the Claude Code plugin (`channel`) or the legacy `daemon` session.
 
 ## Development
 

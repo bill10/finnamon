@@ -1,5 +1,5 @@
 """The Codex bundle and home (Codex card 2 of 6): AGENTS.md, .agents/skills and config.toml generated from the Claude files,
-the shared login, the pinned hook trust, and init/doctor/update/channel for a household that set Codex up. Everything runs
+the shared login, the pinned hook trust, and init/doctor/update for a household that set Codex up. Everything runs
 against the stub in tests/fixtures/codex/bin/codex; the tests marked `real_codex` run the installed codex's local
 subcommands (no login, no model call) under a scratch CODEX_HOME. Regenerate the goldens with FINNAMON_REGEN_GOLDEN=1."""
 import json
@@ -58,15 +58,13 @@ def test_agents_md_and_skills_are_generated_from_the_claude_files(home):
     assert len(files["AGENTS.md"]) <= assistant.AGENTS_MD_MAX
     assert ".claude/skills" not in agents and ".agents/skills/finnamon/SKILL.md" in agents
     assert "| `$triage` |" in agents and not re.search(r"(?<![\w/])/triage", agents)
-    assert "Telegram channel" not in agents and "<channel source" not in agents, "the channel plugin is Claude Code's alone"
     assert (home / "assistant" / "AGENTS.md").read_bytes() == files["AGENTS.md"], "install writes it beside CLAUDE.md"
     for name in ("finnamon", "triage", "import-browser"):
         skill = files[f".agents/skills/{name}/SKILL.md"].decode()
         golden(f"skills/{name}/SKILL.md", skill)
-        assert ".claude/skills" not in skill and "Claude Code's Telegram channel" not in skill
+        assert ".claude/skills" not in skill
     finnamon = files[".agents/skills/finnamon/SKILL.md"].decode()
-    assert "`<channel source=" not in finnamon and "the channel doesn't tell you" not in finnamon, "the whole bullet goes, not just its line"
-    assert "NO_REPLY" in finnamon, "the bullets around it stay"
+    assert "NO_REPLY" in finnamon
     assert 'codex exec "$triage"' in files[".agents/skills/triage/SKILL.md"].decode()
 
 
@@ -95,7 +93,7 @@ def test_config_toml_is_generated_from_settings_json(home):
     assert cfg["shell_environment_policy"]["set"]["FINNAMON_FROM_AGENT"] == "1" and cfg["mcp_servers"]["finnamon"]["env"]["FINNAMON_FROM_AGENT"] == "1"
     assert cfg["projects"][str(assistant.dir())]["trust_level"] == "trusted"
     hooks = cfg["hooks"]
-    assert [h["command"] for g in hooks["PreToolUse"] for h in g["hooks"]] == ["finnamon hook secret-guard || exit 2"], "reply-guard is the channel plugin's"
+    assert [h["command"] for g in hooks["PreToolUse"] for h in g["hooks"]] == ["finnamon hook secret-guard || exit 2"], "the secret guard is the one pinned hook"
     assert hooks["PermissionRequest"][0]["hooks"][0] == {"type": "command", "command": "finnamon hook permission", "timeout": 660}
     assert codex.config_problems() == [f"cannot read {home / 'codex' / 'config.toml'}: [Errno 2] No such file or directory: '{home / 'codex' / 'config.toml'}'"]
 
@@ -195,20 +193,13 @@ def test_update_rewrites_the_config_and_restarts(home, stub, capsys):
     assert "config.toml.bak" in capsys.readouterr().out
 
 
-# --- the harness check, channel, init, doctor -------------------------------------------------------------------------
+# --- the harness check, init, doctor -------------------------------------------------------------------------
 
 def test_harness_check_for_a_codex_household(conn, stub):
     conn.execute("INSERT INTO settings(account_id, key, value) VALUES ('*', 'assistant', 'codex')")   # what `settings set` writes once Codex is set up
     assert any("config.toml" in p for p in agent_runner.harness_problems())
     codex.install()
     assert agent_runner.harness_problems() == [], "no Claude trust is asked of a Codex household"
-
-
-def test_channel_mode_is_refused_for_codex(conn):
-    conn.execute("INSERT INTO settings(account_id, key, value) VALUES ('*', 'assistant', 'codex')")
-    with pytest.raises(SystemExit):
-        cli.main(["channel", "on"])
-    assert store.get_state(conn, "inbound") != "channel"
 
 
 def init(monkeypatch, answers, *argv):
@@ -238,11 +229,6 @@ def test_settings_set_assistant_codex_only_once_it_would_start_sealed(conn, stub
         cli.main(["settings", "set", "assistant", "codex"])
     assert "Codex is not ready" in capsys.readouterr().err and store.assistant_kind(conn) == "claude", "not set up here: refused"
     codex.install()
-    store.set_state(conn, "inbound", "channel")
-    with pytest.raises(SystemExit):
-        cli.main(["settings", "set", "assistant", "codex"])
-    assert "finnamon channel session" in capsys.readouterr().err, "channel mode is Claude Code's plugin"
-    store.set_state(conn, "inbound", "session")
     cfg = codex.home() / codex.CONFIG
     good = cfg.read_text()
     cfg.write_text(good.replace('web_search = "disabled"', 'web_search = "live"'))

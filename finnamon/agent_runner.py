@@ -2,7 +2,7 @@
 household. The `assistant` setting (store.assistant_kind) picks which; run(), classify_error(), harness_problems() and
 terminate_all() dispatch on it, and the per-CLI parts are the _claude_*/_codex_* functions below. cwd = the assistant
 directory (FINNAMON_HOME/assistant, where `finnamon install` writes the bundle: finnamon/assistant.py), hard timeout with
-kill. Used by triage (fresh session per run) and the daemon's conversation thread (`--resume` the household session).
+kill. Used by triage (a fresh session per run).
 `claude_runner` is this module under its old name.
 
 FINNAMON_CLAUDE_BIN overrides the binary (tests point it at a fake); CLAUDE_BIN (the dashboard's
@@ -84,8 +84,8 @@ UNATTENDED_DISALLOWED = ["WebSearch", "WebFetch"]
 
 
 # Every claude child runs in its own process group (start_new_session below), so a supervisor killing the daemon leaves
-# it alive: it finishes its turn, writes nowhere, and the restarted daemon then --resumes a session the orphan still
-# holds. daemon.py calls terminate_all() on SIGTERM so `finnamon update` cannot produce that pair.
+# it alive: an orphaned triage run keeps reading bank memos with nobody to stop it. daemon.py calls terminate_all() on
+# SIGTERM so `finnamon update` leaves none behind.
 _LIVE: set[int] = set()
 _LIVE_LOCK = threading.Lock()
 
@@ -154,14 +154,12 @@ def run(prompt: str, resume: str | None = None, timeout: int = 120, env_extra: d
 def _claude_cmd(exe: str, prompt: str, resume: str | None, disallowed) -> list[str]:
     # The prompt goes right after -p: variadic options like --disallowedTools would otherwise swallow it.
     # --strict-mcp-config with no --mcp-config means no MCP servers at all. Without it a headless run loads whatever the
-    # directory registers, and the Telegram channel plugin is registered local to the assistant directory: its server kills the
-    # household session's copy about a second after starting, and that session never reconnects. So every triage run
-    # ended the household's Telegram until something restarted the dashboard. These runs drive `finnamon` over Bash and
-    # have never needed an MCP server.
+    # directory registers, and a Telegram plugin registered there (the retired channel mode did it) would poll the
+    # household's bot. These runs drive `finnamon` over Bash and have never needed an MCP server.
     # --setting-sources project: the same seal `import --browser` puts on its session, for the same reason. The person's
     # own ~/.claude/settings.json may allow Bash outright, and this session is -p: it reads bank memos, which are text
     # whoever made the transaction chose, with nobody at the keyboard to refuse a command. The project allow list has
-    # every finnamon verb triage needs and no bare Bash. It also drops the local source, so the channel plugin is not
+    # every finnamon verb triage needs and no bare Bash. It also drops the local source, so such a plugin is not
     # enabled here either, which is the durable half of the line above.
     cmd = [exe, "-p", prompt, "--output-format", "json", "--setting-sources", "project", "--strict-mcp-config"]
     if resume:

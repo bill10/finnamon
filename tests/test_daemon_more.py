@@ -92,26 +92,19 @@ def test_converse_loop_and_edge_cases(conn, tg, fake_claude, monkeypatch, tmp_pa
     png.parent.mkdir()
     png.write_bytes(b"png")
     monkeypatch.setattr(telegram, "send_photo", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("too big")))
-    monkeypatch.setenv("CLAUDE_FAKE_RESULT", json.dumps({"result": f"see {png}", "session_id": "s1"}))
+    calls = []
+    monkeypatch.setattr(d, "ask_intercom", lambda m, note, timeout: (calls.append((note, timeout)), (f"see {png}", None))[1])
     d.converse(conn, {"owner": "bill", "text": "chart", "reply_to": None, "message_id": 7})
     assert tg.photos == [] and str(png) in tg.sent[-1]["text"] and tg.sent[-1]["reply_to"] == 7
-    # no session_id in the reply: the stored session is left alone; empty text sends nothing
-    monkeypatch.setenv("CLAUDE_FAKE_RESULT", json.dumps({"result": "   "}))
+    # empty text sends nothing
+    monkeypatch.setattr(d, "ask_intercom", lambda m, note, timeout: (calls.append((note, timeout)), ("   ", None))[1])
     n = len(tg.sent)
     d.converse(conn, {"owner": "bill", "text": "hi", "reply_to": None, "message_id": 8})
-    assert len(tg.sent) == n and store.get_state(conn, "session") == "s1"
-    # replying to a message that is not one of our alerts: no alert id in the prefix
-    calls = []
-    monkeypatch.setattr(claude_runner, "run", lambda p, resume=None, timeout=120: (calls.append(p), claude_runner.Result(True, "x", None))[1])
+    assert len(tg.sent) == n
+    # replying to a message that is not one of our alerts: no note
     d.converse(conn, {"owner": "jane", "text": "?", "reply_to": 999, "message_id": 9})
-    assert calls == ["[Telegram, jane] ?"]
-    # a failure that is not "session lost" is not retried and the session is kept
-    store.set_state(conn, "session", "keep")
-    monkeypatch.setattr(claude_runner, "run", lambda p, resume=None, timeout=120: (calls.append(resume), claude_runner.Result(False, "", None, error="timeout after 120s"))[1])
-    d.converse(conn, {"owner": "bill", "text": "slow", "reply_to": None, "message_id": 10})
-    assert calls[-1] == "keep" and store.get_state(conn, "session") == "keep" and "(timeout)" in tg.sent[-1]["text"]
+    assert calls[-1] == ("", 120)
     # claude_timeout_seconds setting is honoured
     store.set_setting(conn, "claude_timeout_seconds", "45", ops=True)
-    monkeypatch.setattr(claude_runner, "run", lambda p, resume=None, timeout=120: (calls.append(timeout), claude_runner.Result(True, "NO_REPLY", None))[1])
     d.converse(conn, {"owner": "bill", "text": "x", "reply_to": None, "message_id": 11})
-    assert calls[-1] == 45
+    assert calls[-1] == ("", 45)

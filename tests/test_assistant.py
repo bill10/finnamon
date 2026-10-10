@@ -223,21 +223,6 @@ def test_files_skips_what_a_session_or_an_install_leaves_in_the_source(tmp_path,
                      "AGENTS.md", ".agents/skills/finnamon/SKILL.md", ".agents/skills/triage/SKILL.md", ".agents/skills/import-browser/SKILL.md"}
 
 
-def test_register_channel_plugin_warns_without_claude_or_on_a_failed_spawn(own_dir, conn, monkeypatch, capsys):
-    seed(conn); assistant.install(); assistant.trust()
-    store.set_state(conn, "inbound", "channel")
-    monkeypatch.setattr("finnamon.claude_runner.binary", lambda: None)
-    cli._register_channel_plugin(conn)
-    err = capsys.readouterr().err
-    assert "not on PATH" in err and f"cd {own_dir} && {assistant.CHANNEL_PLUGIN_INSTALL}" in err
-    monkeypatch.setattr("finnamon.claude_runner.binary", lambda: str(own_dir / "no-such-claude"))
-    cli._register_channel_plugin(conn)
-    assert "could not register" in capsys.readouterr().err
-    monkeypatch.setattr(scheduler, "install", lambda os_name=None, dry_run=False, force=False: [])
-    cli.main(["install", "--yes"])   # and neither failure stops the install
-    assert "could not register" in capsys.readouterr().err
-
-
 def test_install_warns_when_trust_cannot_be_written(own_dir, monkeypatch, capsys):
     assistant.claude_config_path().write_text("not json {")
     ran = []
@@ -395,37 +380,6 @@ def test_daemon_start_writes_a_missing_bundle_once(own_dir, conn, monkeypatch):
     assert (own_dir / "CLAUDE.md").read_text() == "theirs", "an existing directory is never rewritten by the daemon"
 
 
-def test_daemon_self_heal_registers_the_channel_plugin_in_channel_mode(own_dir, conn, fake_claude, tmp_path, monkeypatch):
-    """The upgrade path: the previous release's `update` restarts this daemon into a box with no bundle, and in channel
-    mode the dashboard session that starts beside it is Telegram's only reader. Without the plugin registered for the
-    new directory, the chat has nobody reading it."""
-    from finnamon import daemon
-    seed(conn); store.set_state(conn, "inbound", "channel")
-    log = tmp_path / "plugin.txt"
-    fake_claude.write_text(f'#!/bin/sh\n{{ pwd; printf "%s\\n" "$@"; }} >> {log}\n')
-    def start():
-        d = daemon.Daemon(conn_factory=store.connect)   # a connection per call, as in production: the registration thread opens its own
-        for name in ("sync_loop", "poll_loop", "converse_loop"):
-            monkeypatch.setattr(d, name, lambda: None)
-        monkeypatch.setattr(d.stop, "wait", lambda t=None: d.stop.set())
-        d.start(exit=lambda code: pytest.fail(f"exited {code}"))
-    import time
-    def lines_after(n):   # the registration runs on a thread of its own: a stop never waits behind it, so the test does
-        for _ in range(100):
-            if log.exists() and len(log.read_text().splitlines()) >= n:
-                break
-            time.sleep(0.05)
-        return log.read_text().splitlines() if log.exists() else []
-    start()
-    lines = lines_after(7)
-    assert Path(lines[0]).resolve() == own_dir.resolve() and lines[1:] == ["plugin", "install", assistant.CHANNEL_PLUGIN, "--scope", "local", "--yes"]
-    start()
-    assert len(lines_after(14)) == 14, "still not registered (the fake registers nothing): every start tries, so a start that died in between cannot strand the chat"
-    (own_dir / ".claude/settings.local.json").write_text(json.dumps({"enabledPlugins": {assistant.CHANNEL_PLUGIN: True}}))
-    start(); time.sleep(0.3)
-    assert len(log.read_text().splitlines()) == 14, "registered: nothing to do"
-
-
 def test_trust_reads_again_when_claude_wrote_in_between(own_dir, monkeypatch):
     cfg = assistant.claude_config_path()
     cfg.write_text(json.dumps({"projects": {}}))
@@ -484,44 +438,80 @@ def test_status_reports_the_assistant_directory_and_its_problems(own_dir, conn, 
     assert json.loads(capsys.readouterr().out)["assistant_problems"] == [], "what the dashboard's health pill reads"
 
 
-def test_update_registers_the_channel_plugin_in_channel_mode(scheduled, own_dir, conn, fake_claude, tmp_path, monkeypatch, capsys):
-    seed(conn); store.set_state(conn, "inbound", "channel")
+def test_update_moves_a_channel_household_to_session_and_unregisters_the_plugin(scheduled, own_dir, conn, fake_claude, tmp_path, monkeypatch, capsys):
+    """Channel mode registered telegram@claude-plugins-official for the assistant directory; update takes it off (uninstall
+    run there, then the enabledPlugins entry) and moves the household to the one mode, with one line. Other settings stay."""
+    seed(conn); store.set_state(conn, "inbound", "channel"); store.set_state(conn, "channel_deaf_since", "2026-10-01 10:00:00")
+    assistant.install(); assistant.trust()
     log = tmp_path / "plugin.txt"
     fake_claude.write_text(f'#!/bin/sh\n{{ pwd; printf "%s\\n" "$@"; }} >> {log}\n')
+    local = own_dir / ".claude/settings.local.json"
+    local.write_text(json.dumps({"enabledPlugins": {assistant.TELEGRAM_PLUGIN: True, "other@x": True}, "permissions": {"allow": ["Bash(ls)"]}}))
     repo = config.home() / "checkout"; (repo / ".git").mkdir(parents=True)
     monkeypatch.setattr(cli.scheduler, "repo_dir", lambda: str(repo))
     monkeypatch.setattr(cli.scheduler, "drifted_units", lambda *a, **k: [])
     monkeypatch.setattr(cli.scheduler, "restart", lambda names, *a, **k: list(names))
     monkeypatch.setattr(cli, "_git", lambda r, *args, **kw: subprocess.CompletedProcess(args, 0, "same111\n" if args[0] == "rev-parse" else "", ""))
     cli.main(["update", "--no-pull"])
-    assert "registered the Telegram channel plugin" in capsys.readouterr().out and Path(log.read_text().splitlines()[0]).resolve() == own_dir.resolve()
-
-
-def test_channel_plugin_is_registered_for_the_assistant_directory(own_dir, conn, fake_claude, tmp_path, capsys):
-    seed(conn)
-    assistant.install()
-    log = tmp_path / "plugin.txt"
-    fake_claude.write_text(f'#!/bin/sh\n{{ pwd; printf "%s\\n" "$@"; }} > {log}\n')
-    cli._register_channel_plugin(conn)
-    assert not log.exists(), "daemon mode: no plugin to register"
-    store.set_state(conn, "inbound", "channel")
-    cli._register_channel_plugin(conn)
-    lines = log.read_text().splitlines()
-    assert Path(lines[0]).resolve() == own_dir.resolve() and lines[1:] == ["plugin", "install", assistant.CHANNEL_PLUGIN, "--scope", "local", "--yes"]
-    assert "registered the Telegram channel plugin" in capsys.readouterr().out
-    log.unlink()
-    (own_dir / ".claude/settings.local.json").write_text(json.dumps({"enabledPlugins": {assistant.CHANNEL_PLUGIN: True}}))
-    cli._register_channel_plugin(conn)
-    assert not log.exists(), "already registered there: nothing to do"
-    (own_dir / ".claude/settings.local.json").unlink()
-    fake_claude.write_text('#!/bin/sh\necho "marketplace unreachable" >&2; exit 1\n')
-    cli._register_channel_plugin(conn)
-    err = capsys.readouterr().err
-    assert "marketplace unreachable" in err and f"cd {own_dir} && {assistant.CHANNEL_PLUGIN_INSTALL}" in err, "a failure names the by-hand step"
-    # `channel on` sends people to the assistant directory, not the checkout
-    cli.main(["channel", "on"])
     out = capsys.readouterr().out
-    assert str(own_dir) in out and "finnamon install" in out and "In a Claude Code session here" not in out
+    assert "unregistered the retired Telegram channel plugin" in out and "Telegram now always shares the dashboard's conversation" in out
+    lines = log.read_text().splitlines()
+    assert Path(lines[0]).resolve() == own_dir.resolve() and lines[1:] == ["plugin", "uninstall", assistant.TELEGRAM_PLUGIN, "--scope", "local"]
+    assert json.loads(local.read_text()) == {"enabledPlugins": {"other@x": True}, "permissions": {"allow": ["Bash(ls)"]}}
+    assert store.get_state(conn, "inbound") == "session" and store.get_state(conn, "channel_deaf_since") is None
+    log.unlink()
+    cli.main(["update", "--no-pull"])
+    out = capsys.readouterr().out
+    assert not log.exists() and "Telegram now" not in out and "unregistered" not in out, "once: nothing left to do"
+
+
+def test_unregister_tolerates_not_installed_and_names_the_by_hand_step(own_dir, fake_claude, tmp_path, monkeypatch):
+    assistant.install()
+    reg = assistant.plugins_file(); reg.parent.mkdir(parents=True)
+    reg.write_text(json.dumps({"plugins": {assistant.TELEGRAM_PLUGIN: [{"scope": "local", "projectPath": str(own_dir)}, {"scope": "user"}]}}))
+    fake_claude.write_text('#!/bin/sh\necho "Plugin telegram@claude-plugins-official is not installed" >&2; exit 1\n')
+    assert assistant.unregister_telegram_plugin(str(fake_claude)) == [f"unregistered the retired Telegram channel plugin for {own_dir}"]
+    fake_claude.write_text('#!/bin/sh\necho "marketplace unreachable" >&2; exit 1\n')
+    (msg,) = assistant.unregister_telegram_plugin(str(fake_claude))
+    assert msg.startswith("warning:") and "marketplace unreachable" in msg and f"cd {own_dir} && claude plugin uninstall" in msg
+    (msg,) = assistant.unregister_telegram_plugin(None)
+    assert msg.startswith("warning:") and "not on PATH" in msg
+    monkeypatch.setattr(assistant, "PLUGIN_TIMEOUT_S", 1)
+    fake_claude.write_text("#!/bin/sh\nsleep 5\n")
+    (msg,) = assistant.unregister_telegram_plugin(str(fake_claude))
+    assert msg.startswith("warning:") and f"cd {own_dir} && claude plugin uninstall" in msg, "a hung claude never stops update"
+    reg.write_text(json.dumps({"plugins": {assistant.TELEGRAM_PLUGIN: [{"scope": "user"}]}}))
+    assert assistant.unregister_telegram_plugin(str(fake_claude)) == [], "a user-scope registration is the person's"
+
+
+
+# Value: protects=`finnamon install` on a channel household also retires the mode and the plugin; fails_when=cmd_install stops calling _retire_channel_mode; why_new=only the update path was tested; seam=none
+def test_install_moves_a_channel_household_to_session_and_unregisters_the_plugin(own_dir, conn, fake_claude, tmp_path, monkeypatch, capsys):
+    seed(conn); store.set_state(conn, "inbound", "channel")
+    assistant.install(); assistant.trust()
+    log = tmp_path / "plugin.txt"
+    fake_claude.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" >> {log}\n')
+    local = own_dir / ".claude/settings.local.json"
+    local.write_text(json.dumps({"enabledPlugins": {assistant.TELEGRAM_PLUGIN: True}}))
+    monkeypatch.setattr(scheduler, "install", lambda os_name=None, dry_run=False, force=False: [])
+    cli.main(["install", "--yes"])
+    out = capsys.readouterr().out
+    assert "unregistered the retired Telegram channel plugin" in out and "Telegram now always shares" in out
+    assert log.read_text().splitlines() == ["plugin", "uninstall", assistant.TELEGRAM_PLUGIN, "--scope", "local"]
+    assert json.loads(local.read_text()) == {"enabledPlugins": {}} and store.get_state(conn, "inbound") == "session"
+
+
+# Value: protects=update survives a hand-mangled settings.local.json and leaves it as found; fails_when=the parse error escapes unregister_telegram_plugin (update dies after the bundle write) or the file is rewritten; why_new=only well-formed files were tested; seam=none
+def test_unregister_with_a_malformed_settings_local_still_uninstalls_and_leaves_the_file(own_dir, fake_claude):
+    assistant.install()
+    local = own_dir / ".claude/settings.local.json"
+    local.write_text("{not json")
+    assert assistant.unregister_telegram_plugin(str(fake_claude)) == [], "no registry entry, no parseable entry: nothing to do"
+    reg = assistant.plugins_file(); reg.parent.mkdir(parents=True)
+    reg.write_text(json.dumps({"plugins": {assistant.TELEGRAM_PLUGIN: [{"scope": "local", "projectPath": str(own_dir)}]}}))
+    fake_claude.write_text("#!/bin/sh\nexit 0\n")
+    assert assistant.unregister_telegram_plugin(str(fake_claude)) == [f"unregistered the retired Telegram channel plugin for {own_dir}"]
+    assert local.read_text() == "{not json"
 
 
 def test_detect_prelude_prints_the_prelude_and_the_assistant_may_run_it(home, capsys):
@@ -576,52 +566,20 @@ def test_the_wheel_carries_the_bundle(tmp_path):
             assert f"finnamon/assistant_bundle/{rel}" in names, rel
 
 
-def test_the_plugin_is_never_registered_outside_the_households_assistant_directory(tmp_path, monkeypatch, conn, fake_claude, capsys):
-    """A folder the plugin is registered for steals the bot's updates from any claude started there: a scratch home, a
-    FINNAMON_ASSISTANT override, a temp dir or a git checkout/worktree is refused, and nothing is spawned."""
-    from tests.conftest import REAL_PLUGIN_DIR_PROBLEM as guard
-    user = Path("/nonexistent-user-home")
-    with monkeypatch.context() as m:   # scoped: undoing the test's own monkeypatch would also undo conftest's scratch home
-        m.setattr(assistant.tempfile, "gettempdir", lambda: str(tmp_path / "t"))
-        m.setattr(Path, "home", lambda: user)   # the household's default ~/.finnamon, as the guard computes it
-        m.setenv("FINNAMON_HOME", str(user / ".finnamon"))
-        assert guard(user / ".finnamon" / "assistant") is None
-        if Path("/tmp").resolve() != Path("/tmp"):   # a macOS-style /tmp symlink: also checked through its target
-            assert "temp directory" in guard(Path("/tmp/x/assistant"))
-        assert "temp directory" in guard(tmp_path / "t" / "assistant")
-        repo = user / "code" / "finnamon"
-        m.setattr(Path, "exists", lambda p: str(p) in (str(repo / ".git"), str(user / ".git")))   # a checkout, or a worktree's .git file
-        assert "git checkout" in guard(repo / "finnamon" / "assistant_bundle")
-        assert guard(user / ".finnamon" / "assistant") is None                  # a dotfiles repo at ~/.git is not one
-    with monkeypatch.context() as m:
-        m.setenv("FINNAMON_ASSISTANT", str(tmp_path / "a"))
-        assert "overridden" in guard(tmp_path / "a")
-    assert "overridden" in guard(assistant.dir())                          # the suite's scratch FINNAMON_HOME
-    # wired in: the registration refuses with the reason, spawns nothing, and --force goes ahead
-    monkeypatch.setattr(assistant, "plugin_dir_problem", guard)
-    log = tmp_path / "plugin.txt"
-    fake_claude.write_text(f'#!/bin/sh\npwd > {log}\n')
-    store.set_state(conn, "inbound", "channel")
-    cli._register_channel_plugin(conn)
-    assert "not registering" in capsys.readouterr().err and not log.exists()
-    cli._register_channel_plugin(conn, force=True)
-    assert log.exists()
-
-
 def test_status_reports_stray_telegram_plugins_read_only(conn, tmp_path, capsys):
     reg = assistant.plugins_file(); reg.parent.mkdir(parents=True)
     plugin = [{"scope": "local", "projectPath": str(assistant.dir())}, {"scope": "local", "projectPath": "/wt/Cobra"},
               {"scope": "local", "projectPath": "/private/tmp/x"}, {"scope": "user"}]
-    reg.write_text(body := json.dumps({"version": 2, "plugins": {assistant.CHANNEL_PLUGIN: plugin, "other@x": [{"scope": "user"}]}}))
+    reg.write_text(body := json.dumps({"version": 2, "plugins": {assistant.TELEGRAM_PLUGIN: plugin, "other@x": [{"scope": "user"}]}}))
     cli.main(["status"]); st = json.loads(capsys.readouterr().out)
     assert st["stray_telegram_plugins"] == ["(user scope: every folder)", "/private/tmp/x", "/wt/Cobra"]
     assert "plugin uninstall" in st["stray_telegram_plugins_fix"] and reg.read_text() == body   # reported, never edited
     assert "stray_telegram_plugins_seeding" not in st
     # a registered checkout that also enables it in settings.local.json hands a registration to each of its worktrees
     seed_dir = tmp_path / "checkout"; (seed_dir / ".claude").mkdir(parents=True)
-    (seed_dir / ".claude/settings.local.json").write_text(json.dumps({"enabledPlugins": {assistant.CHANNEL_PLUGIN: True}}))
-    reg.write_text(json.dumps({"version": 2, "plugins": {assistant.CHANNEL_PLUGIN: plugin + [{"scope": "local", "projectPath": str(seed_dir)}]}}))
+    (seed_dir / ".claude/settings.local.json").write_text(json.dumps({"enabledPlugins": {assistant.TELEGRAM_PLUGIN: True}}))
+    reg.write_text(json.dumps({"version": 2, "plugins": {assistant.TELEGRAM_PLUGIN: plugin + [{"scope": "local", "projectPath": str(seed_dir)}]}}))
     cli.main(["status"]); assert json.loads(capsys.readouterr().out)["stray_telegram_plugins_seeding"] == [str(seed_dir)]
-    reg.write_text(json.dumps({"version": 2, "plugins": {assistant.CHANNEL_PLUGIN: plugin[:1]}}))
+    reg.write_text(json.dumps({"version": 2, "plugins": {assistant.TELEGRAM_PLUGIN: plugin[:1]}}))
     cli.main(["status"]); assert "stray_telegram_plugins" not in json.loads(capsys.readouterr().out)
     reg.write_text("not json"); cli.main(["status"]); capsys.readouterr()                 # a broken registry is not a crash

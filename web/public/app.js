@@ -97,11 +97,11 @@ async function loadUpdate({ fresh = false } = {}) {
 const isDemo = () => !!summary?.status?.demo;
 const sdot = (k) => `<i class="sdot ${k}" aria-hidden="true"></i>`;   // ok (no class) | warn | err | new | busy | off
 function settingsRows() {   // label, a dot and the value; a detail under it in muted type. '…' until /api/settings answers
-  const st = summary?.status || {}, inb = summary?.inbound;
+  const st = summary?.status || {};
   const row = (k, dot, v, sub = '') => `<li><span class="k">${k}</span><span class="v">${v == null ? '<span class="none">…</span>' : sdot(dot) + v}</span>${sub ? `<span class="sub">${sub}</span>` : ''}</li>`;
-  const mode = { session: 'Dashboard’s assistant session', channel: 'Claude Code channel', daemon: 'The daemon' }[inb];
   const daemon = st.daemon_alive === false ? 'Daemon stopped' : st.daemon_alive ? 'Daemon running' : '';
-  const tg = row('Telegram', st.daemon_alive === false ? 'err' : mode ? '' : 'off', mode || '<span class="none">Unknown</span>', daemon);
+  const tg = !summary ? row('Telegram', '', null) : !st.chat_id ? row('Telegram', 'off', 'Not set up')
+    : row('Telegram', st.daemon_alive === false ? 'err' : '', 'Shares this conversation', daemon);
   const remote = !setx ? row('Remote access', '', null) : setx.remote.on ? row('Remote access', '', 'On', setx.remote.hosts.map(esc).join(', ')) : row('Remote access', 'off', 'Off', 'This computer only');
   const voice = !setx ? row('Voice', '', null) : !setx.voice ? row('Voice', 'off', 'Not available here')
     : setx.voice.stt === 'whisper' ? row('Voice', '', 'Whisper ready') : row('Voice', 'warn', 'Browser speech', 'Whisper is not set up');

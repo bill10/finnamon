@@ -1,7 +1,7 @@
 // The PTY session without a PTY: a fake spawn drives restart, buffer and state logic.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createSession, claudeArgs, agentArgs, AGENTS, importCommand, intercomSession, INTERCOM_FILE, restartNotice, midTurn, RESTART_NOTICE_MS } from '../server.js';
+import { createSession, claudeArgs, agentArgs, AGENTS, importCommand, intercomSession, INTERCOM_FILE } from '../server.js';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
@@ -18,15 +18,9 @@ function fakeSpawn() {
   return { spawn, procs };
 }
 
-test('claudeArgs: ask mode outside channel mode; the web is only taken away from the channel session', () => {
-  assert.deepEqual(claudeArgs('daemon'), ['--permission-mode', 'default', '--setting-sources', 'project', '--strict-mcp-config'],
-    'the daemon reads the bot: a Telegram plugin enabled in the person\'s config must not start here and poll it too');
-  assert.deepEqual(claudeArgs('channel'), ['--permission-mode', 'dontAsk', '--channels', 'plugin:telegram@claude-plugins-official', '--disallowedTools', 'WebSearch', 'WebFetch'],
-    'channel mode is left as it was: the plugin would relay every dialog to paired phones, so no dialogs and no web');
-  assert.deepEqual(claudeArgs('session'), ['--permission-mode', 'default', '--setting-sources', 'project', '--strict-mcp-config'],
-    'session mode: no dontAsk and no web ban; every fetch asks, on the dashboard and (a Telegram turn) on the phone');
-  assert.ok(!claudeArgs('session').includes('dontAsk') && !claudeArgs('session').includes('--disallowedTools'));
-  assert.ok(!claudeArgs('channel').includes('--strict-mcp-config') && !claudeArgs('channel').includes('--setting-sources'), 'channel mode is the one that loads the plugin');
+test('claudeArgs: ask mode, sealed so a Telegram plugin in the person\'s config never polls the bot', () => {
+  assert.deepEqual(claudeArgs(), ['--permission-mode', 'default', '--setting-sources', 'project', '--strict-mcp-config'],
+    'the daemon reads the bot: a Telegram plugin enabled in the person\'s config must not start here and poll it too; every fetch asks');
 });
 
 test('the household session runs in the installed assistant bundle, never the checkout', () => {
@@ -170,16 +164,12 @@ test('the household session id is minted once, then resumed, and a start that do
 
   let s = mk(null);                                    // first boot ever
   assert.deepEqual(s.get(), { id: '11111111-1111-4111-8111-111111111111', created: false });
-  assert.deepEqual(claudeArgs('daemon', s.get()).slice(5), ['--session-id', '11111111-1111-4111-8111-111111111111'], 'a new id is minted, not resumed');
+  assert.deepEqual(claudeArgs(s.get()).slice(5), ['--session-id', '11111111-1111-4111-8111-111111111111'], 'a new id is minted, not resumed');
   s.started();
   assert.deepEqual(saved, { id: '11111111-1111-4111-8111-111111111111', created: true }, 'once claude holds the id, the next boot has to resume it');
 
   s = mk({ id: '11111111-1111-4111-8111-111111111111', created: true });             // every boot after
-  assert.deepEqual(claudeArgs('daemon', s.get()).slice(5), ['--resume', '11111111-1111-4111-8111-111111111111']);
-  assert.deepEqual(claudeArgs('channel', s.get()).slice(2),
-    ['--resume', '11111111-1111-4111-8111-111111111111', '--channels', 'plugin:telegram@claude-plugins-official', '--disallowedTools', 'WebSearch', 'WebFetch'],
-    'channel mode resumes the same session: it is the one Telegram talks to, so it reads bank memos unattended and gets no web');
-  assert.ok(!claudeArgs('daemon', s.get()).includes('--disallowedTools'), 'daemon mode is a person at the dashboard: the web stays for a property lookup');
+  assert.deepEqual(claudeArgs(s.get()).slice(5), ['--resume', '11111111-1111-4111-8111-111111111111']);
 
   saved = null;
   s.started();                                         // every exit follows a start: onStart fires first in createSession
@@ -233,17 +223,17 @@ test('wired into the dashboard, a start that does not take is never handed the s
   const intercom = intercomSession({ home: '/nope', read: () => null, write: () => {}, uuid: () => ids.shift() });
   const s = createSession({
     spawn: (cmd, args, opts) => { seen.push(args); return spawn(cmd, args, opts); },
-    args: () => claudeArgs('channel', intercom.get()), onStart: () => intercom.started(), onExit: ({ uptimeMs }) => intercom.noteExit(uptimeMs),
+    args: () => claudeArgs(intercom.get()), onStart: () => intercom.started(), onExit: ({ uptimeMs }) => intercom.noteExit(uptimeMs),
     log: { warn() {}, error() {} },
   });
-  assert.deepEqual(seen[0].slice(2, 6), ['--session-id', '11111111-1111-4111-8111-111111111111', '--channels', 'plugin:telegram@claude-plugins-official']);
+  assert.deepEqual(seen[0].slice(5), ['--session-id', '11111111-1111-4111-8111-111111111111']);
   assert.deepEqual(intercom.get(), { id: '11111111-1111-4111-8111-111111111111', created: true }, 'recorded at spawn: a dashboard killed outright still resumes next time');
   procs[0].exit({ exitCode: 1 });   // claude refused the id ("already in use") and quit before a prompt
   t.mock.timers.tick(3_000);
   assert.notDeepEqual(seen[1], seen[0], 'the restart never hands claude the argv it just refused');
   // The recovery has to read what the start ASKED for, not the state it left behind: onStart has already flipped
   // created, so branching on that mints a new id here and the household silently loses the conversation.
-  assert.deepEqual(seen[1].slice(2, 4), ['--resume', '11111111-1111-4111-8111-111111111111'], 'an id claude already holds is resumed, not replaced');
+  assert.deepEqual(seen[1].slice(5), ['--resume', '11111111-1111-4111-8111-111111111111'], 'an id claude already holds is resumed, not replaced');
   assert.equal(ids.length, 1, 'and no new id was minted for it');
   s.stop();
 });
@@ -255,7 +245,7 @@ test('wired into the dashboard, a resume that finds nothing starts a new convers
   const intercom = intercomSession({ home: '/nope', read: () => ({ id: '44444444-4444-4444-8444-444444444444', created: true }), write: () => {}, uuid: () => '55555555-5555-4555-8555-555555555555' });
   const s = createSession({
     spawn: (cmd, args, opts) => { seen.push(args); return spawn(cmd, args, opts); },
-    args: () => claudeArgs('daemon', intercom.get()), onStart: () => intercom.started(), onExit: ({ uptimeMs }) => intercom.noteExit(uptimeMs),
+    args: () => claudeArgs(intercom.get()), onStart: () => intercom.started(), onExit: ({ uptimeMs }) => intercom.noteExit(uptimeMs),
     log: { warn() {}, error() {} },
   });
   assert.deepEqual(seen[0].slice(5), ['--resume', '44444444-4444-4444-8444-444444444444']);
@@ -270,13 +260,13 @@ test('a session id that is not a uuid never reaches claude argv, and a deliberat
   // --resume takes an optional value, so a stored id starting with a dash would be read as a flag of its own on the
   // household's session rather than consumed as the id.
   const hostile = intercomSession({ home: '/nope', read: () => ({ id: '--dangerously-skip-permissions', created: true }), write: () => {}, uuid: () => '66666666-6666-4666-8666-666666666666' });
-  assert.deepEqual(claudeArgs('daemon', hostile.get()).slice(5), ['--session-id', '66666666-6666-4666-8666-666666666666'],
+  assert.deepEqual(claudeArgs(hostile.get()).slice(5), ['--session-id', '66666666-6666-4666-8666-666666666666'],
     'a non-uuid is discarded, not passed through');
 
   let saved = null;
   const { spawn, procs } = fakeSpawn();
   const intercom = intercomSession({ home: '/nope', read: () => ({ id: '77777777-7777-4777-8777-777777777777', created: true }), write: (s) => { saved = s; }, uuid: () => 'x' });
-  const s = createSession({ spawn, args: () => claudeArgs('daemon', intercom.get()), onStart: () => intercom.started(), onExit: ({ uptimeMs }) => intercom.noteExit(uptimeMs), log: { warn() {}, error() {} } });
+  const s = createSession({ spawn, args: () => claudeArgs(intercom.get()), onStart: () => intercom.started(), onExit: ({ uptimeMs }) => intercom.noteExit(uptimeMs), log: { warn() {}, error() {} } });
   s.stop();                                   // `finnamon update` twice in a row, or update then install
   procs[0].exit({ exitCode: 0 });
   assert.equal(saved, null, 'a stop we asked for is not claude refusing the id: the conversation must survive it');
@@ -304,48 +294,11 @@ test('stop() gives up after the grace period rather than hanging the shutdown fo
   assert.ok(procs[0].killed, 'killed, and the shutdown proceeds');
 });
 
-test('a restart that cut a channel-mode turn short tells the chat to resend, once; a cold start and daemon mode say nothing', async () => {
-  const id = '11111111-1111-4111-8111-111111111111', now = 1_000_000_000;
-  const dir = mkdtempSync(join(tmpdir(), 'finnamon-'));
-  writeFileSync(join(dir, INTERCOM_FILE), JSON.stringify({ id, created: true }));
-  const boot = async (inbound, at = now) => { let sent = 0; await restartNotice({ inbound, intercom: intercomSession({ home: dir }), send: async () => { sent++; }, now: at }); return sent; };
-
-  intercomSession({ home: dir }).interrupted(now - 5_000);                           // shutdown mid-turn
-  assert.deepEqual(JSON.parse(readFileSync(join(dir, INTERCOM_FILE), 'utf8')), { id, created: true, interruptedAt: now - 5_000 });
-  assert.equal(await boot('channel'), 1, 'restart with a turn in flight: one notice');
-  assert.equal(await boot('channel'), 0, 'the next start is not another restart that lost a message');
-  assert.deepEqual(JSON.parse(readFileSync(join(dir, INTERCOM_FILE), 'utf8')), { id, created: true }, 'the stamp is gone, the session id is not');
-
-  assert.equal(await boot('channel'), 0, 'cold start, nothing in flight: nothing');
-  intercomSession({ home: dir }).interrupted(now);
-  assert.equal(await boot('daemon'), 0, 'daemon mode: the daemon answers, and nothing was acked and dropped');
-  assert.equal(await boot('channel'), 0, 'and the daemon-mode start used the stamp up');
-  intercomSession({ home: dir }).interrupted(now - RESTART_NOTICE_MS - 1);
-  assert.equal(await boot('channel'), 0, 'a box that was down for longer has no "last minute" to resend');
-  intercomSession({ home: dir }).interrupted(now);
-  await assert.rejects(restartNotice({ inbound: 'channel', intercom: intercomSession({ home: dir }), send: async () => { throw new Error('telegram down'); }, now }));
-  assert.equal(await boot('channel'), 0, 'a send that failed is not retried on every later boot');
-  const prev = '22222222-2222-4222-8222-222222222222';
-  writeFileSync(join(dir, INTERCOM_FILE), JSON.stringify({ id, created: true, prev }));
-  intercomSession({ home: dir }).interrupted(now);
-  await boot('channel');
-  assert.equal(JSON.parse(readFileSync(join(dir, INTERCOM_FILE), 'utf8')).prev, prev, 'stamping and taking keep the replaced transcript\'s id');
-  rmSync(dir, { recursive: true, force: true });
-
-  const s = (startedAt, lastOutputAt) => ({ pty: {}, startedAt, lastOutputAt });
-  assert.ok(midTurn(s(now - 600_000, now - 2_000), now), 'output in the last minute of a settled session is a turn');
-  assert.ok(!midTurn(s(now - 600_000, now - 120_000), now), 'an idle session is not');
-  assert.ok(!midTurn(s(now - 5_000, now - 1_000), now), 'the banner of a session that just started is not');
-  assert.ok(!midTurn({ ...s(now - 600_000, now - 2_000), pty: null }, now), 'nor is a session that is not running');
-});
-
 test('agentArgs: claude goes through the seam unchanged, and a session store can hold no id until the CLI names one', () => {
-  for (const inbound of ['daemon', 'session', 'channel']) {
-    const s = { id: '11111111-1111-4111-8111-111111111111', created: true };
-    assert.deepEqual(agentArgs('claude', inbound, s), claudeArgs(inbound, s), 'claude goes through the seam unchanged');
-  }
+  const id = { id: '11111111-1111-4111-8111-111111111111', created: true };
+  assert.deepEqual(agentArgs('claude', id), claudeArgs(id), 'claude goes through the seam unchanged');
   assert.ok(AGENTS.claude.mintsId && AGENTS.claude.transcriptPath && AGENTS.claude.readTurn);
-  assert.throws(() => agentArgs('gemini', 'daemon'), /not a CLI this release can drive/);
+  assert.throws(() => agentArgs('gemini'), /not a CLI this release can drive/);
   // codex names its own sessions (no --session-id): the store starts at { id: null } and keeps it across a fast exit
   const s = intercomSession({ home: '/nope', read: () => null, write: () => {}, uuid: () => null });
   assert.deepEqual(s.get(), { id: null, created: false });

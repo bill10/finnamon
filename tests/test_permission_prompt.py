@@ -392,8 +392,7 @@ def test_the_box_s_own_home_finnamon_home_and_a_cd_count_too(monkeypatch):
 def test_what_stays_reachable():
     for tool, inp in (("Bash", {"command": 'finnamon query "SELECT 1"'}), ("Bash", {"command": "ls ~/.finnamon/charts"}),
                       ("Bash", {"command": 'finnamon import "HSBC Checking" ~/Downloads/hsbc.csv'}),
-                      ("Read", {"file_path": "~/.finnamon/assistant/CLAUDE.md"}), ("Bash", {"command": "agent-browser --session finnamon-import snapshot -i"}),
-                      ("mcp__plugin_telegram_telegram__reply", {"chat_id": 1, "text": "I can't read ~/.finnamon/secrets.toml"})):
+                      ("Read", {"file_path": "~/.finnamon/assistant/CLAUDE.md"}), ("Bash", {"command": "agent-browser --session finnamon-import snapshot -i"})):
         assert approval.protected_path(tool, inp, home="/nonexistent") is None, inp
 
 

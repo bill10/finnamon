@@ -170,32 +170,6 @@ typed in the Codex TUI changes its thread without `intercom.json` knowing.
 **Effort:** S
 **Priority:** P3
 
-## Telegram channel
-
-### Channel mode: resolve which alert a reply quoted
-
-**What:** When a message arrives through Claude Code's Telegram channel plugin (`<channel source="telegram" …>`), pass the alert id the person replied to, the way the daemon's `[Telegram, jane; replying to alert 1841]` prefix does.
-
-**Why:** In channel mode "it is normal" falls back to the most recent alert in `finnamon alerts`; the skill says which one it took it to mean, but a reply to an older alert is guessed.
-
-**Context:** The daemon resolves `reply_to_message.message_id` against `alerts.telegram_message_id`. The plugin's channel envelope (v0.4.0.0) carries `chat_id`, `message_id`, `user_id` but not the quoted message id. When it does, the skill can look the id up with `finnamon query`; until then a CLI helper is pointless. Documented as "for now" in the README experiment section.
-
-**Effort:** S
-**Priority:** P3
-**Depends on:** The Telegram channel plugin exposing the quoted message id.
-
-### Channel mode: put the speaker gate back in code
-
-**What:** In channel mode the owners-table check (`daemon.py` drops unknown senders before Claude sees them) exists only as a skill instruction: the plugin's allow list decides who gets through, and the assistant is told to refuse ids with no owner row. (The attachment and chat-id gates are code: `finnamon hook reply-guard`.)
-
-**Why:** A prompt is not a boundary. One instruction-following slip lets a guest in the group change thresholds.
-
-**Context:** A `PreToolUse` hook on `Bash(finnamon …)` writes would need the current speaker, which the plugin doesn't expose to hooks. Also: conversation in channel mode writes no `feedback` rows. Documented in README under the experiment.
-
-**Effort:** M
-**Priority:** P2
-**Depends on:** Claude Code channel plugin exposing the speaker to hooks.
-
 ## Quality
 
 ### The chart eval fails: the assistant writes no chart for "restaurant spending month by month"

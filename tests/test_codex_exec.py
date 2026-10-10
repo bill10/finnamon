@@ -154,32 +154,3 @@ def test_an_error_the_turn_recovered_from_is_not_a_failure():
           '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n{"type":"turn.completed","usage":{}}\n'
     r = agent_runner._codex_result(out)
     assert r.ok and r.text == "ok" and r.session_id == "t"
-
-
-def test_converse_keeps_one_thread_and_starts_fresh_when_it_is_gone(household, tg, tmp_path):
-    d = daemon.Daemon(conn_factory=lambda: household)
-    d.converse(household, {"owner": "bill", "text": "hi", "reply_to": None, "message_id": 1})
-    assert store.get_state(household, "session") == "01a10e2d-9a37-76c0-9e68-b563e3f90b15"
-    d.converse(household, {"owner": "bill", "text": "and?", "reply_to": None, "message_id": 2})
-    argv = calls(tmp_path)[-1]["argv"]
-    assert argv[:2] == ["exec", "resume"] and argv[-2:] == ["01a10e2d-9a37-76c0-9e68-b563e3f90b15", "[Telegram, bill] and?"]
-    assert tg.sent[-1]["text"].startswith("QuickCash LLC")
-    store.set_state(household, "session", "gone")
-    d.converse(household, {"owner": "bill", "text": "again", "reply_to": None, "message_id": 3})
-    assert [c["argv"][1] for c in calls(tmp_path)[-2:]] == ["resume", "--json"], "a gone thread: one resume, then a fresh exec"
-    assert store.get_state(household, "session") == "01a10e2d-9a37-76c0-9e68-b563e3f90b15"
-
-
-def test_converse_failure_names_codex(household, tg, monkeypatch):
-    monkeypatch.setenv("CODEX_FAKE_JSONL", str(CODEX / "exec-failed.jsonl"))
-    daemon.Daemon(conn_factory=lambda: household).converse(household, {"owner": "bill", "text": "hi", "reply_to": None, "message_id": 1})
-    assert "Codex is unavailable (busy)" in tg.sent[-1]["text"] and "try again later" in tg.sent[-1]["text"]
-
-
-def test_converse_failure_on_codex_points_at_doctor_not_claude(household, tg, monkeypatch):
-    # Value: protects=a Codex household's non-busy failure names Codex and points at `finnamon doctor`; fails_when=the codex branch of the hint is dropped and the message tells the household to run claude; why_new=only the busy hint was tested for Codex; seam=none
-    monkeypatch.setenv("CODEX_FAKE_EXIT", "1"); monkeypatch.setenv("CODEX_FAKE_STDERR", "Not logged in")
-    daemon.Daemon(conn_factory=lambda: household).converse(household, {"owner": "bill", "text": "hi", "reply_to": None, "message_id": 1})
-    text = tg.sent[-1]["text"]
-    assert "Codex is unavailable (login expired)" in text and "finnamon doctor" in text and "claude" not in text.lower()
-    assert household.execute("SELECT parsed_action FROM feedback").fetchone()[0] == "claude_error:login expired"

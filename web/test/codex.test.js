@@ -20,15 +20,15 @@ const until = async (fn, ms = 10_000) => { const end = Date.now() + ms; while (!
 
 test('codex argv: the seal pinned on the command line, a new session or `resume --no-daemon <id>`, never a marker on the process', () => {
   const args = codexArgs('/home/x/.finnamon/assistant');
-  const fresh = args('session', { id: null, created: true }), resumed = args('session', { id: ID, created: true });
+  const fresh = args({ id: null, created: true }), resumed = args({ id: ID, created: true });
   const c = fresh.filter((_, i) => fresh[i - 1] === '-c');
   for (const v of ['approval_policy="on-request"', 'web_search="disabled"', 'features.apps=false', 'default_permissions="finnamon"',
     'permissions.finnamon.extends=":workspace"', 'projects={"/home/x/.finnamon/assistant"={trust_level="trusted"}}',
     'shell_environment_policy.set.FINNAMON_FROM_AGENT="1"', 'mcp_servers.finnamon.env.FINNAMON_FROM_AGENT="1"']) assert.ok(c.includes(v), v);
   assert.deepEqual(fresh.slice(-1), ['--no-daemon'], 'no shared background app-server: the session lives in this pty');
   assert.deepEqual(resumed.slice(-3), ['resume', '--no-daemon', ID]);
-  assert.deepEqual(args('channel', { id: ID, created: false }).slice(-1), ['--no-daemon'], 'an id not yet started is not resumed');
-  assert.equal(agentArgs('codex', 'session', { id: ID, created: true }).at(-1), ID);
+  assert.deepEqual(args({ id: ID, created: false }).slice(-1), ['--no-daemon'], 'an id not yet started is not resumed');
+  assert.equal(agentArgs('codex', { id: ID, created: true }).at(-1), ID);
   assert.ok(!('FINNAMON_FROM_AGENT' in AGENTS.codex.env), 'its hooks inherit the process env, and the permission hook stays silent for a marked one');
   assert.equal(AGENTS.codex.mintsId, false);
 });
@@ -205,7 +205,7 @@ test('relay round trip through the stub codex TUI: the id is learnt, a phone lin
   const intercom = intercomSession({ home, uuid: () => null, kind: 'codex' });
   const agent = { ...AGENTS.codex, transcriptPath: (_cwd, id) => rolloutPath(codex, id), learnId: (since) => codexSessionId(codex, dir, since) };
   let polls = 0;
-  const term = createSession({ cmd: stub, cwd: dir, args: () => codexArgs(dir)('session', intercom.get()), asking: agent.asking,
+  const term = createSession({ cmd: stub, cwd: dir, args: () => codexArgs(dir)(intercom.get()), asking: agent.asking,
     extraEnv: { ...codexEnv(home), CODEX_FAKE_LOG: log }, onStart: () => { intercom.started(); learnId({ learnId: (s) => (polls++, agent.learnId(s)) }, intercom, Date.now(), { every: 50, log: { log() {} } }); },
     onExit: ({ uptimeMs }) => intercom.noteExit(uptimeMs), log: { warn() {}, error() {} } });
   const relay = createRelay({ write: (d) => term.write(d), idle: () => term.session.state === 'WAITING', asking: () => term.session.state === 'QUESTION',
@@ -242,7 +242,7 @@ test('a restarted Codex session resumes the learnt id; a gone one starts fresh w
   writeFileSync(join(home, 'intercom.json'), JSON.stringify({ id: ID, created: true, kind: 'codex' }));
   const intercom = intercomSession({ home, uuid: () => null, kind: 'codex' });
   let exits = 0;
-  const term = createSession({ cmd: stub, cwd: dir, args: () => codexArgs(dir)('session', intercom.get()), extraEnv: { ...codexEnv(home), CODEX_FAKE_LOG: log },
+  const term = createSession({ cmd: stub, cwd: dir, args: () => codexArgs(dir)(intercom.get()), extraEnv: { ...codexEnv(home), CODEX_FAKE_LOG: log },
     onStart: () => intercom.started(), onExit: ({ uptimeMs }) => { exits++; intercom.noteExit(uptimeMs); }, log: { warn() {}, error() {} } });
   try {
     await until(() => exits === 1);
