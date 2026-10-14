@@ -37,7 +37,7 @@ Suggested title shape (owner's call): `Show HN: Finnamon – turn Claude or Code
   charge changed, …) are found by SQL; Claude decides which are worth a message now, in Sunday's roundup, or never.
   It can only promote or suppress what SQL found; the triage run is read-only apart from `finnamon triage set`.
 - **Talking to it:** reply in Telegram in plain words ("it's normal", "set dining 400", "how much did we spend on the
-  dog this year"), or ask the dashboard. Claude draws charts on request ("dining by month", "everything over $500").
+  dog this year"), or ask the dashboard (Telegram and the dashboard are one conversation, so replies need the dashboard running; without it the chat still gets alerts). Claude draws charts on request ("dining by month", "everything over $500").
 - **Household:** one chat, one set of budgets, joint accounts counted once.
 - **Hackable:** a detector is one `.sql` file; the assistant is Claude Code (or Codex) with skills and an allow list of
   `finnamon` commands. It writes only through those commands.
