@@ -1,0 +1,6 @@
+track.mp3 is NOT covered by the repository's MIT license.
+
+It was generated locally with MusicGen (facebook/musicgen-small, whose weights are licensed CC-BY-NC 4.0) from the
+prompt "warm upbeat minimal tech underscore, light bright piano, soft electronic pulse, optimistic, steady 108 bpm,
+no vocals", then looped and trimmed to the video with ffmpeg. It is here only to rebuild Finnamon's own launch video,
+a non-commercial use for a free, MIT, no-ads project. Don't reuse it for anything else.

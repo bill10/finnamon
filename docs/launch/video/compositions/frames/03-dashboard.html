@@ -1,0 +1,95 @@
+<template>
+  <div id="root" data-composition-id="03-dashboard" data-width="1080" data-height="1080" data-start="0" data-duration="4.876">
+    <style>
+      @font-face { font-family: "Geist"; font-weight: 400; src: local("Geist"), local("Geist-Regular"), url(assets/fonts/Geist-Regular.woff2) format("woff2"); }
+      @font-face { font-family: "Geist"; font-weight: 700; src: local("Geist Bold"), local("Geist-Bold"), url(assets/fonts/Geist-Bold.woff2) format("woff2"); }
+      @font-face { font-family: "Geist Mono"; font-weight: 400; src: local("Geist Mono"), local("GeistMono-Regular"), url(assets/fonts/GeistMono-Regular.woff2) format("woff2"); }
+      @font-face { font-family: "Geist Mono"; font-weight: 700; src: local("Geist Mono Bold"), local("GeistMono-Bold"), url(assets/fonts/GeistMono-Bold.woff2) format("woff2"); }
+      #root { position: relative; width: 1080px; height: 1080px; overflow: hidden; container-type: size; }
+      #root .dash03-ground { position: absolute; inset: 0; background: #F8F8F8; }
+      #root .dash03-scene { position: absolute; inset: 0; overflow: hidden; }
+      #root .dash03-camera { position: absolute; inset: 0; transform-origin: 50% 50%; will-change: transform; }
+      #root .dash03-kicker {
+        position: absolute; left: 90px; top: 90px; margin: 0;
+        font-family: "Geist Mono", monospace; font-weight: 500; font-size: 26px;
+        letter-spacing: 0.16em; text-transform: uppercase; color: #1B1B1B;
+      }
+      #root .dash03-kicker span { color: #CE623C; margin-right: 0.5em; }
+      #root .dash03-window {
+        position: absolute; left: 90px; top: 170px; width: 900px; height: 658px;
+        background: #F8F8F8; border: 1px solid rgba(27,27,27,0.12); border-radius: 12px;
+        box-shadow: 0 1px 3px rgba(27,27,27,0.08), 0 4px 16px rgba(27,27,27,0.04);
+        overflow: hidden;
+      }
+      #root .dash03-bar {
+        height: 36px; background: #FBEAE1; border-bottom: 1px solid rgba(27,27,27,0.12);
+        display: flex; align-items: center; gap: 8px; padding-left: 16px;
+      }
+      #root .dash03-bar i { width: 11px; height: 11px; border-radius: 9999px; background: rgba(27,27,27,0.20); display: block; }
+      #root .dash03-view { position: absolute; left: 0; top: 36px; width: 900px; height: 622px; overflow: hidden; }
+      /* 1440x900 CSS screen at scale 0.818 (1178px wide), cropped from CSS x=160, y=0 */
+      #root .dash03-shot { position: absolute; left: -131px; top: 0; width: 1178px; height: auto; display: block; }
+      #root .dash03-pills { position: absolute; right: 114px; top: 148px; display: flex; gap: 12px; }
+      #root .dash03-pill {
+        font-family: "Geist", sans-serif; font-weight: 500; font-size: 28px; line-height: 1;
+        color: #F8F8F8; background: #1B1B1B; border-radius: 9999px; padding: 8px 22px;
+        transform-origin: 50% 50%;
+      }
+    </style>
+
+    <div id="dash03-ground" class="dash03-ground clip" data-start="0" data-duration="4.876" data-track-index="0"></div>
+    <div id="dash03-scene" class="dash03-scene clip" data-start="0" data-duration="4.876" data-track-index="1">
+      <div class="dash03-camera" id="dash03-camera" data-layout-allow-overflow>
+        <p class="dash03-kicker" id="dash03-kicker"><span>✱</span>Your assistant</p>
+        <div class="dash03-window" id="dash03-window">
+          <div class="dash03-bar"><i></i><i></i><i></i></div>
+          <div class="dash03-view">
+            <img class="dash03-shot" src="assets/dashboard.png" alt="Finnamon dashboard: net worth, budgets, recent alerts" />
+          </div>
+        </div>
+        <div class="dash03-pills">
+          <div class="dash03-pill" id="dash03-claude">Claude</div>
+          <div class="dash03-pill" id="dash03-codex">Codex</div>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script>
+      (function () {
+        window.__timelines = window.__timelines || {};
+        const D = 4.376;
+        const tl = gsap.timeline({ paused: true });
+        const camera = document.getElementById("dash03-camera");
+
+        // Scene 1: kicker + window rise in
+        tl.fromTo("#dash03-kicker", { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.5, ease: "power2.out" }, 0.03);
+        tl.fromTo("#dash03-window", { opacity: 0, y: 140 }, { opacity: 1, y: 0, duration: 0.9, ease: "power2.out" }, 0.05);
+
+        // Scene 2: pills pin on "Claude" (0.64) and "Codex" (1.38): press-release-spring
+        [["#dash03-claude", 0.64], ["#dash03-codex", 1.38]].forEach(([sel, t]) => {
+          tl.fromTo(sel, { opacity: 0, scale: 1 }, { opacity: 1, scale: 0.9, duration: 0.14, ease: "power1.in" }, t);
+          tl.to(sel, { scale: 1, duration: 0.55, ease: "back.out(2)" }, t + 0.14);
+        });
+
+        // Camera: multi-phase (0.97 -> 1.0 settle -> gentle push toward net worth) + micro drift.
+        // Net-worth figure sits at ~(178, 307); offset from center (-362, -233).
+        // ponytail: partial counter-translate (12% of -offset) keeps the whole window in frame.
+        const cam = { s: 0.97, x: 0, y: 0 };
+        tl.to(cam, { s: 1.0, duration: 0.9, ease: "power2.out" }, 0);
+        tl.to(cam, { s: 1.06, x: 43, y: 28, duration: 1.6, ease: "power2.inOut" }, 0.9);
+        const drift = { p: 0 };
+        tl.to(drift, {
+          p: Math.PI * 2, duration: D, ease: "none",
+          onUpdate: () => {
+            const dx = Math.sin(drift.p) * 3;
+            const dy = Math.sin(drift.p * 1.3) * 1.5;
+            camera.style.transform = `scale(${cam.s}) translate(${cam.x + dx}px, ${cam.y + dy}px)`;
+          },
+        }, 0);
+
+        window.__timelines["03-dashboard"] = tl;
+      })();
+    </script>
+  </div>
+</template>

@@ -1,0 +1,146 @@
+<template>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+  <style>
+    @font-face {
+      font-family: "Geist Mono";
+      font-weight: 400 500;
+      font-style: normal;
+      font-display: block;
+      src: url("assets/fonts/GeistMono-Medium.woff2") format("woff2"),
+        url("assets/fonts/GeistMono-Regular.woff2") format("woff2");
+    }
+    #root {
+      position: absolute;
+      inset: 0;
+      width: 1080px;
+      height: 1080px;
+      overflow: hidden;
+      container-type: size;
+    }
+    #p06-bg {
+      position: absolute;
+      inset: 0;
+      background: #f8f8f8;
+    }
+    #p06-scene {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+    }
+    #p06-camera {
+      position: absolute;
+      inset: 0;
+      transform-origin: 50% 50%;
+      will-change: transform;
+    }
+    #p06-kicker {
+      position: absolute;
+      left: 64px;
+      top: 104px;
+      font-family: "Geist Mono", monospace;
+      font-size: 28px;
+      font-weight: 500;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: #1b1b1b;
+      line-height: 1;
+    }
+    #p06-kicker span {
+      color: #ce623c;
+      margin-right: 12px;
+    }
+    /* Hand-built phone: ink bezel, 44px outer radius; screen = 390x844 aspect at 532px wide. */
+    #p06-phone {
+      position: absolute;
+      left: 260px;
+      top: 90px;
+      width: 560px;
+      height: 1179px;
+      box-sizing: border-box;
+      padding: 14px;
+      border-radius: 44px;
+      background: #1b1b1b;
+      box-shadow: 0 1px 3px rgba(27, 27, 27, 0.08), 0 4px 16px rgba(27, 27, 27, 0.04);
+    }
+    #p06-screen {
+      position: relative;
+      width: 532px;
+      height: 1151px;
+      border-radius: 30px;
+      overflow: hidden;
+      background: #f8f8f8;
+    }
+    #p06-page {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 532px;
+    }
+    #p06-page img {
+      display: block;
+      width: 532px;
+      height: 1151px;
+    }
+    /* Frame-fixed fade: the phone dissolves into the cream before the caption band (y 896). */
+    #p06-fade {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 760px;
+      bottom: 0;
+      background: linear-gradient(to bottom, rgba(248, 248, 248, 0) 0px, #f8f8f8 128px, #f8f8f8 100%);
+      pointer-events: none;
+    }
+  </style>
+
+  <div id="root" data-composition-id="06-phone" data-start="0" data-duration="3.252" data-width="1080" data-height="1080">
+    <div id="p06-bg" class="clip" data-start="0" data-duration="3.252" data-track-index="0"></div>
+    <div id="p06-scene" class="clip" data-start="0" data-duration="3.252" data-track-index="1">
+      <div id="p06-camera">
+        <div id="p06-kicker"><span>✱</span>Phone</div>
+        <div id="p06-phone">
+          <div id="p06-screen">
+            <div id="p06-page" data-layout-allow-overflow>
+              <img src="assets/phone.png" alt="Finnamon dashboard on a phone" />
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="p06-fade"></div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var DUR = 2.852;
+      var tl = gsap.timeline({ paused: true });
+      var camera = document.getElementById("p06-camera");
+
+      // Scene 1 (0.0-1.0s): phone rises from below and settles; kicker lands on "your".
+      tl.fromTo("#p06-phone", { y: 520 }, { y: 0, duration: 1.0, ease: "power3.out" }, 0);
+      tl.fromTo("#p06-kicker", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.5, ease: "power2.out" }, 0.12);
+
+      // multi-phase-camera: settle 0.96 -> 1.0 under the rise, then hold; one writer adds a slow micro-drift.
+      var phase = { scale: 0.96 };
+      tl.to(phase, { scale: 1.0, duration: 1.2, ease: "power2.out" }, 0);
+      var drift = { p: 0 };
+      tl.to(drift, {
+        p: Math.PI * 2,
+        duration: DUR,
+        ease: "none",
+        onUpdate: function () {
+          var dx = Math.sin(drift.p) * 3;
+          var dy = Math.sin(drift.p * 1.3) * 1.5;
+          camera.style.transform = "scale(" + phase.scale + ") translate(" + dx + "px, " + dy + "px)";
+        },
+      }, 0);
+
+      // Scene 2 (1.2s-end): flat 3d-page-scroll inside the screen, net worth -> full chart + budgets start, then hold.
+      // 240px keeps the uncovered tail of the screen inside the hidden band below the fade.
+      tl.fromTo("#p06-page", { y: 0 }, { y: -240, duration: 1.2, ease: "power3.out" }, 1.2);
+
+      window.__timelines = window.__timelines || {};
+      window.__timelines["06-phone"] = tl;
+    })();
+  </script>
+</template>

@@ -1,0 +1,170 @@
+<template>
+  <div
+    id="root"
+    data-composition-id="01-mint-is-gone"
+    data-start="0"
+    data-duration="4.768"
+    data-width="1080"
+    data-height="1080"
+  >
+    <style>
+      @font-face {
+        font-family: "Geist";
+        src: url("assets/fonts/Geist-Regular.woff2") format("woff2");
+        font-weight: 400;
+        font-style: normal;
+      }
+      @font-face {
+        font-family: "Geist Mono";
+        src: url("assets/fonts/GeistMono-Regular.woff2") format("woff2");
+        font-weight: 400;
+        font-style: normal;
+      }
+      #root {
+        position: relative;
+        width: 1080px;
+        height: 1080px;
+        overflow: hidden;
+      }
+      .m01-ground {
+        position: absolute;
+        inset: 0;
+        background: #f8f8f8;
+      }
+      .m01-stage {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 64px;
+        height: 832px; /* 64..896: clear of the top note and the caption band */
+      }
+      .m01-word {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 170px;
+        display: flex;
+        justify-content: center;
+      }
+      .m01-word-inner {
+        position: relative;
+        font-family: "Geist", Georgia, serif;
+        font-weight: 400;
+        font-size: 320px;
+        line-height: 1;
+        letter-spacing: -0.028em;
+        color: #1b1b1b;
+        white-space: nowrap;
+      }
+      .m01-strike {
+        position: absolute;
+        left: -24px;
+        right: -24px;
+        top: 56%;
+        height: 6px;
+        margin-top: -3px;
+        background: #ce623c;
+        border-radius: 3px;
+        transform-origin: 0 50%;
+      }
+      .m01-years {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 520px;
+        display: flex;
+        justify-content: center;
+        font-family: "Geist Mono", ui-monospace, monospace;
+        font-weight: 400;
+        font-size: 64px;
+        letter-spacing: 0.02em;
+        color: #1b1b1b;
+        white-space: nowrap;
+      }
+      .m01-end {
+        display: inline-block;
+        min-width: 4ch; /* widest state: no right-edge jitter */
+      }
+      .m01-rule {
+        position: absolute;
+        left: 340px;
+        right: 340px;
+        top: 630px;
+        height: 1px;
+        background: rgba(27, 27, 27, 0.12);
+      }
+      .m01-note {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 666px;
+        text-align: center;
+        font-family: "Geist Mono", ui-monospace, monospace;
+        font-weight: 400;
+        font-size: 30px;
+        letter-spacing: 0.02em;
+        color: rgba(27, 27, 27, 0.72);
+      }
+    </style>
+
+    <div id="m01-ground" class="m01-ground clip" data-start="0" data-duration="4.768" data-track-index="0"></div>
+
+    <div id="m01-stage" class="m01-stage clip" data-start="0" data-duration="4.768" data-track-index="1">
+      <div class="m01-word">
+        <div class="m01-word-inner" id="m01-mint">
+          Mint
+          <div class="m01-strike" id="m01-strike"></div>
+        </div>
+      </div>
+      <div class="m01-years" id="m01-years">
+        <span>2007 —&nbsp;</span><span class="m01-end" id="m01-end">2008</span>
+      </div>
+      <div class="m01-rule" id="m01-rule"></div>
+      <div class="m01-note" id="m01-note">shut down, 2024</div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script>
+      (function () {
+        const ID = "01-mint-is-gone";
+        const D = 4.368;
+        const tl = gsap.timeline({ paused: true });
+
+        // Scene 1: "Mint" rises and settles, landing on "Mint?" (0.60s)
+        tl.fromTo("#m01-mint", { y: 70, opacity: 0 }, { y: 0, opacity: 1, duration: 0.55, ease: "power3.out" }, 0.12);
+
+        // Scene 2: "2007 — 2008" appears on "Every" (0.98s), then the end year cycles in place to 2024
+        tl.fromTo("#m01-years", { y: 18, opacity: 0 }, { y: 0, opacity: 1, duration: 0.35, ease: "power2.out" }, 0.94);
+
+        // discrete-text-sequence: instant year swaps, 2008 → 2024 across 1.33s..2.95s
+        const SEQ = [];
+        const T0 = 1.33, T1 = 2.95;
+        for (let y = 2008; y <= 2024; y++) {
+          SEQ.push({ t: T0 + ((y - 2008) / 16) * (T1 - T0), text: String(y) });
+        }
+        const endEl = document.getElementById("m01-end");
+        function yearAt(t) {
+          for (let i = SEQ.length - 1; i >= 0; i--) if (t >= SEQ[i].t) return SEQ[i].text;
+          return "2008";
+        }
+        const driver = { t: 0 };
+        tl.to(driver, {
+          t: D,
+          duration: D,
+          ease: "none",
+          onUpdate: () => { endEl.textContent = yearAt(driver.t); },
+        }, 0);
+
+        // Scene 3: on "shut" (3.53s) a coral strike draws left→right through "Mint"; the word drops to ink@35%
+        tl.fromTo("#m01-strike", { scaleX: 0 }, { scaleX: 1, duration: 0.36, ease: "power2.inOut" }, 3.5);
+        tl.fromTo("#m01-mint", { opacity: 1 }, { opacity: 0.35, duration: 0.4, ease: "power1.out", immediateRender: false }, 3.62);
+        tl.fromTo("#m01-rule", { scaleX: 0 }, { scaleX: 1, duration: 0.4, ease: "power2.out" }, 3.7);
+        tl.fromTo("#m01-note", { y: 14, opacity: 0 }, { y: 0, opacity: 1, duration: 0.4, ease: "power2.out" }, 3.74);
+
+        tl.set({}, {}, D);
+        window.__timelines = window.__timelines || {};
+        window.__timelines[ID] = tl;
+      })();
+    </script>
+  </div>
+</template>

@@ -1,0 +1,135 @@
+<template>
+  <div
+    id="root"
+    data-composition-id="02-meet-finnamon"
+    data-start="0"
+    data-duration="3.837"
+    data-width="1080"
+    data-height="1080"
+  >
+    <style>
+      @font-face {
+        font-family: "Geist";
+        font-weight: 400;
+        font-style: normal;
+        src: local("Geist"), local("Geist-Regular"), url("assets/fonts/Geist-Regular.woff2") format("woff2");
+      }
+      #root {
+        position: relative;
+        width: 1080px;
+        height: 1080px;
+        overflow: hidden;
+        font-family: "Geist", Georgia, serif;
+      }
+      #mf02-ground {
+        position: absolute;
+        inset: 0;
+        background: #f8f8f8;
+      }
+      #mf02-stage {
+        position: absolute;
+        inset: 0;
+        container-type: size;
+      }
+      /* Lockup sits in the band y 64..896: wordmark ~y 300, headline below. */
+      #mf02-lockup {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 25.5cqh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        transform-origin: 50% 40%;
+      }
+      #mf02-logo {
+        display: block;
+        width: 45cqw; /* 486px from a 320px raster: 1.52x, under the 1.6x ceiling */
+        height: auto;
+      }
+      .mf02-line {
+        margin: 0;
+        color: #1b1b1b;
+        font-weight: 400;
+        font-size: 7.3cqw;
+        line-height: 1.02;
+        letter-spacing: -0.022em;
+        white-space: nowrap;
+        text-align: center;
+      }
+      #mf02-line1 {
+        margin-top: 6.5cqw;
+      }
+      #mf02-line2 {
+        margin-top: 1.4cqw;
+      }
+      .mf02-word {
+        display: inline-block;
+        margin: 0 0.12em;
+      }
+      #mf02-ai {
+        position: relative;
+        display: inline-block;
+      }
+      #mf02-rule {
+        position: absolute;
+        left: 0;
+        bottom: -0.08em;
+        width: 100%;
+        height: 4px;
+        overflow: visible;
+      }
+      #mf02-rule line {
+        fill: none;
+        stroke: #ce623c;
+        stroke-width: 1px;
+        vector-effect: non-scaling-stroke;
+      }
+    </style>
+
+    <div id="mf02-ground" class="clip" data-start="0" data-duration="3.837" data-track-index="0"></div>
+
+    <div id="mf02-stage" class="clip" data-start="0" data-duration="3.837" data-track-index="1">
+      <div id="mf02-lockup">
+        <img id="mf02-logo" src="assets/logo.png" alt="Finnamon" />
+        <p id="mf02-line1" class="mf02-line">
+          <span class="mf02-word" id="mf02-w1">Your</span><span class="mf02-word" id="mf02-w2">money.</span>
+        </p>
+        <p id="mf02-line2" class="mf02-line">
+          <span class="mf02-word" id="mf02-w3">Your</span><span class="mf02-word" id="mf02-w4">financial</span><span class="mf02-word" id="mf02-w5"><span id="mf02-ai">AI<svg id="mf02-rule" viewBox="0 0 100 4" preserveAspectRatio="none"><line x1="0" y1="2" x2="100" y2="2" /></svg></span>.</span>
+        </p>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script>
+      (function () {
+        const tl = gsap.timeline({ paused: true });
+        const word = { opacity: 0, y: 28 };
+        const wordTo = () => ({ opacity: 1, y: 0, duration: 0.42, ease: "power3.out" });
+
+        // Scene 1 — "Meet Finnamon." (0.05): the wordmark blooms 0.9 -> 1 on a cleared stage.
+        tl.fromTo("#mf02-logo", { opacity: 0, scale: 0.9 }, { opacity: 1, scale: 1, duration: 0.7, ease: "power3.out" }, 0.05);
+
+        // Scene 2 — "Your money." per-word on the voice cues (0.81, 1.05).
+        tl.fromTo("#mf02-w1", word, wordTo(), 0.78);
+        tl.fromTo("#mf02-w2", word, wordTo(), 1.02);
+
+        // Scene 3 — "Your financial AI." (1.61, 1.90, 2.41), then the coral rule draws under "AI".
+        tl.fromTo("#mf02-w3", word, wordTo(), 1.58);
+        tl.fromTo("#mf02-w4", word, wordTo(), 1.87);
+        tl.fromTo("#mf02-w5", word, wordTo(), 2.38);
+
+        const rule = document.querySelector("#mf02-rule line");
+        const len = rule.getTotalLength();
+        tl.fromTo(rule, { strokeDasharray: len, strokeDashoffset: len }, { strokeDashoffset: 0, duration: 0.45, ease: "power2.out" }, 2.62);
+
+        // Life in the hold: near-imperceptible scale-up on the whole lockup across the frame.
+        tl.fromTo("#mf02-lockup", { scale: 1 }, { scale: 1.025, duration: 3.337, ease: "none" }, 0);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["02-meet-finnamon"] = tl;
+      })();
+    </script>
+  </div>
+</template>

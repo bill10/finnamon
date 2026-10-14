@@ -1,0 +1,227 @@
+<template>
+  <div
+    id="root"
+    data-composition-id="04-alerts"
+    data-start="0"
+    data-duration="7.272"
+    data-width="1080"
+    data-height="1080"
+  >
+    <style>
+      @font-face{font-family:"Geist";font-weight:400;font-style:normal;font-display:block;src:url("assets/fonts/Geist-Regular.woff2") format("woff2");}
+      @font-face{font-family:"Geist";font-weight:700;font-style:normal;font-display:block;src:url("assets/fonts/Geist-Bold.woff2") format("woff2");}
+      @font-face{font-family:"Geist Mono";font-weight:400;font-style:normal;font-display:block;src:url("assets/fonts/GeistMono-Regular.woff2") format("woff2");}
+      #root {
+        position: relative;
+        width: 1080px;
+        height: 1080px;
+        overflow: hidden;
+        font-family: "Geist", Georgia, serif;
+        color: #1b1b1b;
+      }
+      #root * {
+        box-sizing: border-box;
+      }
+      .a04-ground {
+        position: absolute;
+        inset: 0;
+        background: #fbeae1;
+      }
+      .a04-kicker {
+        position: absolute;
+        left: 64px;
+        top: 92px;
+        font-family: "Geist Mono", ui-monospace, monospace;
+        font-size: 28px;
+        font-weight: 500;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: #1b1b1b;
+      }
+      .a04-kicker b {
+        color: #ce623c;
+        font-weight: 500;
+      }
+      /* Stage: crop window for the screenshot, y 212..896 (caption keep-out below). */
+      .a04-stage {
+        position: absolute;
+        left: 0;
+        top: 212px;
+        width: 1080px;
+        height: 684px;
+        overflow: hidden;
+        -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 36px, #000 calc(100% - 36px), transparent 100%);
+        mask-image: linear-gradient(to bottom, transparent 0, #000 36px, #000 calc(100% - 36px), transparent 100%);
+      }
+      .a04-zoom-outer {
+        position: absolute;
+        inset: 0;
+        transform-origin: 50% 50%;
+        will-change: transform;
+      }
+      .a04-zoom-inner {
+        position: absolute;
+        inset: 0;
+        will-change: transform;
+      }
+      .a04-shot {
+        position: absolute;
+        left: 110px; /* (1080 - 860) / 2 */
+        top: 0;
+        width: 860px;
+        height: 1122px; /* 860 * 1378 / 1056 */
+      }
+      .a04-shot img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        border-radius: 12px;
+        box-shadow: 0 1px 3px rgba(27, 27, 27, 0.08), 0 4px 16px rgba(27, 27, 27, 0.04);
+      }
+      .a04-outline {
+        position: absolute;
+        left: 0;
+        top: 0;
+        border: 2px solid #ce623c;
+        border-radius: 12px;
+      }
+      /* Notification (reconstructed message) */
+      .a04-note {
+        position: absolute;
+        left: 64px;
+        top: 196px;
+        width: 952px;
+        padding: 30px 36px 32px;
+        background: #f8f8f8;
+        border: 1px solid rgba(27, 27, 27, 0.12);
+        border-radius: 20px;
+        box-shadow: 0 1px 3px rgba(27, 27, 27, 0.08), 0 4px 16px rgba(27, 27, 27, 0.04);
+        transform-origin: 100% 0%;
+      }
+      .a04-note-head {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        font-size: 24px;
+        font-weight: 500;
+        color: rgba(27, 27, 27, 0.6);
+        margin-bottom: 16px;
+      }
+      .a04-dot {
+        width: 26px;
+        height: 26px;
+        border-radius: 9999px;
+        background: #ce623c;
+      }
+      .a04-note-body {
+        font-size: 34px;
+        line-height: 1.38;
+        letter-spacing: -0.005em;
+      }
+      .a04-note-muted {
+        margin-top: 16px;
+        font-size: 28px;
+        line-height: 1.4;
+        color: rgba(27, 27, 27, 0.55);
+      }
+    </style>
+
+    <div id="a04-ground" class="a04-ground clip" data-start="0" data-duration="7.272" data-track-index="0"></div>
+
+    <div id="a04-stage" class="a04-stage clip" data-start="0" data-duration="7.272" data-track-index="1">
+      <div id="a04-zoom-outer" class="a04-zoom-outer">
+        <div id="a04-zoom-inner" class="a04-zoom-inner">
+          <div class="a04-shot">
+            <img src="assets/alerts.png" alt="Recent alerts" />
+            <div id="a04-outline" class="a04-outline"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="a04-kicker" class="a04-kicker clip" data-start="0" data-duration="7.272" data-track-index="2">
+      <b>✱</b> Alerts
+    </div>
+
+    <div id="a04-note" class="a04-note clip" data-start="0" data-duration="7.272" data-track-index="3">
+      <div class="a04-note-head"><span class="a04-dot"></span>Finnamon · now</div>
+      <div class="a04-note-body">
+        ⚠️ Possible duplicate: Shell $52.18 on Total Checking …4821, charged Sep 17 and again Sep 18. Same merchant,
+        same amount.
+      </div>
+      <div id="a04-note-muted" class="a04-note-muted">Reply “it's normal” if it was meant.</div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script>
+      (function () {
+        // Geometry is pure px (a fixed-size raster), so offsets are exact without DOM measurement.
+        const K = 860 / 1056; // image px -> CSS px
+        const SHOT_LEFT = 110;
+        const STAGE_H = 684;
+        const S = 1.1; // zoom; 860 * 1.1 = 946 keeps the "open" pills inside 1080
+        // Rows in the image's own pixels, measured from the divider lines (328, 548, 810, 1030).
+        const ROWS = {
+          peloton: [116, 328],
+          shell: [548, 810],
+          shopping: [810, 1030],
+        };
+        const INSET = 8;
+        const box = (r) => ({ y: (r[0] + INSET) * K, height: (r[1] - r[0] - 2 * INSET) * K });
+        // Counter-translate T = -offset (nested wrapper form); x is centered already.
+        // Clamped so the card's top edge never drops more than 24px into the stage (no empty band).
+        const CAM_MAX = (STAGE_H / 2) * (1 - 1 / S) + 24 / S;
+        const camY = (r) => Math.min(CAM_MAX, -(((r[0] + r[1]) / 2) * K - STAGE_H / 2));
+
+        const outline = document.getElementById("a04-outline");
+        outline.style.left = 20 * K + "px";
+        outline.style.width = (1036 - 20) * K + "px";
+
+        const tl = gsap.timeline({ paused: true });
+
+        // Scene 1 (0-1.8s): kicker, then the notification slides down into the upper third.
+        tl.fromTo("#a04-kicker", { opacity: 0, x: -16 }, { opacity: 1, x: 0, duration: 0.5, ease: "power2.out" }, 0.0);
+        tl.fromTo(
+          "#a04-note",
+          { y: -420, opacity: 0 },
+          { y: 0, opacity: 1, duration: 0.7, ease: "power3.out" },
+          0.08,
+        );
+        tl.fromTo("#a04-note-muted", { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "power1.out" }, 0.97);
+
+        // Scene 2 (on "duplicate" 2.03s): note tucks to the top-right, the alerts card rises,
+        // camera zooms toward the Shell row and the coral outline lands on it.
+        tl.to("#a04-note", { scale: 0.42, x: 0, y: -116, duration: 0.8, ease: "power3.inOut" }, 2.03);
+        tl.fromTo("#a04-stage", { y: 120, opacity: 0 }, { y: 0, opacity: 1, duration: 0.8, ease: "power3.out" }, 2.1);
+        tl.fromTo("#a04-zoom-outer", { scale: 1 }, { scale: S, duration: 1.1, ease: "power3.inOut" }, 2.25);
+        tl.fromTo(
+          "#a04-zoom-inner",
+          { y: 0 },
+          { y: camY(ROWS.shell), duration: 1.1, ease: "power3.inOut" },
+          2.25,
+        );
+        const sh = box(ROWS.shell);
+        tl.fromTo(
+          outline,
+          { y: sh.y, height: sh.height, opacity: 0, scale: 1.04 },
+          { opacity: 1, scale: 1, duration: 0.45, ease: "power2.out" },
+          2.73,
+        );
+
+        // Scene 3 (on "new" 3.51s): outline + camera glide to the Peloton row.
+        const pe = box(ROWS.peloton);
+        tl.to(outline, { y: pe.y, height: pe.height, duration: 0.45, ease: "power3.inOut" }, 3.47);
+        tl.to("#a04-zoom-inner", { y: camY(ROWS.peloton), duration: 0.45, ease: "power3.inOut" }, 3.47);
+
+        // Scene 4 (on "budget" 4.94s): glide to "Shopping is over budget", then hold.
+        const so = box(ROWS.shopping);
+        tl.to(outline, { y: so.y, height: so.height, duration: 0.45, ease: "power3.inOut" }, 4.91);
+        tl.to("#a04-zoom-inner", { y: camY(ROWS.shopping), duration: 0.45, ease: "power3.inOut" }, 4.91);
+        tl.to("#a04-zoom-outer", { scale: S * 1.03, duration: 1.0, ease: "sine.inOut" }, 5.74);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["04-alerts"] = tl;
+      })();
+    </script>
+  </div>
+</template>

@@ -1,0 +1,20 @@
+# Rendered video and review frames never go in the repo: the MP4 lives on the pr-assets release.
+renders/
+snapshots/
+*.mp4
+node_modules/
+# HyperFrames working state, rebuilt by the workflow scripts.
+.audio.log
+.media/
+.impeccable/
+.hyperframes/frame-packets/
+audio_engine_meta.json
+audio_request.json
+.hyperframes/artifacts/
+.hyperframes/history-id
+.hyperframes/render-outputs.json
+.hyperframes/video-state.json
+# The raw captures (tools/capture-screens.mjs writes them; stage-assets copies them into assets/).
+capture/assets/
+# Pixabay Content License: fine inside the rendered video, not for redistributing as-is (README.md says how to restore them).
+assets/sfx/
