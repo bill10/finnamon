@@ -3,6 +3,11 @@
 All notable changes to Finnamon are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.57.2.0] - 2026-10-14
+
+### Fixed
+- The Accounts list shows Reconnect on a bank that is stale or failing, the same banks the alerts do. The server flags each bank in `finnamon status` (`reconnect`), so the page keeps no list of its own.
+
 ## [0.57.1.0] - 2026-10-14
 
 ### Fixed
