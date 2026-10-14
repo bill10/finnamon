@@ -112,6 +112,9 @@ def test_a_transient_error_keeps_the_item_good_but_records_why_until_the_next_go
     assert tuple(conn.execute("SELECT status, last_error FROM items").fetchone()) == ("good", "INSTITUTION_NOT_RESPONDING: this institution is not currently responding")
     sync.apply_page(conn, "item1", page([], cursor="c1"), "2026-10-13 09:00:00")
     assert conn.execute("SELECT last_error FROM items").fetchone()[0] is None
+    conn.execute("UPDATE items SET status='ITEM_LOGIN_REQUIRED', last_error='the login details changed'")
+    sync.sync_item(conn, "item1", "tok")                                  # an Item already broken keeps the reason that matters
+    assert tuple(conn.execute("SELECT status, last_error FROM items").fetchone()) == ("ITEM_LOGIN_REQUIRED", "the login details changed")
 
 
 def test_accounts_and_balances_append_only(conn, item, monkeypatch):
