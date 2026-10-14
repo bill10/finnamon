@@ -148,7 +148,7 @@ def render(alert: sqlite3.Row, page: bool = False, cue: bool = True) -> str:
         if p.get("source") == "manual":
             return (f"🗂 <b>{esc(p.get('institution') or p.get('item_id'))} hasn't been imported since {when(p.get('last_synced_at')) if p.get('last_synced_at') else 'it was added'}.</b> "
                     f"Download its CSV and use Import CSV on the dashboard, or <code>finnamon import</code>.")
-        code, _, msg = str(p.get("last_error") or "").partition(": ")   # a transient error every run: sync.sync_item keeps "CODE: message" on a good Item
+        code = str(p.get("last_error") or "").partition(": ")[0]   # a transient error every run: sync.sync_item keeps "CODE: message" on a good Item
         last = f"{BANK_PROBLEMS[code]} ({esc(code)})" if code in BANK_PROBLEMS else esc(p.get("last_error") or "").rstrip(". ")
         return (f"🩺 <b>{esc(p.get('institution') or p.get('item_id'))} hasn't synced since {when(p.get('last_synced_at')) if p.get('last_synced_at') else 'it was linked'}.</b>"
                 + (f" The last try failed: {last}." if last else "") + doctor)
