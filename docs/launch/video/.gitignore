@@ -18,3 +18,4 @@ audio_request.json
 capture/assets/
 # Pixabay Content License: fine inside the rendered video, not for redistributing as-is (README.md says how to restore them).
 assets/sfx/
+assets/bgm/track-x.mp3

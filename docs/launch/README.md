@@ -13,7 +13,7 @@ import, Codex; Telegram always shares the dashboard's session) on 2026-10-13; li
 | [selfhst.md](selfhst.md) | selfh.st newsletter submission |
 | [x-thread.md](x-thread.md) | A 6-post thread for X |
 | [one-liners.md](one-liners.md) | Headline variants, 140/280-character descriptions, GitHub repo description and topics |
-| [video/](video/) | The launch video for X and the posts ([finnamon-launch-v2.mp4](https://github.com/bill10/finnamon/releases/download/pr-assets/finnamon-launch-v2.mp4), about 38 s, square, captioned): its HyperFrames source. The 1-minute demo video stays the README's demo |
+| [video/](video/) | The launch video, in two cuts from one HyperFrames source (square, captioned). **X:** the alert-first cut, [finnamon-launch-x.mp4](https://github.com/bill10/finnamon/releases/download/pr-assets/finnamon-launch-x.mp4) (35 s), which opens on a duplicate-charge alert because X decides in a second or two. **selfh.st and Reddit:** the Mint cut, [finnamon-launch-v2.mp4](https://github.com/bill10/finnamon/releases/download/pr-assets/finnamon-launch-v2.mp4) (about 38 s), which opens on "Remember Mint?". The 1-minute demo video stays the README's demo |
 
 Words: never "watchdog"; privacy is "your data lives on your machine", never "never leaves your machine" (it doesn't:
 Plaid, the assistant's provider, Telegram, and the bank pages Fetch by AI reads all leave it).

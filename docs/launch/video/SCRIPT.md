@@ -61,3 +61,22 @@
 **Delivery:** Inviting.
 
     Try the demo. No keys needed.
+
+---
+
+# The X cut (alert-first)
+
+Opens on the real duplicate-charge alert; Mint is one line. Same voice, same settings. Lines X1–X3 are new
+(`assets/voice/x01.wav`–`x03.wav`); after them the X cut reuses Lines 3–8 above as they are.
+
+## Line X1 — Hook (frame x1-hook)
+
+    Shell charged you twice. Want me to flag it?
+
+## Line X2 — Product intro (frame x2-meet)
+
+    That's Finnamon, an AI that watches your money.
+
+## Line X3 — Mint, in one line (frame x2-meet, at 2.8 s)
+
+    Like Mint, but it warns you.
