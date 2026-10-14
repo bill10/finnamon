@@ -9,8 +9,8 @@
 Like Mint, but it warns you when something's off, sorts your transactions with AI, and draws any chart you ask for.
 On your own computer (Mac, Linux or Windows via WSL2), with no ads and no data selling, so nobody can shut it down.
 
-<p align="center"><a href="https://github.com/bill10/finnamon/releases/download/pr-assets/finnamon-demo.mp4"><img src="docs/finnamon-teaser.gif" alt="Asking Finnamon by voice on a phone how much was spent on dining this month, and hearing the answer" width="300"></a><br>
-<sub><a href="https://github.com/bill10/finnamon/releases/download/pr-assets/finnamon-demo.mp4">Watch the 1-minute demo (with sound)</a>. Demo household, made-up data · sped up · voices are AI-generated.</sub></p>
+<p align="center"><a href="https://github.com/bill10/finnamon/releases/download/pr-assets/finnamon-demo-v057.mp4"><img src="docs/finnamon-teaser.gif" alt="Asking Finnamon by voice on a phone how much was spent on dining this month, and hearing the answer" width="300"></a><br>
+<sub><a href="https://github.com/bill10/finnamon/releases/download/pr-assets/finnamon-demo-v057.mp4">Watch the 1-minute demo (with sound)</a>. Demo household, made-up data · sped up · voices are AI-generated.</sub></p>
 
 1. **It watches for you.** It messages you only when something needs you: a duplicate charge, a new subscription,
    a budget about to go over.

@@ -15,7 +15,8 @@
 // and playwright:
 //   npm i --no-save --prefix scripts/demo playwright
 //   node scripts/demo/launch-video.mjs [out-dir]     (default: a temp folder)
-// Then copy out-dir/finnamon-teaser.gif to docs/ and put out-dir/finnamon-demo.mp4 where the README links it.
+// Then copy out-dir/finnamon-teaser.gif to docs/, upload out-dir/finnamon-demo.mp4 to the pr-assets release under a new
+// name (finnamon-demo-v057.mp4 is v0.57's; never overwrite an old take) and point the README and docs/launch at it.
 import { execFileSync, spawnSync } from 'child_process';
 import { mkdirSync, mkdtempSync, writeFileSync, statSync, existsSync } from 'fs';
 import { tmpdir, homedir } from 'os';
@@ -25,11 +26,11 @@ import { chromium } from 'playwright';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MEDIA = process.env.DEMO_MEDIA || join(homedir(), '.agent-007', 'demo-media', 'finnamon');
-const REPO_URL = process.env.REPO_URL || '';   // the end card's link line; a placeholder until the public repo exists (#113)
+const REPO_URL = process.env.REPO_URL || 'github.com/bill10/finnamon';   // the end card's link line
 const TODAY = '2026-09-20 09:41:00';
 const NOTE = 'Demo household, made-up data · sped up · voices are AI-generated';
 const ALERT = '⚠️ <b>Possible duplicate:</b> Shell $52.18 on Chase Checking …4821, charged Sep 17 and again Sep 18. Same merchant, same amount. Reply "it\'s normal" if you filled up twice.';
-const DINING = `SELECT strftime('%Y-%m',date) ym, round(sum(amount)) spent FROM tx_now WHERE flow IN ('expense','refund') AND pending=0 AND category_primary='FOOD_AND_DRINK' AND date>=date('now','-5 months') GROUP BY ym ORDER BY ym`;
+const DINING = `SELECT strftime('%Y-%m',date) ym, round(sum(amount)) spent FROM tx_now WHERE flow IN ('expense','refund') AND pending=0 AND category='FOOD_AND_DRINK_RESTAURANT' AND date>=date('now','start of month','-4 months') GROUP BY ym ORDER BY ym`;
 const DINING_SPEC = { title: 'Dining by month', mark: { type: 'bar', tooltip: true }, encoding: { x: { field: 'ym', type: 'ordinal', title: null }, y: { field: 'spent', type: 'quantitative', title: '$' } } };
 const TURNS = [
   { ask: 'ask1.wav', answer: 'answer1.wav', said: 'How much did we spend on dining this month?',
@@ -220,7 +221,8 @@ for (const t of TURNS) {
   if (!await page.evaluate(text => window.__demoHear(text), t.said)) throw new Error('the call was not listening');
   const status = await next('status', at);
   if (t.chart) {   silent = true;   // the assistant draws it: the owner watches the board take the chart in
-    captions.push({ at: status, until: status + 5200, text: 'Ask for any chart. It draws it.', kind: 'scene' });
+    const chartCaption = { at: status, until: Infinity, text: 'Ask for any chart. It draws it.', kind: 'scene' };   // until the chart has been seen
+    captions.push(chartCaption);
     await sleep(2800);
     await tap(page.locator('#talk-end'), 400);
     await tap(page.locator('#intercom-close'), 600);
@@ -228,6 +230,7 @@ for (const t of TURNS) {
     const panel = page.getByText('Dining by month').first();
     await scrollTo(await panel.evaluate(el => el.getBoundingClientRect().top + scrollY - innerHeight / 4), 900);
     await sleep(1500);
+    chartCaption.until = Date.now();
     await scrollTo(0, 800);
     await tap(page.locator('#intercom-btn'), 800);
     await tap(page.locator('#talk-btn'), 0);
@@ -291,9 +294,9 @@ const endCard = await render(join(out, 'end.png'), `<div style="width:${W}px;hei
   align-items:center;justify-content:center;gap:30px;text-align:center;padding:0 80px;box-sizing:border-box">
   <div style="font-size:92px;font-weight:700;color:#e0974a">Finnamon</div>
   <div style="font-size:50px;line-height:1.25">Your money. Your financial AI.</div>
-  <div style="font-size:40px;line-height:1.35;color:#c9ced6">Turn Claude into your personal finance assistant.</div>
+  <div style="font-size:40px;line-height:1.35;color:#c9ced6">Turn Claude or Codex into your personal finance assistant.</div>
   <div style="margin-top:56px;font-size:44px;color:#c9ced6">Try it: <span style="font-family:ui-monospace,Menlo,monospace;color:#f4f6f8">finnamon demo</span></div>
-  <div style="font-size:36px;color:#e0974a">${esc(REPO_URL || 'github.com/… (link at launch)')}</div>
+  <div style="font-size:36px;color:#e0974a">${esc(REPO_URL)}</div>
   <div style="position:absolute;top:36px;left:0;width:100%;font-size:28px;color:#a3abb8">${NOTE}</div></div>`);
 await browser.close();
 
