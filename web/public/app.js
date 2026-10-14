@@ -761,10 +761,12 @@ function renderBanks(s) {
     const stale = oldest && Date.now() - new Date(String(oldest).replace(' ', 'T')).getTime() > STALE_MS;
     const text = bad ? (/LOGIN/.test(bad.status) ? 'needs a new login' : `not syncing (${bad.status})`) : stale ? `synced ${when(oldest)}` : '';
     if (text && !byHand) warn.set(inst, text);
-    const note = bad ? `<span class="tag warn">${icon('warning-circle')} ${esc(text)}</span>${RELOGIN.test(bad.status) && !String(bad.item_id).startsWith('manual:') ? reconnectBtn(bad.item_id) : ''}`
+    const fix = bad || (stale && linked.find(i => i.last_synced_at === oldest));   // the login to reconnect: the failing one, else the stalest; the server says whether a login can help (notify.can_reconnect)
+    const btn = fix?.reconnect ? reconnectBtn(fix.item_id) : '';
+    const note = bad ? `<span class="tag warn">${icon('warning-circle')} ${esc(text)}</span>${btn}`
       : !linked.length ? `<span class="hint">added by hand${synced ? ` · imported ${esc(when(synced))}` : ''}</span>`
       : times(linked).length < linked.length ? `<span class="hint">not synced yet</span>`   // just linked: the first sync is on its way
-      : stale ? `<span class="tag warn" title="Finnamon syncs every bank at least daily">${icon('warning-circle')} ${esc(text)}</span>`
+      : stale ? `<span class="tag warn" title="Finnamon syncs every bank at least daily">${icon('warning-circle')} ${esc(text)}</span>${btn}`
       : `<span class="hint">synced ${esc(when(synced))}</span>`;
     if (view === 'bank') html += sec(byHand ? (split ? `${inst} (by hand)` : inst) : its[0].institution_id || inst, split ? `${inst} (by hand)` : inst, note, accts.filter(a => a.institution === inst && (a.source === 'manual') === byHand));
   }
@@ -844,7 +846,6 @@ function renderAlerts(s) {
 const ALERT_DONE = { normal: 'Marked normal: alerts like it stay quiet.', dismiss: 'Dismissed: the next one still alerts.', undo: 'Undone: the alert is open again.' };
 // Reconnect: Plaid's re-login page for one bank, in a new tab. The tab opens on the click itself (one opened after an await
 // is a blocked popup to Safari) and goes to Plaid once the server has the link; the daemon syncs the bank within a minute of the login.
-const RELOGIN = /^(ITEM_LOGIN_REQUIRED|PENDING_EXPIRATION|PENDING_DISCONNECT)$/;   // notify.RELOGIN exactly (tests/test_relogin.py holds the two together)
 async function reconnect(b) {
   const w = window.open('', '_blank');
   if (w) w.opener = null;

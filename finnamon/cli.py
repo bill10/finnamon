@@ -2066,7 +2066,7 @@ def cmd_status(a) -> None:
     conn = store.connect()
     out({"version": __version__, "home": str(config.home()), "chat_id": store.get_state(conn, "chat_id"),
          "last_run": store.get_state(conn, "last_run"), "last_backup_at": store.get_state(conn, "last_backup_at"), "backup_error": store.get_state(conn, "backup_error"), "inbound_conflict_at": store.get_state(conn, "inbound_conflict_at"), "daemon_alive": owners.daemon_alive(conn), "demo": bool(store.get_state(conn, "demo")), "plaid_keys": all(config.plaid_auth().values()),
-         "items": [dict(r) for r in conn.execute("SELECT item_id, institution, owner, status, last_synced_at, last_error, "
+         "items": [dict(r) | {"reconnect": notify.can_reconnect(r["item_id"], r["source"], r["status"])} for r in conn.execute("SELECT item_id, institution, owner, status, last_synced_at, last_error, source, "
                                                      "(SELECT group_concat(COALESCE(a.name, '') || COALESCE(' …' || a.mask, ''), ', ') FROM accounts a WHERE a.item_id=items.item_id) AS accounts FROM items")],
          "pending_alerts": conn.execute(f"SELECT count(*) FROM alerts WHERE {notify.SENDABLE}").fetchone()[0],
          "untriaged": len(triage.untriaged(conn)), "agent": store.assistant_kind(conn), "extension_import": extension_problem(conn) is None, "assistant": str(assistant.dir()), "assistant_problems": claude_runner.harness_problems(),

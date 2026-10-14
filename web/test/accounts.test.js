@@ -105,3 +105,11 @@ test('a Plaid link and an account added by hand at the same bank are separate gr
   assert.notEqual(bankKey('Chase', true), bankKey('Chase', false));
   assert.equal(bankKey('Chase', false), 'Chase');   // a Plaid bank keeps the key its open/closed state was saved under
 });
+
+// Value: protects=the bank row offers Reconnect for a stale bank as well as a failing one, on the server's say-so; fails_when=the row goes back to a hand-written status list or drops the stale case; why_new=the row showed Reconnect only for re-login statuses; seam=none
+test('the bank row shows Reconnect from the server\'s per-item flag, for a stale bank too', () => {
+  assert.doesNotMatch(src, /RELOGIN/);
+  assert.match(src, /const fix = bad \|\| \(stale && linked\.find\(/);
+  assert.match(src, /fix\?\.reconnect \? reconnectBtn\(fix\.item_id\)/);
+  assert.match(src, /stale \? `<span class="tag warn"[^\n]*esc\(text\)\}<\/span>\$\{btn\}`/);
+});
