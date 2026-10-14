@@ -303,6 +303,10 @@ def test_sync_health_stale_and_error(conn):
     conn.execute("UPDATE items SET last_synced_at='2026-09-18 12:00:00'")
     ids = run(conn, "sync_health")
     assert len(ids) == 1 and alerts(conn)[0]["key"] == "health:item1:stale:2026-09-18 12:00:00"
+    conn.execute("UPDATE items SET last_error='INSTITUTION_NOT_RESPONDING: x'")   # what sync keeps on a good Item after an outage
+    conn.execute("DELETE FROM alerts")
+    run(conn, "sync_health")
+    assert alerts(conn)[0]["payload"]["last_error"] == "INSTITUTION_NOT_RESPONDING: x"   # the stale alert carries why
     assert run(conn, "sync_health") == []
     assert run(conn, "sync_health", "2026-09-22 06:00:00") == []   # one alert per problem, not one per day
     conn.execute("UPDATE items SET status='ITEM_LOGIN_REQUIRED', last_synced_at=?", (AS_OF,))

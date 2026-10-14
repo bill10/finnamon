@@ -109,12 +109,15 @@ def _fix(p: dict) -> tuple[str, str]:
 
 
 RELOGIN = ("ITEM_LOGIN_REQUIRED", "PENDING_EXPIRATION", "PENDING_DISCONNECT")   # what an update-mode login fixes
+NO_RECONNECT = ("NO_TOKEN", "ITEM_NOT_FOUND", "INVALID_ACCESS_TOKEN", "DB_ERROR", "SYNC_ERROR")   # no Item to update, or Finnamon's own fault: a login can't help
 
 
 def relogin_item(alert: sqlite3.Row) -> str | None:
-    """The Item a re-login fixes, when that is what the alert asks for: the dashboard shows Reconnect for it."""
+    """The Item the dashboard's Reconnect is for: an expiring consent, or any Plaid bank that isn't syncing (stale or in
+    error; update-mode Link works on any Item). Never a manual account, nor a status a login can't fix (NO_RECONNECT)."""
     p = json.loads(alert["payload_json"])
-    if alert["kind"] == "consent_expiring" or (alert["kind"] == "sync_health" and p.get("status") in RELOGIN):
+    if alert["kind"] == "consent_expiring" or (alert["kind"] == "sync_health" and p.get("source") != "manual"
+                                               and not str(p.get("item_id") or "manual:").startswith("manual:") and p.get("status") not in NO_RECONNECT):
         return p.get("item_id")
     return None
 
@@ -136,7 +139,8 @@ def render(alert: sqlite3.Row, page: bool = False, cue: bool = True) -> str:
             bank, fix = _fix(p)
             return (f"🔌 <b>{bank} needs a re-login.</b> " + ("" if page else f"Reply <i>{fix}</i> and I'll send the login link here. ")
                     + "Until then its accounts aren't updating.")
-        doctor = " Run <code>finnamon doctor</code> on the Finnamon box to see what to fix; this closes by itself once the bank syncs again."
+        doctor = (" If the bank changed your login, Reconnect signs in again; <code>finnamon doctor</code> on the Finnamon box says more." if page else
+                  " Run <code>finnamon doctor</code> on the Finnamon box to see what to fix.") + " This closes by itself once the bank syncs again."
         if p.get("status") not in (None, "good"):
             code = str(p.get("status"))
             err = esc(p.get("last_error") or "").rstrip(". ")
@@ -145,7 +149,11 @@ def render(alert: sqlite3.Row, page: bool = False, cue: bool = True) -> str:
         if p.get("source") == "manual":
             return (f"🗂 <b>{esc(p.get('institution') or p.get('item_id'))} hasn't been imported since {when(p.get('last_synced_at')) if p.get('last_synced_at') else 'it was added'}.</b> "
                     f"Download its CSV and use Import CSV on the dashboard, or <code>finnamon import</code>.")
-        return f"🩺 <b>{esc(p.get('institution') or p.get('item_id'))} hasn't synced since {when(p.get('last_synced_at')) if p.get('last_synced_at') else 'it was linked'}.</b>" + doctor
+        code = str(p.get("last_error") or "").partition(": ")[0]   # a transient error every run: sync.sync_item keeps "CODE: message" on a good Item
+        what = BANK_PROBLEMS.get(code) or ("Plaid had a problem on its side" if code.startswith("HTTP_5") else None)
+        last = f"{what} ({esc(code)})" if what else esc(p.get("last_error") or "").rstrip(". ")
+        return (f"🩺 <b>{esc(p.get('institution') or p.get('item_id'))} hasn't synced since {when(p.get('last_synced_at')) if p.get('last_synced_at') else 'it was linked'}.</b>"
+                + (f" The last try failed: {last}." if last else "") + doctor)
     if k == "consent_expiring":   # raised by sync.sync_accounts, once per expiry date
         bank, fix = _fix(p)
         if page:
