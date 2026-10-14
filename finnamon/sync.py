@@ -229,6 +229,8 @@ def sync_item(conn: sqlite3.Connection, item_id: str, token: str | None = None) 
         result["transient"] = e.code in TRANSIENT_CODES or e.type in TRANSIENT_TYPES or e.code.startswith("HTTP_5")
         if not result["transient"]:  # an outage is not the Item's fault; sync_health's staleness clause covers a long one
             conn.execute("UPDATE items SET status=?, last_error=? WHERE item_id=?", (e.code, e.message[:500], item_id))
+        else:   # status stays good, but the reason stays too: a stale alert and doctor say what every try hit (apply_page clears it)
+            conn.execute("UPDATE items SET last_error=? WHERE item_id=? AND status='good'", (f"{e.code}: {e.message}"[:500], item_id))
         result["error"] = e.code
         log.warning("sync %s failed: %s", item_id, e)
     except sqlite3.IntegrityError as e:  # one Item's bad page must not stop the others

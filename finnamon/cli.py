@@ -2148,6 +2148,9 @@ def cmd_doctor(a) -> None:
                   "finnamon open → Add account → Link account, or finnamon link")
             for it in items:
                 if it["status"] in (None, "good"):
+                    if it["last_error"]:   # a transient error the last sync hit (sync.sync_item): a stale alert sends people here
+                        check(None, f"Bank {it['institution']}", f"last sync attempt failed: {it['last_error']}",
+                              f"retried on every sync; if the bank stays stale, Reconnect on its alert (or finnamon link --update {it['item_id']})")
                     continue
                 relogin = "LOGIN" in it["status"] or it["status"] in ("PENDING_EXPIRATION", "PENDING_DISCONNECT")
                 check(False, f"Bank {it['institution']}", f"{it['status']}" + (f": {it['last_error']}" if it["last_error"] and not relogin else ""),

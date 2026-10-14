@@ -101,6 +101,13 @@ def test_only_a_login_problem_is_sent_to_relink(home, units, fake_claude, tg, ca
     assert "INSTITUTION_DOWN: bank is down" in line(out, "Bank Chase") and "link --update" not in out and "retried on every sync" in out
 
 
+def test_a_good_bank_with_a_transient_error_says_what_it_hit(home, units, fake_claude, tg, capsys):
+    conn = store.connect(); seed(conn)
+    conn.execute("UPDATE items SET status='good', last_error='INSTITUTION_NOT_RESPONDING: not responding'")
+    _, out = doctor(capsys)
+    assert "last sync attempt failed: INSTITUTION_NOT_RESPONDING: not responding" in line(out, "Bank Chase") and "Reconnect" in out
+
+
 def test_what_breaks_says_how_to_fix_it(home, units, fake_claude, tg, capsys, monkeypatch):
     monkeypatch.setattr(plaid_api, "institution_get", lambda i, env=None: (_ for _ in ()).throw(PlaidError({"error_code": "INVALID_API_KEYS", "error_message": "bad"})))
     secrets.write({"client_id": "cid", "sandbox_secret": "sb"}, {"bot_token": "123:tok"}, {})

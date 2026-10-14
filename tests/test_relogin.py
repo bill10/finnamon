@@ -145,13 +145,36 @@ def test_the_page_gets_reconnect_and_its_own_words_and_telegram_keeps_the_reply_
     assert "Reply" not in notify.render(a, page=True) and "needs a re-login" in notify.render(a, page=True)
     c = _alert(conn, "health:item1:consent:2026-11-01", "consent_expiring")
     assert "Reply" in notify.render(c) and "Reply" not in notify.render(c, page=True)
-    for status, item in (("PENDING_EXPIRATION", "item1"), ("PENDING_DISCONNECT", "item1"), ("ITEM_LOGIN_REQUIRED", "item1"), ("INSTITUTION_DOWN", None)):
+    for status, item in (("PENDING_EXPIRATION", "item1"), ("PENDING_DISCONNECT", "item1"), ("ITEM_LOGIN_REQUIRED", "item1"), ("INSTITUTION_DOWN", "item1")):
         assert notify.relogin_item(_alert(conn, f"health:item1:{status}", status=status)) == item
     _alert(conn, "health:dup", "duplicate_charge")
     cli.main(["alerts", "--sent", "--open"])
     shown = {r["kind"]: r for r in json.loads(capsys.readouterr().out)}
     assert shown["consent_expiring"]["reconnect"] == "item1" and "Reply" in shown["consent_expiring"]["text"]
     assert "reconnect" not in shown["duplicate_charge"] and "page_text" not in shown["duplicate_charge"]
+
+
+# Value: protects=a Plaid bank that isn't syncing (stale, or an error status) gets Reconnect on the page, never a manual account;
+# fails_when=relogin_item goes back to RELOGIN only; why_new=the owner's stale Vanguard alert had only a terminal command; seam=none
+def test_reconnect_shows_on_any_plaid_bank_that_is_not_syncing(env, conn, capsys):
+    for status, extra in (("good", {"last_synced_at": "2026-10-13 03:37:00"}), ("INSTITUTION_DOWN", {}), ("SYNC_ERROR", {})):
+        a = _alert(conn, f"health:item1:{status}", status=status)
+        conn.execute("UPDATE alerts SET payload_json=? WHERE id=?", (json.dumps({**json.loads(a["payload_json"]), "source": "plaid", **extra}), a["id"]))
+        a = conn.execute("SELECT * FROM alerts WHERE id=?", (a["id"],)).fetchone()
+        assert notify.relogin_item(a) == "item1"
+        assert "finnamon doctor" in notify.render(a, page=True) and "Reconnect" in notify.render(a, page=True)
+        assert "Reconnect" not in notify.render(a)                                   # the chat has no button
+    for payload in ({"item_id": "manual:ally", "status": "good", "source": "manual"}, {"item_id": "item1", "status": "NO_TOKEN"}):
+        conn.execute("INSERT INTO alerts (tier, kind, key, payload_json, as_of) VALUES ('rule','sync_health',?,?,'2026-10-13')", (f"health:{payload['item_id']}:{payload['status']}", json.dumps(payload)))
+        assert notify.relogin_item(conn.execute("SELECT * FROM alerts ORDER BY id DESC LIMIT 1").fetchone()) is None
+
+
+def test_a_stale_alert_says_what_the_last_try_hit(conn):
+    conn.execute("INSERT INTO alerts (tier, kind, key, payload_json, as_of) VALUES ('rule','sync_health','health:v:stale','{}','2026-10-13')")
+    a = dict(conn.execute("SELECT * FROM alerts").fetchone())
+    a["payload_json"] = json.dumps({"item_id": "v", "institution": "Vanguard", "status": "good", "source": "plaid", "last_synced_at": "2026-10-13 03:37:00",
+                                    "last_error": "INSTITUTION_NOT_RESPONDING: this institution is not currently responding."})
+    assert "The last try got INSTITUTION_NOT_RESPONDING: this institution is not currently responding." in notify.render(a)
 
 
 # Value: protects=a failed "<bank> is reconnected" chat message never stops the tick: every finished bank still syncs and goes good;

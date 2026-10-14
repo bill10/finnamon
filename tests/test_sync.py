@@ -103,6 +103,17 @@ def test_item_login_required_sets_status(conn, item, monkeypatch):
     assert it[0] == "ITEM_LOGIN_REQUIRED" and "login" in it[1]
 
 
+# Value: protects=a bank that fails transiently every run (INSTITUTION_NOT_RESPONDING at a brokerage) leaves its reason on the Item,
+# so the stale alert and doctor can say why; fails_when=the transient branch writes nothing again; why_new=the stale alert had no cause to show; seam=none
+def test_a_transient_error_keeps_the_item_good_but_records_why_until_the_next_good_sync(conn, item, monkeypatch):
+    err = PlaidError({"error_code": "INSTITUTION_NOT_RESPONDING", "error_message": "this institution is not currently responding"})
+    monkeypatch.setattr(plaid_api, "accounts_get", lambda tok: (_ for _ in ()).throw(err))
+    assert sync.sync_item(conn, "item1", "tok")["transient"]
+    assert tuple(conn.execute("SELECT status, last_error FROM items").fetchone()) == ("good", "INSTITUTION_NOT_RESPONDING: this institution is not currently responding")
+    sync.apply_page(conn, "item1", page([], cursor="c1"), "2026-10-13 09:00:00")
+    assert conn.execute("SELECT last_error FROM items").fetchone()[0] is None
+
+
 def test_accounts_and_balances_append_only(conn, item, monkeypatch):
     resp = {"accounts": [{"account_id": "chk", "name": "Chase Checking", "type": "depository", "subtype": "checking", "mask": "4821",
                           "balances": {"current": 100.0, "available": 90.0}}]}

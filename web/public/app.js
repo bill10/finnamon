@@ -829,7 +829,8 @@ function renderAlerts(s) {
   const act = (a, what, label) => `<button class="link" data-alert="${Number(a.id)}" data-act="${what}">${label}</button>`;
   $('alerts-body').innerHTML = rows.map(a => {
     const tag = a.sent_at ? ['new', 'open'] : ['warn', 'unsent'];
-    const first = a.reconnect ? reconnectBtn(a.reconnect) : act(a, 'normal', 'It’s normal');   // a re-login is fixed, not normal
+    const quiet = a.kind === 'sync_health' && (a.payload || {}).status === 'good';   // stale, not broken: a quiet bank can be normal
+    const first = a.reconnect ? reconnectBtn(a.reconnect) + (quiet ? act(a, 'normal', 'It’s normal') : '') : act(a, 'normal', 'It’s normal');   // a re-login is fixed, not normal
     return item(a, `<div class="when">${esc(when(a.sent_at || a.created_at))}</div><div class="acts">${first}${act(a, 'dismiss', 'Dismiss')}</div></span>`) +
       `<span class="tag ${tag[0]}">${tag[1]}</span></li>`;
   }).join('');
