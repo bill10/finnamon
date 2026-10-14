@@ -1,6 +1,9 @@
-track.mp3 is NOT covered by the repository's MIT license.
-
-It was generated locally with MusicGen (facebook/musicgen-small, whose weights are licensed CC-BY-NC 4.0) from the
-prompt "warm upbeat minimal tech underscore, light bright piano, soft electronic pulse, optimistic, steady 108 bpm,
-no vocals", then looped and trimmed to the video with ffmpeg. It is here only to rebuild Finnamon's own launch video,
-a non-commercial use for a free, MIT, no-ads project. Don't reuse it for anything else.
+track.mp3 is "Chill Lofi Inspired" by omfgdude, released under CC0 1.0 (public domain dedication):
+  page:    https://opengameart.org/content/chill-lofi-inspired
+  file:    https://opengameart.org/sites/default/files/ChillLofiR_0.mp3
+           (sha256 1796a480e3db0c02d5e58059b2ae7cfbeab344f95e0443496790da022cbe91b5)
+  license: https://creativecommons.org/publicdomain/zero/1.0/
+Downloaded 2026-10-14 without an account. Trimmed to the cut (0 to 37.676 s) with a 0.3 s fade-in, a 2.7 s fade-out
+and loudness normalisation:
+  ffmpeg -i ChillLofiR_0.mp3 -af "atrim=0:37.676,afade=t=in:d=0.3,afade=t=out:st=34.976:d=2.7,loudnorm=I=-16:TP=-1.5" -ar 44100 -b:a 160k track.mp3
+CC0 allows commercial use and redistribution with no attribution; the credit is given anyway.

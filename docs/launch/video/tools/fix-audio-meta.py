@@ -19,9 +19,9 @@ cues = {(4, 'notification'): 0.15, (5, 'key-press'): 2.4, (5, 'pop'): 3.7, (7, '
 for s in d.get('sfx') or []:
     for (f, name), at in cues.items():
         if s['frame'] == f and name in s['file']: s['offset_s'] = at
-# The bed: local MusicGen (facebook/musicgen-small), looped and trimmed to the cut; a bed under the voice.
+# The bed: a CC0 track (assets/bgm/NOTICE), trimmed to the cut; a bed under the voice.
 bgm = 'assets/bgm/track.mp3'
-d['bgm'] = {'path': bgm, 'volume': 0.14, 'mode': 'generate', 'provider': 'musicgen',
+d['bgm'] = {'path': bgm, 'volume': 0.14, 'mode': 'file', 'provider': 'opengameart-cc0',
             'duration_s': round(float(subprocess.check_output(['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', bgm])), 3)}
 d['bgm_pending'] = False
 json.dump(d, open('audio_meta.json', 'w'), indent=2)

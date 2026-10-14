@@ -1,6 +1,6 @@
 # Launch video (HyperFrames source)
 
-The launch piece for X and the posts: [finnamon-launch.mp4](https://github.com/bill10/finnamon/releases/download/pr-assets/finnamon-launch.mp4),
+The launch piece for X and the posts: [finnamon-launch-v2.mp4](https://github.com/bill10/finnamon/releases/download/pr-assets/finnamon-launch-v2.mp4),
 37.7 s, 1080×1080, captioned. The 1-minute demo video (`scripts/demo/launch-video.mjs`) is a separate thing and stays
 the README's demo. The rendered MP4 is never committed: it lives on the `pr-assets` release.
 
@@ -13,8 +13,8 @@ household) on current main. The intercom's `claude` is the demo's stand-in (`scr
 the real `finnamon chart`. The message notification in frame 4 is re-typeset from the real alert text. Every frame
 says "Demo household, made-up data · voice is AI-generated".
 
-Sources and licenses: the narration is the local Kokoro voice `af_heart`. The music bed is generated locally by
-MusicGen (`facebook/musicgen-small`, whose weights are CC-BY-NC 4.0); it is not under the repo's MIT license, see `assets/bgm/NOTICE`. The sound
+Sources and licenses: the narration is the local Kokoro voice `af_heart`. The music bed is "Chill Lofi Inspired"
+by omfgdude (CC0, from OpenGameArt), trimmed to the cut; `assets/bgm/NOTICE` has the source URL, hash and the ffmpeg line. The sound
 effects are HyperFrames' bundled Pixabay set (Pixabay Content License): they're in the rendered video but not committed
 here. On a fresh checkout, copy them back before rendering (otherwise `assemble-index` skips them, and rendering the committed `index.html` leaves them out):
 `mkdir -p assets/sfx && cp ~/.claude/skills/media-use/audio/assets/sfx/{impact-bass-1,key-press,notification,pop,whoosh-short}.mp3 assets/sfx/`. Fonts: Geist (SIL OFL, `assets/fonts/LICENSE.TXT`). Nothing paid, and no HeyGen account.

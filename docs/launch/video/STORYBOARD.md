@@ -5,7 +5,7 @@ message: "Finnamon is the Mint replacement that's yours: Claude or Codex as your
 arc: Hook (Mint's gone) → Product intro → Key features (assistant, alerts, AI sorting + charts, phone) → Benefit (yours to keep) → CTA (finnamon demo)
 audience: Ex-Mint users and self-hosters on X who already pay for Claude or ChatGPT
 mode: autonomous
-music: warm upbeat minimal tech underscore, light piano and soft pulse, optimistic
+music: warm chill lofi piano with a light beat (CC0 "Chill Lofi Inspired", assets/bgm/NOTICE)
 ---
 
 ## Video direction
