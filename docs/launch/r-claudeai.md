@@ -26,8 +26,8 @@ it, and I can just ask how we're doing.
 **How Claude is in it:** Finnamon doesn't call a model API. It runs **Claude Code** as the assistant, in its own
 directory with a `CLAUDE.md`, skills (`/triage`, `finnamon`) and an allow list of `finnamon` commands, so it can set
 budgets and mark things normal but can't touch anything else. SQL detectors find candidates for free; a headless
-`claude -p` triage run decides which deserve a message, and it's read-only apart from one command. Telegram replies
-resume a Claude session; the dashboard embeds the same session as an "intercom". Every spawn is sealed
+`claude -p` triage run decides which deserve a message, and it's read-only apart from one command. Telegram messages
+are typed into the dashboard's Claude session, the same conversation as its "intercom". Every spawn is sealed
 (`--strict-mcp-config`, `--setting-sources project`) so your own Claude Code settings never leak in.
 
 **Banks Plaid can't reach, through Claude in Chrome:** HSBC US isn't on Plaid and refuses any Chrome with a debugging

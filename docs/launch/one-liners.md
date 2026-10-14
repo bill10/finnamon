@@ -23,9 +23,8 @@
 
 ## GitHub repo
 
-Proposed only; the repo settings are not changed by this PR. Live on 2026-10-08 (private repo): "Your money. Your
-financial AI. Turn Claude into your personal finance assistant: self-hosted, MIT." and no topics, so both still need
-setting (step 2 of [checklist.md](checklist.md)).
+Done: the repo is public and its description and topics are set (step 2 of [checklist.md](checklist.md)). The text
+below is what is live (checked 2026-10-13).
 
 - **Description** (≤350): `Your money. Your financial AI. Turn Claude or Codex into your personal finance assistant: alerts when something's off, AI categories, any chart you ask for, Fetch by AI for banks Plaid can't reach. Self-hosted on Mac, Linux or Windows via WSL2; your data lives on your machine.`
 - **Topics:** `personal-finance`, `self-hosted`, `budgeting`, `claude`, `claude-code`, `codex`, `ai-assistant`, `plaid`,
