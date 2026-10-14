@@ -306,12 +306,16 @@ def test_reconnect_never_hands_back_a_session_that_is_already_over(env, conn, mo
     assert link.start_update(conn, "item1", now=T0 + 10, to_chat=False)["reused"] is False   # unknown: a new one
 
 
-def test_the_page_and_notify_agree_on_which_statuses_need_a_login():
-    import re
-    from pathlib import Path
-    src = (Path(__file__).resolve().parents[1] / "web/public/app.js").read_text()
-    rx = re.compile(re.search(r"const RELOGIN = /(.+?)/;", src).group(1))
-    assert all(rx.search(s) for s in notify.RELOGIN) and not rx.search("INSTITUTION_DOWN") and not rx.search("good")
+def test_status_flags_which_banks_the_accounts_page_may_offer_reconnect_for(env, conn, capsys):
+    import json
+    from finnamon import cli
+    conn.execute("UPDATE items SET status='good', last_error=NULL WHERE item_id='item1'")
+    for iid, st, src in (("bad", "INSTITUTION_DOWN", "plaid"), ("nt", "NO_TOKEN", "plaid"), ("manual:x", "good", "manual")):
+        conn.execute("INSERT INTO items(item_id, institution, owner, status, source) SELECT ?, 'B', owner, ?, ? FROM items WHERE item_id='item1'", (iid, st, src))
+    conn.commit()
+    cli.cmd_status(type("A", (), {"login": False})())
+    got = {i["item_id"]: i["reconnect"] for i in json.loads(capsys.readouterr().out)["items"]}
+    assert got == {"item1": True, "bad": True, "nt": False, "manual:x": False}
 
 
 def test_a_bank_a_cycle_already_fixed_still_gets_its_alert_resolved_and_the_message(env, conn, tg, monkeypatch):
