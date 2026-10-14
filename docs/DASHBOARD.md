@@ -8,9 +8,12 @@ that matter (a line under one says what it covers when its name doesn't: several
 from the taxonomy and merchants the household has seen, and the new-budget row has one too, for a budget whose name is
 no category, like "subscriptions" made of its merchants; the Overall bar counts a charge two budgets share once, and an
 "Uncategorized (N)" line opens the transactions with no category, an import's mostly, which count toward no budget), the alerts sent to the household lately, or about
-to be (open or unsent, each with **It's normal** and **Dismiss**, except a bank that needs a re-login or whose connection
-is expiring, which gets **Reconnect** in place of It's normal, as it does beside "needs a new login" in the accounts list:
-it opens Plaid's login page for that bank in a new tab, and within a minute of the login Finnamon syncs the bank, resolves
+to be (open or unsent, each with **It's normal** and **Dismiss**, except a Plaid bank that isn't syncing (it needs a
+re-login, its sync fails, or it has gone quiet) or whose connection is expiring, which gets **Reconnect** in place of It's
+normal, as it does beside "needs a new login" in the accounts list; a bank that has only gone quiet keeps It's normal too,
+and its alert names the last error its syncs hit, if any. Manual accounts and problems a login can't fix (a missing or
+revoked connection, a fault on Finnamon's side) get no Reconnect. Reconnect
+opens Plaid's login page for that bank in a new tab, and within a minute of the login Finnamon syncs the bank, resolves
 its alert as Reconnected and says so in the chat; resolved ones in a collapsed **Resolved** list saying
 how, with **Undo** on the ones you marked normal or dismissed; what triage chose not to mention stays with `finnamon alerts --suppressed`), a chart panel, a light/dark
 toggle, and an intercom button in the corner that opens the household's Claude Code session. Ask it "show me
