@@ -4,8 +4,8 @@
 new-project posts are only allowed on the weekly day the mods set for them, must use the matching flair, and must
 disclose how AI was used to build the project. Re-check on 2026-10-08: Reddit refuses this agent's fetches (403), so
 the live rules were **not** read. A third-party list dated August 2026 says projects younger than three months (from
-their first public commit or post) go only in the pinned **New Project Megathread**. Finnamon's repo goes public on
-launch day, so expect this to be a megathread entry, not a standalone post: use the text below as the entry, trimmed
+their first public commit or post) go only in the pinned **New Project Megathread**. Finnamon's repo is brand new,
+so expect this to be a megathread entry, not a standalone post: use the text below as the entry, trimmed
 if the megathread asks for a template. Post from the owner's account, answer comments personally.
 
 Flair: the new-project flair the rules name. Link: https://github.com/bill10/finnamon.
