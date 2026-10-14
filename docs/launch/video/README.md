@@ -1,7 +1,9 @@
 # Launch video (HyperFrames source)
 
-The launch piece for X and the posts: [finnamon-launch-v2.mp4](https://github.com/bill10/finnamon/releases/download/pr-assets/finnamon-launch-v2.mp4),
-37.7 s, 1080×1080, captioned. The 1-minute demo video (`scripts/demo/launch-video.mjs`) is a separate thing and stays
+The launch piece, in two cuts, both 1080×1080 and captioned: the Mint cut for selfh.st and Reddit,
+[finnamon-launch-v2.mp4](https://github.com/bill10/finnamon/releases/download/pr-assets/finnamon-launch-v2.mp4) (37.7 s, opens on "Remember Mint?"), and the
+alert-first cut for X, [finnamon-launch-x.mp4](https://github.com/bill10/finnamon/releases/download/pr-assets/finnamon-launch-x.mp4) (35.0 s, opens on the duplicate-charge
+alert; see "The X cut" below). The 1-minute demo video (`scripts/demo/launch-video.mjs`) is a separate thing and stays
 the README's demo. The rendered MP4 is never committed: it lives on the `pr-assets` release.
 
 Built with the HyperFrames `product-launch-video` workflow. `BRIEF.md` is the brief, `STORYBOARD.md` the
@@ -61,3 +63,26 @@ PLV=~/.claude/skills/product-launch-video/scripts
    Watch the render before uploading. Upload a new take to the `pr-assets` release under a new name (never overwrite
    a published take), then point the links in `../x-thread.md` and `../README.md` at it. HyperFrames sends anonymous
    usage telemetry; `npx hyperframes@0.8.155 telemetry disable` turns it off.
+
+## The X cut
+
+X decides in a second or two, so the X cut opens on the alert, not on Mint: frame `x1-hook` shows the real Shell
+duplicate-charge alert from the first frame while the voice says "Shell charged you twice. Want me to flag it?" (the
+demo's own line), then `x2-meet` ("That's Finnamon, an AI that watches your money. Like Mint, but it warns you."), then
+frames 03–08 as they are, with less trailing silence. `SCRIPT.md` has the three new lines.
+
+It is a separate entry, not a second `index.html` (a project holds one root): `tools/build-x.py` writes
+`renders/x-cut/index.html`, which shares this folder's `assets/` and `compositions/` by symlink, plus
+`compositions/captions-x.html` (the hook's caption, then the Mint cut's captions for frames 03–06, shifted) and the
+bed cut to length (`assets/bgm/track-x.mp3`). The Mint cut's steps above don't touch any of it. After the Mint cut's
+steps 3–4 (it reads their `index.html` and `caption_groups.json`), with the sound effects copied back:
+
+```sh
+python3 tools/build-x.py
+npx --yes hyperframes@0.8.155 check renders/x-cut
+npx --yes hyperframes@0.8.155 render renders/x-cut --quality high --output renders/finnamon-launch-x.mp4
+```
+
+New X lines: synthesise them with the same Kokoro voice as step 2 (`synth-v3.py` from the HyperFrames TTS cache,
+`af_heart`, speed 1.0, `en-us`) into `assets/voice/x0N.wav`, then update the word timings in `HOOK` and the slots in
+`FRAMES` (`tools/build-x.py`), and the cue times in `compositions/frames/x2-meet.html`.

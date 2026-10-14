@@ -1,0 +1,115 @@
+<template>
+  <div
+    id="root"
+    data-composition-id="x2-meet"
+    data-start="0"
+    data-duration="5.1"
+    data-width="1080"
+    data-height="1080"
+  >
+    <style>
+      @font-face{font-family:"Geist";font-weight:400;font-style:normal;font-display:block;src:url("assets/fonts/Geist-Regular.woff2") format("woff2");}
+      #root {
+        position: relative;
+        width: 1080px;
+        height: 1080px;
+        overflow: hidden;
+        font-family: "Geist", Georgia, serif;
+        color: #1b1b1b;
+      }
+      .x2-ground {
+        position: absolute;
+        inset: 0;
+        background: #f8f8f8;
+      }
+      /* Same lockup as frame 2: wordmark, then the two lines the voice says. */
+      #x2-lockup {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 250px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        transform-origin: 50% 40%;
+      }
+      #x2-logo {
+        display: block;
+        width: 486px;
+        height: auto;
+      }
+      .x2-line {
+        margin: 0;
+        font-weight: 400;
+        line-height: 1.04;
+        letter-spacing: -0.022em;
+        white-space: nowrap;
+        text-align: center;
+      }
+      #x2-line1 {
+        margin-top: 64px;
+        font-size: 66px;
+      }
+      #x2-line2 {
+        margin-top: 36px;
+        font-size: 50px;
+        color: rgba(27, 27, 27, 0.72);
+      }
+      .x2-word {
+        display: inline-block;
+        margin: 0 0.12em;
+      }
+      #x2-warns {
+        position: relative;
+        display: inline-block;
+        color: #1b1b1b;
+      }
+      #x2-rule {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: -6px;
+        height: 4px;
+        background: #ce623c;
+        transform-origin: 0 50%;
+      }
+    </style>
+
+    <div id="x2-ground" class="x2-ground clip" data-start="0" data-duration="5.1" data-track-index="0"></div>
+
+    <div id="x2-stage" class="clip" data-start="0" data-duration="5.1" data-track-index="1" style="position:absolute;inset:0">
+      <div id="x2-lockup">
+        <img id="x2-logo" src="assets/logo.png" alt="Finnamon" />
+        <p id="x2-line1" class="x2-line">
+          <span class="x2-word" id="x2-w1">An AI</span><span class="x2-word" id="x2-w2">that watches</span><span class="x2-word" id="x2-w3">your money.</span>
+        </p>
+        <p id="x2-line2" class="x2-line">
+          <span class="x2-word" id="x2-w4">Like Mint,</span><span class="x2-word" id="x2-w5">but it</span><span class="x2-word" id="x2-w6"><span id="x2-warns">warns you.<span id="x2-rule"></span></span></span>
+        </p>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script>
+      (function () {
+        const tl = gsap.timeline({ paused: true });
+        const word = { opacity: 0, y: 24 };
+        const wordTo = () => ({ opacity: 1, y: 0, duration: 0.4, ease: "power3.out" });
+        // Voice x02 at 0: "That's Finnamon (0.42), an AI (1.05) that watches (1.33) your money (2.10)."
+        tl.fromTo("#x2-logo", { opacity: 0, scale: 0.9 }, { opacity: 1, scale: 1, duration: 0.7, ease: "power3.out" }, 0.05);
+        tl.fromTo("#x2-w1", word, wordTo(), 1.02);
+        tl.fromTo("#x2-w2", word, wordTo(), 1.3);
+        tl.fromTo("#x2-w3", word, wordTo(), 2.07);
+        // Voice x03 at 2.8: "Like Mint, (2.88) but it (3.42) warns you (3.73)."
+        tl.fromTo("#x2-w4", word, wordTo(), 2.85);
+        tl.fromTo("#x2-w5", word, wordTo(), 3.39);
+        tl.fromTo("#x2-w6", word, wordTo(), 3.7);
+        tl.fromTo("#x2-rule", { scaleX: 0 }, { scaleX: 1, duration: 0.4, ease: "power2.out" }, 3.95);
+        tl.fromTo("#x2-lockup", { scale: 1 }, { scale: 1.025, duration: 5.1, ease: "none" }, 0);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["x2-meet"] = tl;
+      })();
+    </script>
+  </div>
+</template>

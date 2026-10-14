@@ -1,0 +1,131 @@
+<template>
+  <div
+    id="root"
+    data-composition-id="x1-hook"
+    data-start="0"
+    data-duration="3.4"
+    data-width="1080"
+    data-height="1080"
+  >
+    <style>
+      @font-face{font-family:"Geist";font-weight:400;font-style:normal;font-display:block;src:url("assets/fonts/Geist-Regular.woff2") format("woff2");}
+      @font-face{font-family:"Geist Mono";font-weight:400;font-style:normal;font-display:block;src:url("assets/fonts/GeistMono-Regular.woff2") format("woff2");}
+      #root {
+        position: relative;
+        width: 1080px;
+        height: 1080px;
+        overflow: hidden;
+        font-family: "Geist", Georgia, serif;
+        color: #1b1b1b;
+      }
+      #root * {
+        box-sizing: border-box;
+      }
+      .x1-ground {
+        position: absolute;
+        inset: 0;
+        background: #fbeae1;
+      }
+      .x1-kicker {
+        position: absolute;
+        left: 64px;
+        top: 92px;
+        font-family: "Geist Mono", ui-monospace, monospace;
+        font-size: 28px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+      .x1-kicker b {
+        color: #ce623c;
+        font-weight: 400;
+      }
+      /* The real Shell alert, as frame 4's notification, but big and on screen from the first frame.
+         Sits in y 200..880, clear of the note above and the caption band below. */
+      .x1-note {
+        position: absolute;
+        left: 64px;
+        top: 270px;
+        width: 952px;
+        padding: 40px 44px 42px;
+        background: #f8f8f8;
+        border: 1px solid rgba(27, 27, 27, 0.12);
+        border-radius: 24px;
+        box-shadow: 0 1px 3px rgba(27, 27, 27, 0.08), 0 4px 16px rgba(27, 27, 27, 0.04);
+      }
+      .x1-note-head {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        font-size: 28px;
+        color: rgba(27, 27, 27, 0.6);
+        margin-bottom: 22px;
+      }
+      .x1-dot {
+        width: 30px;
+        height: 30px;
+        border-radius: 9999px;
+        background: #ce623c;
+      }
+      .x1-note-body {
+        font-size: 44px;
+        line-height: 1.34;
+        letter-spacing: -0.01em;
+      }
+      .x1-mark {
+        position: relative;
+        white-space: nowrap;
+      }
+      .x1-rule {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: -2px;
+        height: 4px;
+        background: #ce623c;
+        transform-origin: 0 50%;
+      }
+      .x1-note-muted {
+        margin-top: 22px;
+        font-size: 32px;
+        line-height: 1.4;
+        color: rgba(27, 27, 27, 0.55);
+      }
+    </style>
+
+    <div id="x1-ground" class="x1-ground clip" data-start="0" data-duration="3.4" data-track-index="0"></div>
+
+    <div id="x1-kicker" class="x1-kicker clip" data-start="0" data-duration="3.4" data-track-index="1">
+      <b>✱</b> Alert
+    </div>
+
+    <div id="x1-note" class="x1-note clip" data-start="0" data-duration="3.4" data-track-index="2">
+      <div class="x1-note-head"><span class="x1-dot"></span>Finnamon · now</div>
+      <div class="x1-note-body">
+        ⚠️ Possible duplicate: Shell $52.18 on Total Checking …4821,
+        <span class="x1-mark">charged Sep 17<span id="x1-rule1" class="x1-rule"></span></span>
+        <span class="x1-mark">and again Sep 18.<span id="x1-rule2" class="x1-rule"></span></span>
+        Same merchant, same amount.
+      </div>
+      <div id="x1-muted" class="x1-note-muted">Reply “it's normal” if it was meant.</div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script>
+      (function () {
+        const tl = gsap.timeline({ paused: true });
+        // The alert is readable on the very first frame (X decides in a second): only a small settle.
+        tl.fromTo("#x1-note", { y: 14, scale: 0.985 }, { y: 0, scale: 1, duration: 0.5, ease: "power3.out" }, 0);
+        tl.fromTo("#x1-kicker", { opacity: 0, x: -16 }, { opacity: 1, x: 0, duration: 0.4, ease: "power2.out" }, 0.1);
+        // On "twice" (1.00s) the coral rule draws under the two dates: the one voltage.
+        tl.fromTo("#x1-rule1", { scaleX: 0 }, { scaleX: 1, duration: 0.3, ease: "power2.out" }, 1.0);
+        tl.fromTo("#x1-rule2", { scaleX: 0 }, { scaleX: 1, duration: 0.3, ease: "power2.out" }, 1.25);
+        // On "Want me to flag it?" (1.54s) the reply hint fades up.
+        tl.fromTo("#x1-muted", { opacity: 0 }, { opacity: 1, duration: 0.4, ease: "power1.out" }, 1.6);
+        tl.fromTo("#x1-note", { scale: 1 }, { scale: 1.02, duration: 1.4, ease: "sine.inOut", immediateRender: false }, 1.9);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["x1-hook"] = tl;
+      })();
+    </script>
+  </div>
+</template>
