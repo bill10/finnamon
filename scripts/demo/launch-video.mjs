@@ -15,7 +15,8 @@
 // and playwright:
 //   npm i --no-save --prefix scripts/demo playwright
 //   node scripts/demo/launch-video.mjs [out-dir]     (default: a temp folder)
-// Then copy out-dir/finnamon-teaser.gif to docs/ and put out-dir/finnamon-demo.mp4 where the README links it.
+// Then copy out-dir/finnamon-teaser.gif to docs/, upload out-dir/finnamon-demo.mp4 to the pr-assets release under a new
+// name (finnamon-demo-v057.mp4 is v0.57's; never overwrite an old take) and point the README and docs/launch at it.
 import { execFileSync, spawnSync } from 'child_process';
 import { mkdirSync, mkdtempSync, writeFileSync, statSync, existsSync } from 'fs';
 import { tmpdir, homedir } from 'os';
