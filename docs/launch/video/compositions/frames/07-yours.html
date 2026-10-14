@@ -1,0 +1,70 @@
+<template>
+  <div
+    id="root"
+    data-composition-id="07-yours"
+    data-start="0"
+    data-duration="6.327"
+    data-width="1080"
+    data-height="1080"
+  >
+    <style>
+      @font-face { font-family: "Geist"; font-weight: 400; font-style: normal; font-display: block; src: url("assets/fonts/Geist-Regular.woff2") format("woff2"); }
+      @font-face { font-family: "Geist Mono"; font-weight: 400; font-style: normal; font-display: block; src: url("assets/fonts/GeistMono-Regular.woff2") format("woff2"); }
+      #root { position: relative; width: 1080px; height: 1080px; overflow: hidden; }
+      .y07-ground { position: absolute; inset: 0; background: #F8F8F8; container-type: size; }
+      .y07-stage { position: absolute; left: 0; top: 0; width: 1080px; height: 1080px; container-type: size; }
+      .y07-stack { position: absolute; left: 4.2cqw; right: 4.2cqw; top: 23cqh; text-align: center; }
+      .y07-line {
+        font-family: "Geist", Georgia, serif; font-weight: 400; color: #1B1B1B;
+        font-size: 7.3cqw; line-height: 1.02; letter-spacing: -0.022em;
+      }
+      .y07-rule { height: 1px; width: 52cqw; margin: 4.4cqh auto 5.2cqh; background: rgba(27, 27, 27, 0.2); transform-origin: 0 50%; }
+      .y07-gap { height: 3.4cqh; }
+      .y07-finale {
+        position: absolute; left: 4.2cqw; right: 4.2cqw; top: 31cqh; text-align: center;
+        font-family: "Geist", Georgia, serif; font-weight: 400; color: #1B1B1B;
+        font-size: 9.9cqw; line-height: 0.98; letter-spacing: -0.028em;
+      }
+      .y07-coral { color: #CE623C; }
+    </style>
+
+    <div id="y07-ground" class="y07-ground clip" data-start="0" data-duration="6.327" data-track-index="0"></div>
+
+    <div id="y07-stage" class="y07-stage clip" data-start="0" data-duration="6.327" data-track-index="1">
+      <div class="y07-stack" id="y07-stack">
+        <div class="y07-line" id="y07-p1">On your own computer.</div>
+        <div class="y07-rule" id="y07-rule"></div>
+        <div class="y07-line" id="y07-p2">No ads.</div>
+        <div class="y07-gap"></div>
+        <div class="y07-line" id="y07-p3">No data selling.</div>
+      </div>
+      <div class="y07-finale" id="y07-finale"><span class="y07-coral">Nobody</span> can<br />shut it down.</div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script>
+      (function () {
+        window.__timelines = window.__timelines || {};
+        const tl = gsap.timeline({ paused: true });
+        // One beat array from the VO: phrase onsets on each phrase's first word.
+        const BEATS = [0.03, 1.67, 2.48, 3.87];
+
+        // Scene 1: headline rises, hairline rule draws under it.
+        tl.fromTo("#y07-p1", { y: 70, opacity: 0 }, { y: 0, opacity: 1, duration: 0.55, ease: "circ.out" }, BEATS[0]);
+        tl.fromTo("#y07-rule", { scaleX: 0 }, { scaleX: 1, duration: 0.6, ease: "power3.out" }, BEATS[0] + 0.45);
+
+        // Scene 2: "No ads." scale + blur slam.
+        tl.fromTo("#y07-p2", { scale: 1.6, filter: "blur(16px)", opacity: 0 }, { scale: 1, filter: "blur(0px)", opacity: 1, duration: 0.4, ease: "power4.out" }, BEATS[1]);
+
+        // Scene 3: "No data selling." side snap.
+        tl.fromTo("#y07-p3", { x: -320, opacity: 0 }, { x: 0, opacity: 1, duration: 0.42, ease: "expo.out" }, BEATS[2]);
+
+        // Scene 4: the three clear by zoom-through, finale lands and holds still.
+        tl.fromTo("#y07-stack", { scale: 1, filter: "blur(0px)", opacity: 1 }, { scale: 1.18, filter: "blur(14px)", opacity: 0, duration: 0.24, ease: "power2.in" }, BEATS[3] - 0.24);
+        tl.fromTo("#y07-finale", { scale: 0.86, filter: "blur(12px)", opacity: 0 }, { scale: 1, filter: "blur(0px)", opacity: 1, duration: 0.5, ease: "power4.out" }, BEATS[3]);
+
+        window.__timelines["07-yours"] = tl;
+      })();
+    </script>
+  </div>
+</template>

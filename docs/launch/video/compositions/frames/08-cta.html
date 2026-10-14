@@ -1,0 +1,131 @@
+<template>
+  <div id="root" data-composition-id="08-cta" data-start="0" data-duration="4.827" data-width="1080" data-height="1080">
+    <style>
+      @font-face { font-family: "Geist"; font-weight: 400; font-style: normal; font-display: block; src: url("assets/fonts/Geist-Regular.woff2") format("woff2"); }
+      @font-face { font-family: "Geist Mono"; font-weight: 400; font-style: normal; font-display: block; src: url("assets/fonts/GeistMono-Regular.woff2") format("woff2"); }
+
+      #root { position: relative; width: 1080px; height: 1080px; overflow: hidden; }
+      #root .clip { position: absolute; inset: 0; }
+      #root .cta08-bg { background: #F8F8F8; }
+      #root .cta08-stage { container-type: size; }
+
+      .cta08-head { position: absolute; left: 0; right: 0; top: 190px; display: flex; flex-direction: column; align-items: center; }
+      .cta08-logo { width: 480px; height: 118.5px; display: block; }
+      .cta08-tagline {
+        margin-top: 34px;
+        font-family: "Geist", Georgia, serif; font-weight: 400;
+        font-size: 50px; line-height: 1.1; letter-spacing: -0.018em;
+        color: #1B1B1B; white-space: nowrap;
+      }
+
+      .cta08-pill {
+        position: absolute; top: 460px; left: 250px; width: 580px; height: 112px;
+        border-radius: 56px; background: #181715;
+        clip-path: inset(0px 234px 0px 234px round 56px);
+        box-shadow: inset 0 0 0 1px rgba(248, 248, 248, 0.14);
+        font-family: "Geist Mono", ui-monospace, monospace; font-weight: 400;
+        font-size: 48px; color: #F8F8F8;
+      }
+      .cta08-prompt { position: absolute; left: 56px; top: 0; height: 112px; line-height: 112px; color: rgba(248, 248, 248, 0.55); }
+      .cta08-textwrap {
+        position: absolute; left: 114px; top: 0; height: 112px;
+        display: inline-flex; align-items: center;
+        min-width: 410px; white-space: nowrap;
+      }
+      .cta08-text { white-space: pre; }
+      .cta08-cursor { display: inline-block; width: 26px; height: 54px; margin-left: 3px; background: #F8F8F8; }
+
+      .cta08-body {
+        position: absolute; left: 0; right: 0; top: 628px; text-align: center;
+        font-family: "Geist", Georgia, serif; font-weight: 400;
+        font-size: 36px; line-height: 1.4; color: #1B1B1B;
+      }
+      .cta08-link {
+        position: absolute; left: 0; right: 0; top: 712px; text-align: center;
+        font-family: "Geist Mono", ui-monospace, monospace; font-weight: 400;
+        font-size: 30px; letter-spacing: 0.02em; color: #1B1B1B;
+      }
+      .cta08-link-inner { position: relative; display: inline-block; padding-bottom: 10px; }
+      .cta08-underline { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: #CE623C; transform-origin: 0 50%; }
+    </style>
+
+    <div id="cta08-bg" class="clip cta08-bg" data-start="0" data-duration="4.827" data-track-index="0"></div>
+
+    <div id="cta08-stage" class="clip cta08-stage" data-start="0" data-duration="4.827" data-track-index="1">
+      <div class="cta08-head" id="cta08-head">
+        <img class="cta08-logo" id="cta08-logo" src="assets/logo.png" alt="Finnamon" />
+        <div class="cta08-tagline" id="cta08-tagline">Your money. Your financial AI.</div>
+      </div>
+
+      <div class="cta08-pill" id="cta08-pill">
+        <span class="cta08-prompt" id="cta08-prompt">$</span>
+        <span class="cta08-textwrap" id="cta08-textwrap"><span class="cta08-text" id="cta08-text"></span><span class="cta08-cursor" id="cta08-cursor"></span></span>
+      </div>
+
+      <div class="cta08-body" id="cta08-body">Made-up household. No keys needed.</div>
+
+      <div class="cta08-link" id="cta08-link">
+        <span class="cta08-link-inner">github.com/bill10/finnamon · MIT<span class="cta08-underline" id="cta08-underline"></span></span>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script>
+      (function () {
+        const D = 4.827;
+        const tl = gsap.timeline({ paused: true });
+
+        // Scene 1 (0.0–1.0): wordmark settles upper-center, tagline beneath.
+        tl.fromTo("#cta08-logo", { opacity: 0, scale: 0.92 }, { opacity: 1, scale: 1, duration: 0.5, ease: "power2.out" }, 0.04);
+        tl.fromTo("#cta08-tagline", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.5, ease: "power2.out" }, 0.3);
+        // Headline demotion (light): the head group lifts as the pill arrives.
+        tl.fromTo("#cta08-head", { y: 18 }, { y: 0, duration: 0.45, ease: "power2.inOut" }, 0.95);
+
+        // Scene 2 (1.0–2.4): $ chip spring-pops, stretches into the wide terminal pill, command types.
+        tl.fromTo("#cta08-pill", { opacity: 0, scale: 0.6 }, { opacity: 1, scale: 1, duration: 0.35, ease: "back.out(1.6)" }, 1.0);
+        tl.fromTo("#cta08-pill",
+          { clipPath: "inset(0px 234px 0px 234px round 56px)" },
+          { clipPath: "inset(0px 0px 0px 0px round 56px)", duration: 0.35, immediateRender: false, ease: "power3.inOut" }, 1.05);
+        tl.fromTo("#cta08-prompt", { x: 220 }, { x: 0, duration: 0.35, ease: "power3.inOut" }, 1.05);
+        tl.fromTo("#cta08-cursor", { opacity: 0 }, { opacity: 1, duration: 0.01 }, 1.38);
+
+        // discrete-text-sequence: keystroke clusters with a pause at the word break.
+        const SEQUENCE = [
+          { t: 0, text: "" },
+          { t: 1.42, text: "f" }, { t: 1.48, text: "fi" }, { t: 1.55, text: "fin" },
+          { t: 1.62, text: "finn" }, { t: 1.69, text: "finna" }, { t: 1.75, text: "finnam" },
+          { t: 1.82, text: "finnamo" }, { t: 1.89, text: "finnamon" },
+          { t: 2.05, text: "finnamon " }, { t: 2.12, text: "finnamon d" },
+          { t: 2.19, text: "finnamon de" }, { t: 2.26, text: "finnamon dem" },
+          { t: 2.33, text: "finnamon demo" }
+        ];
+        function textAt(time) {
+          for (let i = SEQUENCE.length - 1; i >= 0; i--) if (time >= SEQUENCE[i].t) return SEQUENCE[i].text;
+          return "";
+        }
+        const textEl = document.getElementById("cta08-text");
+        const cursorEl = document.getElementById("cta08-cursor");
+        const driver = { t: 0 };
+        tl.to(driver, {
+          t: D, duration: D, ease: "none",
+          onUpdate: function () {
+            textEl.textContent = textAt(driver.t);
+            // Caret holds solid while typing, then blinks (~0.6s cycle) through the end hold.
+            if (driver.t >= 1.38) {
+              const since = driver.t - 2.4;
+              cursorEl.style.opacity = since < 0 || Math.sin((since / 0.6) * Math.PI * 2 + Math.PI / 2) > 0 ? "1" : "0";
+            }
+          }
+        }, 0);
+
+        // Scene 3 (2.4–end): body line, then the repo link with the coral underline drawing on; hold.
+        tl.fromTo("#cta08-body", { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.45, ease: "power2.out" }, 2.4);
+        tl.fromTo("#cta08-link", { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.45, ease: "power2.out" }, 2.9);
+        tl.fromTo("#cta08-underline", { scaleX: 0 }, { scaleX: 1, duration: 0.5, ease: "power2.inOut" }, 3.2);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines["08-cta"] = tl;
+      })();
+    </script>
+  </div>
+</template>

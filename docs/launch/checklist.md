@@ -13,6 +13,6 @@ Written 2026-10-08, brought up to v0.57.0.0 on 2026-10-13.
 | 4 | r/selfhosted | Billion posts from the owner's account; owner answers comments | [r-selfhosted.md](r-selfhosted.md). Likely the pinned New Project Megathread (projects under three months old) rather than a standalone post, on whatever day the rules name; the right flair; the AI-use disclosure. Confirm on the live sidebar first |
 | 5 | r/ClaudeAI | Billion posts from the owner's account; owner answers comments | [r-claudeai.md](r-claudeai.md), "Built with Claude" flair; a screenshot or the demo, and a prompt if the sidebar asks. No referral links |
 | 6 | selfh.st | Billion | [selfhst.md](selfhst.md): https://selfh.st/submit/ → Self-Host Weekly (Newsletter) → Project Launch; AI-assisted: Yes |
-| 7 | X | Billion posts from the owner's account | [x-thread.md](x-thread.md), 6 posts; the teaser GIF on post 1, the dashboard screenshot on post 4 |
+| 7 | X | Billion posts from the owner's account | [x-thread.md](x-thread.md), 6 posts; the [launch video](https://github.com/bill10/finnamon/releases/download/pr-assets/finnamon-launch-v2.mp4) on post 1 (or the teaser GIF), the dashboard screenshot on post 4 |
 
 After each post, note its URL here or on the card. If a post is removed, stop the steps after it and tell the owner.

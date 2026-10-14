@@ -1,7 +1,8 @@
 # X thread (6 posts)
 
-Attach the teaser GIF (`docs/finnamon-teaser.gif`) or the 1-minute demo video to post 1, a dashboard screenshot
-(`docs/screenshots/demo/demo-1280-light.png`) to post 4. Check each post is 280 characters or fewer in the composer.
+Attach the [launch video](https://github.com/bill10/finnamon/releases/download/pr-assets/finnamon-launch-v2.mp4) (about
+38 seconds, square, captioned; source in [video/](video/)) to post 1, or the teaser GIF (`docs/finnamon-teaser.gif`) or the
+1-minute demo video; a dashboard screenshot (`docs/screenshots/demo/demo-1280-light.png`) to post 4. Check each post is 280 characters or fewer in the composer.
 
 1/
 Your money. Your financial AI.
