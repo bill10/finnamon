@@ -236,9 +236,10 @@ def check_updates(conn: sqlite3.Connection, now: float | None = None) -> list[di
                     continue
                 r = {"item_id": x["item_id"], "institution": row[0] or x["item_id"], "sync": reconnect(conn, x["item_id"], renewed=proof)}
                 out.append(r)
-                if r["sync"].get("transient"):
+                if r["sync"].get("transient") and (proof or row[1] != "good"):   # a closed session on a bank that only went quiet proves
                     log.info("re-login of %s: the sync hit %s; retried next tick", x["item_id"], r["sync"]["error"])
                     continue   # Plaid's outage, not the bank's answer: the session (and its proof) waits for the next tick
+                # nothing: re-syncing it every tick through an outage only hammers Plaid; the next cycle's sync covers it
                 gone.add(x["link_token"])   # only now: a sync that raised (a locked database) is retried next tick too
                 if r["sync"]["error"]:
                     log.info("re-login session for %s ended; the bank still says %s", x["item_id"], r["sync"]["error"])

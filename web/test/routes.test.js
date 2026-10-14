@@ -797,6 +797,12 @@ test('resolved alerts render apart, greyed, saying how; only an undoable one get
   assert.ok(done.includes('It’s normal (rule 9)') && done.includes('Dismissed') && done.includes('Resolved · r'));
   assert.deepEqual([...done.matchAll(/data-alert="(\d+)" data-act="undo"/g)].map(m => m[1]), ['5', '4'], 'one Finnamon resolved itself has nothing to undo, and last year\'s dismissal is settled');
   assert.equal(els['alerts-resolved'].hidden, false);
+  // Value: protects=a stale-but-good bank gets Reconnect and It's normal, a broken one Reconnect only; fails_when=the payload.status check is dropped or inverted; why_new=no render had a reconnect alert; seam=none
+  renderAlerts({ status: { items: [{}] }, alerts: [{ id: 8, kind: 'sync_health', text: 's', reconnect: 'v', payload: { status: 'good' } },
+    { id: 9, kind: 'sync_health', text: 'l', reconnect: 'c', payload: { status: 'ITEM_LOGIN_REQUIRED' } }], resolved: [] });
+  const acts = els['alerts-body'].innerHTML;
+  assert.ok(acts.includes('data-reconnect="v"') && acts.includes('data-alert="8" data-act="normal"'), 'a stale bank can be normal');
+  assert.ok(acts.includes('data-reconnect="c"') && !acts.includes('data-alert="9" data-act="normal"'), 'a re-login is fixed, not normal');
   renderAlerts({ status: { items: [{}] }, alerts: [], resolved: [] });
   assert.equal(els['alerts-resolved'].hidden, true);
 });
