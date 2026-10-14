@@ -157,14 +157,14 @@ def test_the_page_gets_reconnect_and_its_own_words_and_telegram_keeps_the_reply_
 # Value: protects=a Plaid bank that isn't syncing (stale, or an error status) gets Reconnect on the page, never a manual account;
 # fails_when=relogin_item goes back to RELOGIN only; why_new=the owner's stale Vanguard alert had only a terminal command; seam=none
 def test_reconnect_shows_on_any_plaid_bank_that_is_not_syncing(env, conn, capsys):
-    for status, extra in (("good", {"last_synced_at": "2026-10-13 03:37:00"}), ("INSTITUTION_DOWN", {}), ("SYNC_ERROR", {})):
+    for status, extra in (("good", {"last_synced_at": "2026-10-13 03:37:00"}), ("INSTITUTION_DOWN", {}), ("ADDITIONAL_CONSENT_REQUIRED", {})):
         a = _alert(conn, f"health:item1:{status}", status=status)
         conn.execute("UPDATE alerts SET payload_json=? WHERE id=?", (json.dumps({**json.loads(a["payload_json"]), "source": "plaid", **extra}), a["id"]))
         a = conn.execute("SELECT * FROM alerts WHERE id=?", (a["id"],)).fetchone()
         assert notify.relogin_item(a) == "item1"
         assert "finnamon doctor" in notify.render(a, page=True) and "Reconnect" in notify.render(a, page=True)
         assert "Reconnect" not in notify.render(a)                                   # the chat has no button
-    for payload in ({"item_id": "manual:ally", "status": "good", "source": "manual"}, {"item_id": "item1", "status": "NO_TOKEN"}):
+    for payload in ({"item_id": "manual:ally", "status": "good", "source": "manual"}, *({"item_id": "item1", "status": s} for s in notify.NO_RECONNECT)):
         conn.execute("INSERT INTO alerts (tier, kind, key, payload_json, as_of) VALUES ('rule','sync_health',?,?,'2026-10-13')", (f"health:{payload['item_id']}:{payload['status']}", json.dumps(payload)))
         assert notify.relogin_item(conn.execute("SELECT * FROM alerts ORDER BY id DESC LIMIT 1").fetchone()) is None
 
@@ -176,9 +176,11 @@ def test_a_stale_alert_says_what_the_last_try_hit_in_words_and_escaped(conn):
     a["payload_json"] = json.dumps({**stale, "last_error": "INSTITUTION_NOT_RESPONDING: this institution is not currently responding."})
     assert "The last try failed: the bank isn't responding (INSTITUTION_NOT_RESPONDING)." in notify.render(a)
     assert "see what to fix. This closes by itself" in notify.render(a)                 # one sentence each, in the chat too
-    a["payload_json"] = json.dumps({**stale, "last_error": "HTTP_502: <b>bad gateway</b> & more"})   # free text from outside: an XSS boundary
+    a["payload_json"] = json.dumps({**stale, "last_error": "TRANSACTIONS_SYNC_LIMIT: <b>slow down</b> & more"})   # free text from outside: an XSS boundary
     for page in (False, True):
-        assert "The last try failed: HTTP_502: &lt;b&gt;bad gateway&lt;/b&gt; &amp; more." in notify.render(a, page=page)
+        assert "The last try failed: TRANSACTIONS_SYNC_LIMIT: &lt;b&gt;slow down&lt;/b&gt; &amp; more." in notify.render(a, page=page)
+    a["payload_json"] = json.dumps({**stale, "last_error": "HTTP_502: HTTP Error 502: Bad Gateway"})
+    assert "The last try failed: Plaid had a problem on its side (HTTP_502)." in notify.render(a)
     a["payload_json"] = json.dumps(stale)
     assert "last try" not in notify.render(a)
 
@@ -341,6 +343,20 @@ def test_a_transient_plaid_error_after_the_login_keeps_the_session_and_its_proof
     link.check_updates(conn, now=T0 + 120)
     assert conn.execute("SELECT resolution FROM alerts WHERE id=?", (a["id"],)).fetchone()[0] == "reconnected"
     assert tg.sent[-1]["text"] == "Chase is reconnected." and store.get_state(conn, "update_sessions") is None
+
+
+# Value: protects=a Reconnect closed on a bank that only went quiet is dropped on Plaid's outage, not re-synced every tick for an hour;
+# fails_when=the transient branch keeps a no-proof session on a good Item; why_new=Reconnect now shows on stale banks; seam=none
+def test_a_closed_reconnect_on_a_quiet_bank_in_an_outage_is_dropped(env, conn, tg, monkeypatch):
+    conn.execute("UPDATE items SET status='good', last_error=NULL")
+    _alert(conn, "health:item1:stale:2026-10-13 03:37:00", status="good")
+    link.start_update(conn, "item1", now=T0, to_chat=False)
+    monkeypatch.setattr(plaid_api, "link_token_get", _finished(False))
+    synced = []
+    monkeypatch.setattr(sync, "sync_item", lambda c_, item, token=None: synced.append(item) or {"item_id": item, "error": "INSTITUTION_NOT_RESPONDING", "transient": True})
+    link.check_updates(conn, now=T0 + 60)
+    link.check_updates(conn, now=T0 + 120)
+    assert synced == ["item1"] and store.get_state(conn, "update_sessions") is None and not tg.sent
 
 
 def test_sync_item_says_when_its_error_is_plaids_outage(env, conn, monkeypatch):

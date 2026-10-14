@@ -115,6 +115,12 @@ def test_a_transient_error_keeps_the_item_good_but_records_why_until_the_next_go
     conn.execute("UPDATE items SET status='ITEM_LOGIN_REQUIRED', last_error='the login details changed'")
     sync.sync_item(conn, "item1", "tok")                                  # an Item already broken keeps the reason that matters
     assert tuple(conn.execute("SELECT status, last_error FROM items").fetchone()) == ("ITEM_LOGIN_REQUIRED", "the login details changed")
+    conn.execute("UPDATE items SET status='good', last_error=NULL")
+    monkeypatch.setattr(sync, "sync_accounts", lambda *a: [])
+    monkeypatch.setattr(sync, "sync_transactions", lambda c_, item, tok, now: sync.apply_page(c_, item, page([], cursor="c2"), now))
+    monkeypatch.setattr(sync, "sync_recurring", lambda *a: (_ for _ in ()).throw(err))
+    sync.sync_item(conn, "item1", "tok")                                  # the transactions synced; only the recurring call hit the outage
+    assert conn.execute("SELECT last_error FROM items").fetchone()[0] is None
 
 
 def test_accounts_and_balances_append_only(conn, item, monkeypatch):
