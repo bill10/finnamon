@@ -3,6 +3,14 @@
 All notable changes to Finnamon are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.57.2.1] - 2026-10-14
+
+### Added
+- **A 38-second launch video for X and the launch posts.** Square and captioned, with the real `finnamon demo` screens: the
+  dashboard, an alert, a chart drawn on request, the phone view. It's at the `pr-assets` release as `finnamon-launch-v2.mp4`,
+  linked from `docs/launch/x-thread.md` (post 1) and `docs/launch/README.md`. Its HyperFrames source is in
+  `docs/launch/video/`. The 1-minute demo video stays the README's demo.
+
 ## [0.57.2.0] - 2026-10-14
 
 ### Fixed
