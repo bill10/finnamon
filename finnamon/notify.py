@@ -112,12 +112,16 @@ RELOGIN = ("ITEM_LOGIN_REQUIRED", "PENDING_EXPIRATION", "PENDING_DISCONNECT")   
 NO_RECONNECT = ("NO_TOKEN", "ITEM_NOT_FOUND", "INVALID_ACCESS_TOKEN", "DB_ERROR", "SYNC_ERROR")   # no Item to update, or Finnamon's own fault: a login can't help
 
 
+def can_reconnect(item_id, source, status) -> bool:
+    """Whether update-mode Link can help this bank: a Plaid Item, never a manual account, nor a status a login can't fix."""
+    return source != "manual" and not str(item_id or "manual:").startswith("manual:") and status not in NO_RECONNECT
+
+
 def relogin_item(alert: sqlite3.Row) -> str | None:
     """The Item the dashboard's Reconnect is for: an expiring consent, or any Plaid bank that isn't syncing (stale or in
     error; update-mode Link works on any Item). Never a manual account, nor a status a login can't fix (NO_RECONNECT)."""
     p = json.loads(alert["payload_json"])
-    if alert["kind"] == "consent_expiring" or (alert["kind"] == "sync_health" and p.get("source") != "manual"
-                                               and not str(p.get("item_id") or "manual:").startswith("manual:") and p.get("status") not in NO_RECONNECT):
+    if alert["kind"] == "consent_expiring" or (alert["kind"] == "sync_health" and can_reconnect(p.get("item_id"), p.get("source"), p.get("status"))):
         return p.get("item_id")
     return None
 
