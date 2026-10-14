@@ -105,7 +105,8 @@ def test_a_good_bank_with_a_transient_error_says_what_it_hit(home, units, fake_c
     conn = store.connect(); seed(conn)
     conn.execute("UPDATE items SET status='good', last_error='INSTITUTION_NOT_RESPONDING: not responding'")
     _, out = doctor(capsys)
-    assert "last sync attempt failed: INSTITUTION_NOT_RESPONDING: not responding" in line(out, "Bank Chase") and "Reconnect" in out
+    assert line(out, "Bank Chase").startswith("! ") and "last sync attempt failed: INSTITUTION_NOT_RESPONDING: not responding" in line(out, "Bank Chase")
+    assert "Reconnect on its alert (or finnamon link --update item1)" in out   # a warning with its fix, never a failed check
 
 
 def test_what_breaks_says_how_to_fix_it(home, units, fake_claude, tg, capsys, monkeypatch):

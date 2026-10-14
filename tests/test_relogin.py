@@ -169,12 +169,18 @@ def test_reconnect_shows_on_any_plaid_bank_that_is_not_syncing(env, conn, capsys
         assert notify.relogin_item(conn.execute("SELECT * FROM alerts ORDER BY id DESC LIMIT 1").fetchone()) is None
 
 
-def test_a_stale_alert_says_what_the_last_try_hit(conn):
+def test_a_stale_alert_says_what_the_last_try_hit_in_words_and_escaped(conn):
     conn.execute("INSERT INTO alerts (tier, kind, key, payload_json, as_of) VALUES ('rule','sync_health','health:v:stale','{}','2026-10-13')")
     a = dict(conn.execute("SELECT * FROM alerts").fetchone())
-    a["payload_json"] = json.dumps({"item_id": "v", "institution": "Vanguard", "status": "good", "source": "plaid", "last_synced_at": "2026-10-13 03:37:00",
-                                    "last_error": "INSTITUTION_NOT_RESPONDING: this institution is not currently responding."})
-    assert "The last try got INSTITUTION_NOT_RESPONDING: this institution is not currently responding." in notify.render(a)
+    stale = {"item_id": "v", "institution": "Vanguard", "status": "good", "source": "plaid", "last_synced_at": "2026-10-13 03:37:00"}
+    a["payload_json"] = json.dumps({**stale, "last_error": "INSTITUTION_NOT_RESPONDING: this institution is not currently responding."})
+    assert "The last try failed: the bank isn't responding (INSTITUTION_NOT_RESPONDING)." in notify.render(a)
+    assert "see what to fix. This closes by itself" in notify.render(a)                 # one sentence each, in the chat too
+    a["payload_json"] = json.dumps({**stale, "last_error": "HTTP_502: <b>bad gateway</b> & more"})   # free text from outside: an XSS boundary
+    for page in (False, True):
+        assert "The last try failed: HTTP_502: &lt;b&gt;bad gateway&lt;/b&gt; &amp; more." in notify.render(a, page=page)
+    a["payload_json"] = json.dumps(stale)
+    assert "last try" not in notify.render(a)
 
 
 # Value: protects=a failed "<bank> is reconnected" chat message never stops the tick: every finished bank still syncs and goes good;

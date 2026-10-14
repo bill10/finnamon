@@ -138,8 +138,8 @@ def render(alert: sqlite3.Row, page: bool = False, cue: bool = True) -> str:
             bank, fix = _fix(p)
             return (f"🔌 <b>{bank} needs a re-login.</b> " + ("" if page else f"Reply <i>{fix}</i> and I'll send the login link here. ")
                     + "Until then its accounts aren't updating.")
-        doctor = (" Reconnect logs into it again if the bank wants that; <code>finnamon doctor</code> on the Finnamon box says more." if page else
-                  " Run <code>finnamon doctor</code> on the Finnamon box to see what to fix;") + " This closes by itself once the bank syncs again."
+        doctor = (" If the bank changed your login, Reconnect signs in again; <code>finnamon doctor</code> on the Finnamon box says more." if page else
+                  " Run <code>finnamon doctor</code> on the Finnamon box to see what to fix.") + " This closes by itself once the bank syncs again."
         if p.get("status") not in (None, "good"):
             code = str(p.get("status"))
             err = esc(p.get("last_error") or "").rstrip(". ")
@@ -148,9 +148,10 @@ def render(alert: sqlite3.Row, page: bool = False, cue: bool = True) -> str:
         if p.get("source") == "manual":
             return (f"🗂 <b>{esc(p.get('institution') or p.get('item_id'))} hasn't been imported since {when(p.get('last_synced_at')) if p.get('last_synced_at') else 'it was added'}.</b> "
                     f"Download its CSV and use Import CSV on the dashboard, or <code>finnamon import</code>.")
-        err = esc(p.get("last_error") or "").rstrip(". ")   # a transient error every run (sync.sync_item keeps it on a good Item)
+        code, _, msg = str(p.get("last_error") or "").partition(": ")   # a transient error every run: sync.sync_item keeps "CODE: message" on a good Item
+        last = f"{BANK_PROBLEMS[code]} ({esc(code)})" if code in BANK_PROBLEMS else esc(p.get("last_error") or "").rstrip(". ")
         return (f"🩺 <b>{esc(p.get('institution') or p.get('item_id'))} hasn't synced since {when(p.get('last_synced_at')) if p.get('last_synced_at') else 'it was linked'}.</b>"
-                + (f" The last try got {err}." if err else "") + doctor)
+                + (f" The last try failed: {last}." if last else "") + doctor)
     if k == "consent_expiring":   # raised by sync.sync_accounts, once per expiry date
         bank, fix = _fix(p)
         if page:

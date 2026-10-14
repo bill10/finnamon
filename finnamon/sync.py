@@ -16,6 +16,7 @@ Page loop (the part that must be right):
       if not page.has_more: break
     on TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION: restart from cursor_at_start (upserts converge)
     on ITEM_LOGIN_REQUIRED / other Plaid error: items.status = code, last_error = message; stop
+    on an outage (TRANSIENT_CODES / TYPES, HTTP 5xx): status stays good, last_error = "code: message" until a page applies
     at most MAX_RESTARTS mutation restarts per run; then log and keep what was applied (next run resumes)
 
 A fresh Item can answer an empty page with no cursor for a few seconds; treat that as "not ready"
