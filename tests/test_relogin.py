@@ -19,7 +19,7 @@ def env(home, conn, tg, monkeypatch):
     monkeypatch.setattr(plaid_api, "link_token_create", lambda user_id, access_token=None, products=("transactions",), redirect_uri=None, hosted=True:
                         (made.append(access_token), {"link_token": f"lt{len(made)}", "hosted_link_url": f"https://hosted.plaid.com/{len(made)}", "expiration": "e"})[1])
     monkeypatch.setattr(plaid_api, "link_token_get", lambda lt: {"link_sessions": []})   # opened by nobody yet; tests that need more say so
-    conn.execute("UPDATE items SET status='ITEM_LOGIN_REQUIRED', last_error='login' WHERE item_id='item1'")
+    conn.execute("UPDATE items SET status='ITEM_LOGIN_REQUIRED', last_error='login', last_synced_at='2026-09-19 12:00:00' WHERE item_id='item1'")   # broken again later
     return made
 
 
@@ -84,6 +84,50 @@ def test_the_tick_syncs_a_finished_relogin_at_once_resolves_its_alerts_and_says_
     assert store.get_state(conn, "update_sessions") is None
     d.stop.clear(); d.sync_loop()
     assert synced == ["item_1"] and len(tg.sent) == 1                                                     # once
+
+
+# Value: protects=a finished update-mode Link closes the re-login alert once the tick's sync brings the bank back, even when that
+# sync's last call hit a rate limit (#48: the bank read good, fresh, no error, and the alert stayed open); fails_when=sync_item
+# stops calling detect.resolve_recovered; why_new=the tick test above fakes sync_item, so nothing moved last_synced_at; seam=none
+def test_a_finished_relogin_closes_the_alert_even_when_the_syncs_last_call_is_rate_limited(env, conn, tg, monkeypatch):
+    a = _alert(conn, "health:item1:ITEM_LOGIN_REQUIRED:2026-09-19 12:00:00")
+    link.start_update(conn, "item1", now=T0, to_chat=False)
+    monkeypatch.setattr(plaid_api, "link_token_get", lambda lt: {"link_sessions": [{"finished_at": "y", "on_success": {"public_token": "p"}}]})
+    held = run.lock()                                                                  # a cycle is running when Plaid says Success
+    try:
+        assert link.check_updates(conn, now=T0 + 60) == []
+    finally:
+        held.close()
+    monkeypatch.setattr(sync, "sync_accounts", lambda *a_: [])
+    monkeypatch.setattr(sync, "sync_transactions", lambda c_, item, tok, now: sync.apply_page(c_, item, {"next_cursor": "c1"}, now))
+    rate = PlaidError({"error_code": "RATE_LIMIT", "error_type": "RATE_LIMIT_EXCEEDED", "error_message": "slow down"})
+    monkeypatch.setattr(sync, "sync_recurring", lambda *a_: (_ for _ in ()).throw(rate))
+    r = link.check_updates(conn, now=T0 + 120)                                         # the tick once the lock is free
+    assert r[0]["sync"]["error"] == "RATE_LIMIT"
+    assert tuple(conn.execute("SELECT status, last_error FROM items WHERE item_id='item1'").fetchone()) == ("good", None)
+    assert conn.execute("SELECT resolution FROM alerts WHERE id=?", (a["id"],)).fetchone()[0] == "recovered"
+    assert tg.sent[-1]["text"] == "Chase is reconnected." and store.get_state(conn, "update_sessions") is None   # back: not retried for an hour
+
+
+# Value: protects=a re-login closed without a token whose sync applied pages, then hit a rate limit on every try, still
+# tells the chat "<bank> is reconnected" (the alert already closed 'recovered'); fails_when=reconnect counts only an
+# error-free sync as back; why_new=the proof test above takes the other branch of check_updates; seam=none
+def test_a_tokenless_relogin_whose_sync_is_rate_limited_still_says_reconnected(env, conn, tg, monkeypatch):
+    a = _alert(conn, "health:item1:ITEM_LOGIN_REQUIRED:2026-09-19 12:00:00")
+    link.start_update(conn, "item1", now=T0, to_chat=False)
+    monkeypatch.setattr(plaid_api, "link_token_get", lambda lt: {"link_sessions": [{"finished_at": "y", "results": {}}]})   # closed, no token
+    monkeypatch.setattr(sync, "sync_accounts", lambda *a_: [])
+    monkeypatch.setattr(sync, "sync_transactions", lambda c_, item, tok, now: sync.apply_page(c_, item, {"next_cursor": "c1"}, now))
+    rate = PlaidError({"error_code": "RATE_LIMIT", "error_type": "RATE_LIMIT_EXCEEDED", "error_message": "slow down"})
+    monkeypatch.setattr(sync, "sync_recurring", lambda *a_: (_ for _ in ()).throw(rate))
+    assert link.check_updates(conn, now=T0 + 60)[0]["sync"]["error"] == "RATE_LIMIT"
+    assert conn.execute("SELECT resolution FROM alerts WHERE id=?", (a["id"],)).fetchone()[0] == "recovered"
+    assert tg.sent[-1]["text"] == "Chase is reconnected." and store.get_state(conn, "update_sessions") is None
+    conn.execute("UPDATE items SET status='ITEM_LOGIN_REQUIRED', last_error='login', last_synced_at='2026-09-19 12:00:00' WHERE item_id='item1'")   # broken again later
+    monkeypatch.setattr(sync, "sync_accounts", lambda *a_: (_ for _ in ()).throw(rate))                 # no page applied: not back
+    link.start_update(conn, "item1", now=T0 + 600, to_chat=False)
+    assert link.check_updates(conn, now=T0 + 660)[0]["sync"]["error"] == "RATE_LIMIT" and len(tg.sent) == 1
+    assert store.get_state(conn, "update_sessions"), "an outage before any page is retried next tick"
 
 
 def test_two_sessions_for_one_bank_sync_it_once(env, conn, tg, monkeypatch):
