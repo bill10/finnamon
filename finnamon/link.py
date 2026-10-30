@@ -197,7 +197,7 @@ def check_updates(conn: sqlite3.Connection, now: float | None = None) -> list[di
     """The daemon's tick: each open re-login session, polled (outside the run lock: most ticks find nothing over). Once
     a session is over, that one bank syncs at once, under the lock; when it is held, the next tick retries.
     Success: Plaid's results carry a public token, or (update-mode results are thin) a bank in error syncs again. Then
-    the Item is good, its health alerts are resolved 'reconnected' and the chat hears "<bank> is reconnected". A session
+    the Item is good, its health alerts are resolved (the sync closes a re-login alert 'recovered', the rest go 'reconnected') and the chat hears "<bank> is reconnected". A session
     closed with no token on a bank that still syncs (its connection only expiring) proves nothing, so its consent alert
     stays open. Expired, forgotten, or still-refused sessions are dropped quietly: the next sync, or another Reconnect,
     covers it."""
@@ -236,12 +236,12 @@ def check_updates(conn: sqlite3.Connection, now: float | None = None) -> list[di
                     continue
                 r = {"item_id": x["item_id"], "institution": row[0] or x["item_id"], "sync": reconnect(conn, x["item_id"], renewed=proof)}
                 out.append(r)
-                if r["sync"].get("transient") and (proof or row[1] != "good"):   # a closed session on a bank that only went quiet proves
+                if not r["sync"]["synced"] and r["sync"].get("transient") and (proof or row[1] != "good"):   # a closed session on a bank that only went quiet proves
                     log.info("re-login of %s: the sync hit %s; retried next tick", x["item_id"], r["sync"]["error"])
                     continue   # Plaid's outage, not the bank's answer: the session (and its proof) waits for the next tick
                 # nothing: re-syncing it every tick through an outage only hammers Plaid; the next cycle's sync covers it
                 gone.add(x["link_token"])   # only now: a sync that raised (a locked database) is retried next tick too
-                if r["sync"]["error"]:
+                if not r["sync"]["synced"]:
                     log.info("re-login session for %s ended; the bank still says %s", x["item_id"], r["sync"]["error"])
                     continue
                 gone.update(y["link_token"] for y in sessions if y["item_id"] == x["item_id"])   # one sync per bank; a session opened since stays
@@ -273,7 +273,9 @@ def reconnect(conn: sqlite3.Connection, item_id: str, renewed: bool = True) -> d
     renewed (no proof the login happened): the consent alert stays open, since a bank whose connection is only
     expiring syncs either way."""
     result = sync.sync_item(conn, item_id)
-    if not result["error"]:
+    # pages applied and only a later call hit an outage (a rate limit on recurring): the bank answered, so it is back (#48)
+    result["synced"] = not result["error"] or bool(result.get("transient") and result.get("applied"))
+    if result["synced"]:
         conn.execute("UPDATE items SET status='good', last_error=NULL WHERE item_id=?", (item_id,))
         prefix, consent = f"health:{item_id}:", f"health:{item_id}:consent:"   # not LIKE: an _ in the id would match another bank's
         conn.execute("UPDATE alerts SET resolved_at=?, resolution='reconnected', key=key || ':reconnected:' || id "

@@ -14,7 +14,7 @@ normal, as it does beside "needs a new login" in the accounts list; a bank that 
 and its alert names the last error its syncs hit, if any. Manual accounts and problems a login can't fix (a missing or
 revoked connection, a fault on Finnamon's side) get no Reconnect. Reconnect
 opens Plaid's login page for that bank in a new tab, and within a minute of the login Finnamon syncs the bank, resolves
-its alert as Reconnected and says so in the chat; resolved ones in a collapsed **Resolved** list saying
+its alert (Synced again; an expiring connection's, Reconnected) and says so in the chat; resolved ones in a collapsed **Resolved** list saying
 how, with **Undo** on the ones you marked normal or dismissed; what triage chose not to mention stays with `finnamon alerts --suppressed`), a chart panel, a light/dark
 toggle, and an intercom button in the corner that opens the household's Claude Code session. Ask it "show me
 dining by month" and the chart panel re-renders; "make it weekly" re-renders it again. "Dining over $50 this month"

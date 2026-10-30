@@ -30,7 +30,7 @@ import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 
-from . import config, investments, plaid_api, store
+from . import config, detect, investments, plaid_api, store
 from .plaid_api import PlaidError
 
 log = logging.getLogger("finnamon.sync")
@@ -231,6 +231,7 @@ def sync_item(conn: sqlite3.Connection, item_id: str, token: str | None = None) 
         if not result["transient"]:  # an outage is not the Item's fault; sync_health's staleness clause covers a long one
             conn.execute("UPDATE items SET status=?, last_error=? WHERE item_id=?", (e.code, e.message[:500], item_id))
         else:   # status stays good, but the reason stays too: a stale alert and doctor say what every try hit (apply_page clears it)
+            result["applied"] = bool(conn.execute("SELECT last_synced_at IS ? FROM items WHERE item_id=?", (now, item_id)).fetchone()[0])   # pages landed before the outage
             conn.execute("UPDATE items SET last_error=? WHERE item_id=? AND status='good' AND last_synced_at IS NOT ?",   # a page this run: it synced
                          (f"{e.code}: {e.message}"[:500], item_id, now))
         result["error"] = e.code
@@ -245,6 +246,10 @@ def sync_item(conn: sqlite3.Connection, item_id: str, token: str | None = None) 
         conn.execute("UPDATE items SET status='SYNC_ERROR', last_error=? WHERE item_id=?", (f"{type(e).__name__}: {e}"[:500], item_id))
         result["error"] = "SYNC_ERROR"
         log.exception("sync %s failed unexpectedly", item_id)
+    try:   # a bank that synced good again closes its health alert now (#48), not at the next cycle's detect; `finnamon sync` has none
+        detect.resolve_recovered(conn)
+    except sqlite3.Error:   # never what this sync is judged by: the next cycle's detect tries again
+        log.exception("resolving recovered sync_health alerts failed")
     return result
 
 
