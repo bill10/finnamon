@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from xml.sax.saxutils import escape as xml_escape
+from xml.sax.saxutils import escape as xml_escape, unescape as xml_unescape
 
 from . import assistant, config
 
@@ -37,7 +37,7 @@ def real_home() -> Path:
 def _unit_home(text: str, darwin: bool) -> str | None:
     """The FINNAMON_HOME a rendered plist or unit was written for."""
     m = re.search(r"<key>FINNAMON_HOME</key><string>([^<]*)</string>" if darwin else r"^Environment=FINNAMON_HOME=(.*)$", text, re.M)
-    return m.group(1) if m else None
+    return (xml_unescape(m.group(1)) if darwin else m.group(1)) if m else None
 
 
 def _same_home(a, b) -> bool:
@@ -107,7 +107,7 @@ def env_path() -> str:
 
 
 def plist(name: str, args: list[str], keepalive: bool, interval: int | None, log_dir: Path) -> str:
-    argv = "\n".join(f"      <string>{a}</string>" for a in args)
+    argv = "\n".join(f"      <string>{xml_escape(a)}</string>" for a in args)
     extra = "    <key>KeepAlive</key><true/>\n" if keepalive else f"    <key>StartInterval</key><integer>{interval}</integer>\n"
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -119,15 +119,15 @@ def plist(name: str, args: list[str], keepalive: bool, interval: int | None, log
 {argv}
     </array>
 {extra}    <key>RunAtLoad</key><true/>
-    <key>WorkingDirectory</key><string>{repo_dir()}</string>
+    <key>WorkingDirectory</key><string>{xml_escape(str(repo_dir()))}</string>
     <key>EnvironmentVariables</key>
     <dict>
-      <key>PATH</key><string>{env_path()}</string>
-      <key>HOME</key><string>{Path.home()}</string>
-      <key>FINNAMON_HOME</key><string>{config.home()}</string>{web_hosts_env("plist") if name == "web" else ""}
+      <key>PATH</key><string>{xml_escape(str(env_path()))}</string>
+      <key>HOME</key><string>{xml_escape(str(Path.home()))}</string>
+      <key>FINNAMON_HOME</key><string>{xml_escape(str(config.home()))}</string>{web_hosts_env("plist") if name == "web" else ""}
     </dict>
-    <key>StandardOutPath</key><string>{log_dir}/{name}.log</string>
-    <key>StandardErrorPath</key><string>{log_dir}/{name}.err</string>
+    <key>StandardOutPath</key><string>{xml_escape(str(log_dir))}/{name}.log</string>
+    <key>StandardErrorPath</key><string>{xml_escape(str(log_dir))}/{name}.err</string>
 </dict>
 </plist>
 """
