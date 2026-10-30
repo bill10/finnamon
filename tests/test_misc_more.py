@@ -330,3 +330,17 @@ def test_terminate_all_survives_a_child_that_is_already_gone(monkeypatch):
     with claude_runner._LIVE_LOCK:
         claude_runner._LIVE.add(999)
     assert claude_runner.terminate_all() == 1   # counted as signalled; a dead child needs no further action
+
+
+def test_plist_escapes_paths_and_home_round_trips(monkeypatch, tmp_path):
+    import plistlib
+    home = tmp_path / "Money & Bills <x>" / ".finnamon"
+    monkeypatch.setenv("FINNAMON_HOME", str(home))
+    monkeypatch.setattr(scheduler, "repo_dir", lambda: str(tmp_path / "R&D" / "<repo>"))
+    text = scheduler.plist("daemon", ["/a&b/finnamon", "daemon"], True, None, tmp_path / "L&<logs>")
+    d = plistlib.loads(text.encode())
+    assert d["ProgramArguments"] == ["/a&b/finnamon", "daemon"]
+    assert d["WorkingDirectory"] == str(tmp_path / "R&D" / "<repo>")
+    assert d["EnvironmentVariables"]["FINNAMON_HOME"] == str(home)
+    assert d["StandardOutPath"] == f"{tmp_path / 'L&<logs>'}/daemon.log"
+    assert scheduler._unit_home(text, True) == str(home)
