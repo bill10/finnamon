@@ -3,6 +3,11 @@
 All notable changes to Finnamon are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.57.4.0] - 2026-10-30
+
+### Fixed
+- **A path with `&` or `<` no longer breaks the macOS launchd install.** Every value in the generated plist is now XML-escaped (and unescaped when the installed home is read back), so a repo under `R&D/` or a home like `Money & Bills/.finnamon` installs and doesn't report drift forever.
+
 ## [0.57.3.0] - 2026-10-30
 
 ### Fixed
