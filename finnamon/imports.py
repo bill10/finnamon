@@ -13,11 +13,14 @@ import csv
 import hashlib
 import io
 import json
+import logging
 import re
 import sqlite3
 from datetime import datetime
 
-from . import budgets, owners as owners_mod, store
+from . import budgets, detect, owners as owners_mod, store
+
+log = logging.getLogger("finnamon.imports")
 
 KINDS = {"checking": ("depository", "checking"), "savings": ("depository", "savings"), "credit": ("credit", "credit card"),
          "loan": ("loan", "loan"), "investment": ("investment", "brokerage")}
@@ -230,6 +233,11 @@ def apply(conn: sqlite3.Connection, account_id: str, parsed: dict, flip: bool = 
                          (account_id, now, balance, balance if acct["type"] == "depository" else None))
         if recs:   # a file with no readable row is not an import: the "nothing imported since" nag stays right
             conn.execute("UPDATE items SET last_synced_at=?, first_synced_at=COALESCE(first_synced_at, ?), status='good', last_error=NULL WHERE item_id=?", (now, now, acct["item_id"]))
+    if recs:
+        try:   # the "nothing imported since" alert closes now, as a sync's does (#48); never at the cost of the import
+            detect.resolve_recovered(conn)
+        except sqlite3.Error:   # the next cycle's detect tries again
+            log.exception("resolving recovered sync_health alerts failed")
     # A bank's file has no categories: those rows count toward no budget, and money out reads as spending (a transfer too) until
     # someone says what they are. Say how many, by merchant; never guess them here.
     unc = budgets.uncategorized(conn, [x[0] for x in new])

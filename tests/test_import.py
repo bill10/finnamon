@@ -128,6 +128,8 @@ def test_sync_health_nags_after_import_max_age_days_only(conn):
     assert p["item_id"] == "manual:hsbc" and p["source"] == "manual" and "hasn't been imported since Aug 20" in notify.render(a) and "Import CSV" in notify.render(a)
     store.set_setting(conn, "import_max_age_days", 60)
     assert not [i for i in detect.run(conn, "2026-09-27 12:00:00", only=["sync_health"]) if "manual" in conn.execute("SELECT key FROM alerts WHERE id=?", (i,)).fetchone()[0]]
+    imports.apply(conn, acct, imports.parse(HSBC), now="2026-09-27 13:00:00")   # an import closes it at once, not at the next cycle (#48)
+    assert conn.execute("SELECT resolution FROM alerts WHERE id=?", (a["id"],)).fetchone()[0] == "recovered"
 
 
 def test_cli_account_add_import_and_gates(home, conn, capsys, monkeypatch, tmp_path):

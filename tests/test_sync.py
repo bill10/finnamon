@@ -147,6 +147,27 @@ def test_recurring_first_seen_never_updated(conn, item, monkeypatch):
     assert conn.execute("SELECT is_active FROM recurring").fetchone()[0] == 0
 
 
+# Value: protects=a re-login alert closes 'recovered' as soon as a sync brings its bank back (#48), not at the next cycle's
+# detect; fails_when=sync_item stops calling detect.resolve_recovered; why_new=`finnamon sync` and the re-login tick run no detect; seam=none
+def test_a_good_sync_closes_the_re_login_alert_without_waiting_for_detect(conn, item, monkeypatch):
+    from finnamon import detect
+    err = PlaidError({"error_code": "ITEM_LOGIN_REQUIRED", "error_message": "the login details of this item have changed"})
+    monkeypatch.setattr(plaid_api, "accounts_get", lambda tok: (_ for _ in ()).throw(err))
+    sync.sync_item(conn, "item1", "tok")
+    detect.run(conn, AS_OF, only=["sync_health"])
+    assert tuple(conn.execute("SELECT json_extract(payload_json, '$.status'), resolved_at FROM alerts").fetchone()) == ("ITEM_LOGIN_REQUIRED", None)
+    monkeypatch.setattr(sync, "sync_accounts", lambda *a: [])
+    monkeypatch.setattr(sync, "sync_transactions", lambda c_, item, tok, now: sync.apply_page(c_, item, page([], cursor="c1"), now))
+    rate = PlaidError({"error_code": "RATE_LIMIT", "error_type": "RATE_LIMIT_EXCEEDED", "error_message": "slow down"})
+    monkeypatch.setattr(sync, "sync_recurring", lambda *a: (_ for _ in ()).throw(rate))
+    assert sync.sync_item(conn, "item1", "tok")["error"] == "RATE_LIMIT"   # the pages applied; only recurring hit a limit: good, fresh, no error
+    assert tuple(conn.execute("SELECT status, last_error FROM items").fetchone()) == ("good", None)
+    assert conn.execute("SELECT resolution FROM alerts").fetchone()[0] == "recovered"
+    def locked(c_): raise __import__("sqlite3").OperationalError("database is locked")
+    monkeypatch.setattr(detect, "resolve_recovered", locked)
+    assert sync.sync_item(conn, "item1", "tok")["error"] == "RATE_LIMIT"   # closing alerts failed: the sync's own result still stands
+
+
 def test_sync_all_uses_tokens_and_never_raises(conn, item, monkeypatch):
     from finnamon import config
     monkeypatch.setattr(config, "item_tokens", lambda: {"item1": "tok"})
