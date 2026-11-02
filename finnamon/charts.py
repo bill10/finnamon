@@ -10,7 +10,7 @@ import re
 import sqlite3
 import sys
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from . import budgets, config, query, store, taxonomy
@@ -70,10 +70,12 @@ def render(conn: sqlite3.Connection, name: str, arg: str | None = None, months: 
         bars = ax.bar(x, [p["spent"] for p in pts], color=[OVER if p["status"] == "over limit" else WITHIN for p in pts])
         if pts:
             bars[-1].set_alpha(0.45)   # this month is partial: paler
+            if pts[-1].get("here") is not None:   # a non-monthly budget's window: where today falls, as a share of its limit
+                ax.plot([len(pts) - 1], [pts[-1]["here"]], marker="_", markersize=28, mew=3, color="#333", label="you are here")
         line, = ax.plot(x, [p["limit"] for p in pts], color="#c9a227", lw=2.5, marker="o", label="limit")
         ax.set_xticks(x); ax.set_xticklabels([p["label"] for p in pts], fontsize=8, rotation=45 if len(pts) > 8 else 0, ha="right" if len(pts) > 8 else "center")
         ax.set_title(f"Budget trend: {_title(b['name'])} (paler = month to date)")
-        ax.legend(handles=[Patch(color=WITHIN, label="within limit"), Patch(color=OVER, label="over limit"), line], fontsize=8)
+        ax.legend(handles=[Patch(color=WITHIN, label="within limit"), Patch(color=OVER, label="over limit"), line, *ax.get_lines()[1:]], fontsize=8)
     elif name == "spend_by_category":
         rows = conn.execute(SPEND_BY_CATEGORY, (f"-{months} months",)).fetchall()
         ax.barh([_cat(r[0]) for r in rows], [r[1] for r in rows], color="#4a7ebb"); ax.invert_yaxis(); ax.xaxis.set_major_formatter(dollars)
@@ -176,8 +178,9 @@ def spec(conn: sqlite3.Connection, name: str, arg: str | None = None, months: in
             return {**base, "title": "Budget trend", "data": {"values": []}, "mark": "bar"}
         ov = _budget_overall(series)
         b, pts = _budget_pick(series + [ov], arg)   # Overall last here, so the default pick stays a real budget; first in the page's picker
-        values = [{"budget": c["name"], "month": p["label"], "spent": p["spent"], "limit": p["limit"], "period": p["period"], "status": p["status"]}
-                  for c, ps in [ov] + series for p in ps]
+        values = [{"budget": c["name"], "month": p["label"], "spent": p["spent"], "limit": p["limit"], "period": p["period"], "status": p["status"],
+                   "here": p.get("here")} for c, ps in [ov] + series for p in ps]
+        periods = any(c["period"] != "monthly" for c, _ in series)   # a non-monthly budget's current window has a "you are here" mark
         tip = [{"field": "month"}, {"field": "spent", "format": "$,.0f"}, {"field": "limit", "format": "$,.0f"}]
         y = {"type": "quantitative", "title": "$"}
         return {**base, "title": f"Budget trend: {_title(b['name'])}", "data": {"values": values},
@@ -187,10 +190,13 @@ def spec(conn: sqlite3.Connection, name: str, arg: str | None = None, months: in
                 "encoding": {"x": {"field": "month", "type": "ordinal", "title": None, "sort": [p["label"] for p in pts], "axis": {"labelAngle": 0}}},
                 # the "" entry takes the theme's pale first colour; within, over and the limit line take the next three
                 "layer": [{"mark": "bar", "encoding": {"y": {**y, "field": "spent"}, "tooltip": tip,
-                                                       "color": {"field": "status", "title": None, "scale": {"domain": ["", "within limit", "over limit", "limit"]},
-                                                                 "legend": {"values": ["within limit", "over limit", "limit"]}},
+                                                       "color": {"field": "status", "title": None, "scale": {"domain": ["", "within limit", "over limit", "limit"] + (["you are here"] if periods else [])},
+                                                                 "legend": {"values": ["within limit", "over limit", "limit"] + (["you are here"] if periods else [])}},
                                                        "opacity": {"field": "period", "type": "nominal", "scale": {"domain": ["full month", "month to date"], "range": [1, 0.45]}, "legend": None}}},
-                          {"mark": {"type": "line", "point": True, "strokeWidth": 2.5}, "encoding": {"y": {**y, "field": "limit"}, "color": {"datum": "limit"}, "tooltip": tip}}]}
+                          {"mark": {"type": "line", "point": True, "strokeWidth": 2.5}, "encoding": {"y": {**y, "field": "limit"}, "color": {"datum": "limit"}, "tooltip": tip}}]
+                         # the limit spread evenly over the window, at today: spending under it is on track (a null here draws nothing)
+                         + ([{"mark": {"type": "tick", "thickness": 3}, "encoding": {"y": {**y, "field": "here"}, "color": {"datum": "you are here"},
+                                                                                 "tooltip": [{"field": "month"}, {"field": "here", "title": "you are here", "format": "$,.0f"}]}}] if periods else [])}
     if name == "spend_by_category":
         rows = conn.execute(SPEND_BY_CATEGORY, (f"-{months} months",)).fetchall()
         return {**base, "title": f"Spend by category, last {months} months", "data": {"values": [{"category": _cat(r[0]), "amount": r[1]} for r in rows]},
@@ -239,10 +245,40 @@ def _budget_trend(conn: sqlite3.Connection, months: int = 12) -> list[tuple[dict
         # the month its first limit took effect (created_at for a budget older than the limit history), never past today: Overall counts it from there
         since = conn.execute("SELECT COALESCE((SELECT min(effective_from) FROM budget_limit_history WHERE budget_id=:id), "
                              "(SELECT created_at FROM budgets WHERE id=:id))", {"id": b["id"]}).fetchone()[0] or as_of
-        out.append(({**b, "since": min(since, as_of)[:7]}, [{"ym": ym, "label": labels[ym] + (" (so far)" if i == last else ""), "spent": v, "limit": lim,
-                         "period": "month to date" if i == last else "full month", "status": "over limit" if v > lim else "within limit"}
-                        for i, (ym, v, lim) in enumerate(pts)]))
+        monthly = [{"ym": ym, "label": labels[ym] + (" (so far)" if i == last else ""), "spent": v, "limit": lim,
+                    "period": "month to date" if i == last else "full month", "status": "over limit" if v > lim else "within limit"}
+                   for i, (ym, v, lim) in enumerate(pts)]
+        b = {**b, "since": min(since, as_of)[:7], "months": monthly}   # months: what Overall sums
+        if b["period"] != "monthly":
+            b["months"], monthly = _period_points(conn, b, months, as_of, first, monthly)
+        out.append((b, monthly))
     return out
+
+
+def _period_points(conn: sqlite3.Connection, b: dict, months: int, as_of: str, first: str, monthly: list[dict]) -> tuple[list[dict], list[dict]]:
+    """A non-monthly budget's trend: (its months for Overall, each its window's spending and limit over the months in the
+    period; one point per window, the current one so far, with `here`: where today falls in it, as a share of the limit)."""
+    n = budgets.PERIODS[b["period"]]
+    raw = budgets.monthly_spent(conn, b["id"], months + 12, as_of)   # a year more: the oldest month shown has its whole window
+    wins: dict[str, dict] = {}
+    for ym, v, lim in raw:
+        s, e = budgets.window(b["period"], b["anchor"], ym + "-01")
+        w = wins.setdefault(s, {"start": s, "end": e, "spent": 0.0})
+        w["spent"] += v; w["limit"] = lim   # the limit in effect at the window's last month so far
+    cur = budgets.window(b["period"], b["anchor"], as_of)[0]
+    month_pts = [{**p, "spent": round(wins[budgets.window(b["period"], b["anchor"], p["ym"] + "-01")[0]]["spent"] / n, 2), "limit": p["limit"] / n}
+                 for p in monthly]
+    shown = [w for s, w in sorted(wins.items()) if w["end"][:7] >= first][-max(1, months // n):]
+    pts = []
+    for w in shown:
+        s, e = date.fromisoformat(w["start"]), date.fromisoformat(w["end"])
+        label = str(e.year) if n == 12 and s.month == 1 else f"{s:%b}–{e:%b}" + (f" {e.year}" if s.month == 1 or w is shown[0] or s.year != e.year else "")
+        now = w["start"] == cur
+        spent = round(w["spent"], 2)
+        pts.append({"ym": w["start"][:7], "label": label + (" (so far)" if now else ""), "spent": spent, "limit": w["limit"],
+                    "period": "month to date" if now else "full month", "status": "over limit" if spent > w["limit"] else "within limit",
+                    "here": round(w["limit"] * b["here"], 2) if now else None})
+    return month_pts, pts
 
 
 # Overall's name in the data and the picker: budget_set strips names, so no budget can be called this. "overall" (the CLI's
@@ -253,10 +289,10 @@ OVERALL = " overall"
 def _budget_overall(series: list) -> tuple[dict, list[dict]]:
     """Every budget summed, month by month: spent against the sum of the limits, drawn as one budget is. A month counts a budget
     only from the month its first limit took effect, and a month no budget covers yet is left out, so a budget set up last
-    month does not lift the older months' line. Every budget is monthly, so the periods line up."""
+    month does not lift the older months' line. A non-monthly budget counts its monthly share (budgets.overall's rule)."""
     months: dict[str, dict] = {}
-    for b, pts in series:
-        for p in pts:
+    for b, _ in series:
+        for p in b.get("months", []):
             if p["ym"] >= b["since"]:
                 m = months.setdefault(p["ym"], {**p, "spent": 0.0, "limit": 0.0})
                 m["spent"] += p["spent"]; m["limit"] += p["limit"]
@@ -264,7 +300,8 @@ def _budget_overall(series: list) -> tuple[dict, list[dict]]:
     for _, m in sorted(months.items()):
         spent, limit = round(m["spent"], 2), round(m["limit"], 2)
         pts.append({**m, "spent": spent, "limit": limit, "status": "over limit" if spent > limit else "within limit"})
-    spent, limit = sum(b["spent"] for b, _ in series), sum(b["monthly_limit"] for b, _ in series)
+    spent = sum(b["spent"] / budgets.PERIODS[b["period"]] for b, _ in series)
+    limit = sum(budgets.monthly_share(b) for b, _ in series)
     return {"name": OVERALL, "spent": round(spent, 2), "monthly_limit": limit}, pts
 
 

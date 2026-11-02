@@ -30,7 +30,7 @@ def test_every_typed_amount_takes_dollars_and_commas(conn, capsys):
     assert properties.set_value(conn, "Car", "$21,500")["value"] == 21500
     with pytest.raises(SystemExit):
         cli.main(["budget", "set", "groceries", "lots"])
-    assert "monthly limit must be a number of dollars" in capsys.readouterr().err
+    assert "limit must be a number of dollars" in capsys.readouterr().err
 
 
 def test_property_remove_says_so_for_a_person_and_stays_json_in_a_pipe(conn, capsys, monkeypatch):

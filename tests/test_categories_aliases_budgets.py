@@ -60,7 +60,7 @@ def test_overlapping_budgets_warn_and_overall_counts_each_charge_once(conn):
     assert sum(b["spent"] for b in budgets.budget_list(conn, AS_OF)) == 220   # what the old Overall added up
     # the same category before any charge is an overlap too
     budgets.budget_remove(conn, "eating")   # a removed budget leaves Overall: its limit and its charges
-    assert budgets.overall(conn, AS_OF) == {"spent": 60, "limit": 400, "uncategorized": 0}
+    assert budgets.overall(conn, AS_OF) == {"spent": 60, "limit": 400, "over": [], "uncategorized": 0}
     budgets.budget_set(conn, "travel", 100)
     assert budgets.budget_set(conn, "trips", 100, ["TRAVEL_FLIGHTS"])["overlaps"] == [{"budget": "travel", "charges": 0}]
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import difflib
 import json
+from datetime import date, timedelta
 import math
 import re
 import sqlite3
@@ -59,6 +60,40 @@ def _cat_name(code: str) -> str:
 
 # --- budgets ---------------------------------------------------------------------------------
 
+# A budget's period: its limit is per period, and spending counts over the window holding the day asked about.
+PERIODS = {"monthly": 1, "bimonthly": 2, "quarterly": 3, "yearly": 12}   # months in one; each divides 12
+PER = {"monthly": "month", "bimonthly": "2 months", "quarterly": "quarter", "yearly": "year"}
+MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]
+
+
+def window(period: str, anchor: int | None, as_of: str) -> tuple[str, str]:
+    """(first day, last day) of the period's window that holds as_of: windows start in the anchor month (None: January) and
+    every PERIODS[period] months after it. The one place this is worked out in Python; detectors/rules/budget_pace.sql
+    has the same arithmetic in SQL (KEEP IN STEP: tests/test_budget_period.py checks the two agree)."""
+    n = PERIODS[period]
+    m = int(as_of[:4]) * 12 + int(as_of[5:7]) - 1
+    first = m - (int(as_of[5:7]) - (anchor or 1)) % n
+    start, after = date(first // 12, first % 12 + 1, 1), date((first + n) // 12, (first + n) % 12 + 1, 1)
+    return start.isoformat(), (after - timedelta(days=1)).isoformat()
+
+
+def monthly_share(b: dict) -> float:
+    """What a budget is worth in one month: its limit over the months in its period (a $120 bill every 2 months is $60)."""
+    return b["limit"] / PERIODS[b["period"]]
+
+
+def parse_anchor(text) -> int | None:
+    """--anchor: a month as 1-12, or its name ("March", "mar")."""
+    if text is None or str(text).strip() == "":
+        return None
+    t = str(text).strip().lower()
+    if t.isdigit() and 1 <= int(t) <= 12:
+        return int(t)
+    if len(t) >= 3 and (hit := [i for i, m in enumerate(MONTHS, 1) if m.startswith(t)]):
+        return hit[0]
+    raise ValueError(f"--anchor is the month a period starts in, 1-12 or its name (March), not '{text}'")
+
+
 def _positive(amount, what: str) -> float:
     try:
         v = store.parse_amount(amount, what)
@@ -70,28 +105,38 @@ def _positive(amount, what: str) -> float:
 
 
 def budget_set(conn: sqlite3.Connection, name: str, amount: float, categories: list[str] | str | None = None,
-               merchants: list[str] | None = None, fixed: bool | None = None) -> dict:
+               merchants: list[str] | None = None, fixed: bool | None = None, period: str | None = None, anchor=None) -> dict:
     """Categories and merchants given replace the budget's selectors; none given keeps an existing budget's (the
     dashboard's limit edit, or re-adding a removed one) and a new one takes its name as the category. fixed None keeps
     what it was, except that a removed budget comes back not fixed. A merchant is any name the household sees for it
     (resolve_merchant: all its canonicals; a name with no charge is refused with suggestions); the reply carries how many
-    past spending charges each one matches."""
+    past spending charges each one matches. period None keeps the budget's (a new one is monthly); the limit is per
+    period. anchor (a month) None keeps the budget's when its period stays non-monthly; a monthly budget has none."""
     name = name.strip().lower()
-    amount = _positive(amount, "monthly limit")
+    amount = _positive(amount, "limit")
+    if period is not None and (period := str(period).strip().lower()) not in PERIODS:
+        raise ValueError(f"--period is one of {', '.join(PERIODS)}, not '{period}'")
+    anchor = parse_anchor(anchor)
     categories = [categories] if isinstance(categories, str) else list(categories or [])
     merchants = list({m.strip().lower(): m.strip() for m in merchants or []}.values())   # "Recology" and "recology" are one
     with store.tx(conn):   # one write, read and all: a crash or a concurrent edit mid-way would leave a budget counting nothing
-        old = conn.execute("SELECT id FROM budgets WHERE name=?", (name,)).fetchone()
+        old = conn.execute("SELECT id, period, anchor FROM budgets WHERE name=?", (name,)).fetchone()
+        period = period or (old["period"] if old else "monthly")
+        if period == "monthly":
+            if anchor is not None:
+                raise ValueError("--anchor sets where a bimonthly, quarterly or yearly period starts; a monthly budget starts on the 1st (add --period)")
+        elif anchor is None and old and old["period"] != "monthly":
+            anchor = old["anchor"]
         keep = not (categories or merchants) and old and conn.execute("SELECT 1 FROM budget_selectors WHERE budget_id=?", (old[0],)).fetchone()
         texts = [] if keep else categories or ([] if merchants else [name])
         read = {t: _budget_codes(t, not categories) for t in texts}
         codes = list(dict.fromkeys(c for cs in read.values() for c in cs))
         sel = [("category", c, None) for c in codes] + [("merchant", c, m) for m in merchants for c in resolve_merchant(conn, m)["canonicals"]]
         conn.execute(
-            "INSERT INTO budgets (name, category, monthly_limit, active, fixed) VALUES (?,?,?,1,?) "
+            "INSERT INTO budgets (name, category, monthly_limit, active, fixed, period, anchor) VALUES (?,?,?,1,?,?,?) "
             "ON CONFLICT(name) DO UPDATE SET category=CASE WHEN ? THEN category ELSE excluded.category END, monthly_limit=excluded.monthly_limit, "
-            "fixed=CASE WHEN active=1 THEN COALESCE(?, fixed) ELSE excluded.fixed END, active=1",
-            (name, codes[0] if codes else "", amount, int(bool(fixed)), bool(keep), None if fixed is None else int(fixed)))
+            "fixed=CASE WHEN active=1 THEN COALESCE(?, fixed) ELSE excluded.fixed END, active=1, period=excluded.period, anchor=excluded.anchor",
+            (name, codes[0] if codes else "", amount, int(bool(fixed)), period, anchor, bool(keep), None if fixed is None else int(fixed)))
         bid = conn.execute("SELECT id FROM budgets WHERE name=?", (name,)).fetchone()[0]
         if not keep:
             conn.execute("DELETE FROM budget_selectors WHERE budget_id=?", (bid,))
@@ -132,13 +177,14 @@ def budget_remove(conn: sqlite3.Connection, name: str) -> bool:
 
 def _budgets(conn: sqlite3.Connection, where: str, args: tuple = ()) -> list[dict]:
     out = []
-    for b in conn.execute(f"SELECT id, name, category, monthly_limit, fixed FROM budgets {where} ORDER BY name", args).fetchall():
+    for b in conn.execute(f"SELECT id, name, category, monthly_limit, fixed, period, anchor FROM budgets {where} ORDER BY name", args).fetchall():
         sel = conn.execute("SELECT kind, value, label FROM budget_selectors WHERE budget_id=? ORDER BY rowid", (b["id"],)).fetchall()
         cats = [s["value"] for s in sel if s["kind"] == "category"]
         merchants = list(dict.fromkeys(s["label"] or s["value"] for s in sel if s["kind"] == "merchant"))   # one name, maybe several canonicals
         out.append({"id": b["id"], "name": b["name"], "category": cats[0] if cats else None,   # the first, as before selectors
                     "categories": cats, "merchants": merchants, "covers": [taxonomy.label(c) for c in cats] + merchants,   # covers: the dashboard's line
-                    "fixed": bool(b["fixed"]), "monthly_limit": b["monthly_limit"]})
+                    "fixed": bool(b["fixed"]), "period": b["period"], "anchor": None if b["period"] == "monthly" else (b["anchor"] or 1),
+                    "limit": b["monthly_limit"], "monthly_limit": b["monthly_limit"]})   # monthly_limit: the limit per period, named before periods
     return out
 
 
@@ -148,9 +194,17 @@ def budget_list(conn: sqlite3.Connection, as_of: str | None = None) -> list[dict
     for b in _budgets(conn, "WHERE active=1"):
         day = int(as_of[8:10])
         days = conn.execute("SELECT CAST(strftime('%d', date(?, 'start of month', '+1 month', '-1 day')) AS INTEGER)", (as_of,)).fetchone()[0]
-        mtd, rec = month_to_date(conn, b["id"], as_of)
-        pace = mtd if b["fixed"] else max(mtd, rec + (mtd - rec) * days / day)   # a refund never projects below what is spent
-        out.append({**b, "spent": round(mtd, 2), "recurring": round(rec, 2), "day": day, "pace": round(pace, 2)})
+        start, end = window(b["period"], b["anchor"], as_of)
+        mtd, rec = month_to_date(conn, b["id"], as_of, start)
+        if b["period"] == "monthly":
+            pace = mtd if b["fixed"] else max(mtd, rec + (mtd - rec) * days / day)   # a refund never projects below what is spent
+        else:   # a bill every few months or a year's lumpy spending: compared to its limit as it stands, never projected
+            pace = mtd
+        # here: how far through its window as_of is, 0..1 (the chart's "you are here")
+        here = ((date.fromisoformat(as_of[:10]) - date.fromisoformat(start)).days + 1) / ((date.fromisoformat(end) - date.fromisoformat(start)).days + 1)
+        out.append({**b, "spent": round(mtd, 2), "recurring": round(rec, 2), "day": day, "pace": round(pace, 2),
+                    "window_start": start, "window_end": end, "here": round(here, 3), "left": round(b["limit"] - mtd, 2),
+                    "monthly_share": round(monthly_share(b), 2)})
     return out
 
 
@@ -189,19 +243,28 @@ RECURRING = ("(t.flow = 'mortgage' OR EXISTS (SELECT 1 FROM recurring r WHERE r.
 # a reworded MATCH must keep this scope clause (the assert says so at import, not as a silently double-counting Overall).
 assert "s.budget_id = :bid" in MATCH
 ANY_BUDGET = MATCH.replace("s.budget_id = :bid", "s.budget_id IN (SELECT id FROM budgets WHERE active = 1)")
+ANY_MONTHLY = MATCH.replace("s.budget_id = :bid", "s.budget_id IN (SELECT id FROM budgets WHERE active = 1 AND period = 'monthly')")
+ANY_OTHER = MATCH.replace("s.budget_id = :bid", "s.budget_id IN (SELECT id FROM budgets WHERE active = 1 AND period <> 'monthly')")
 UNCATEGORIZED = "category IS NULL AND pending = 0 AND flow IN ('expense', 'refund', 'income')"   # not a paired transfer; an imported transfer-in reads as income until categorized   # the Budgets card's count and charts' uncategorized table: one rule
 UNCATEGORIZED_SHOWN = 20   # merchants, and ids per merchant, in a reply; the count is always the whole
 
 
 def overall(conn: sqlite3.Connection, as_of: str | None = None) -> dict:
-    """The dashboard's Overall: this month's spending any budget counts, each charge once; the limits' sum; and how many
-    transactions have no category at all (an import's rows: they count toward no budget until someone categorizes them)."""
+    """The dashboard's Overall, for this month: the spending monthly budgets count, each charge once, plus each other
+    budget's window spending over the months in its period (a $120 water bill every 2 months is $60 a month, in the bill's
+    month and the one without); the limit is each budget's monthly share summed. `over` names every budget over its own
+    limit, so underspending in one can't hide another that is over. And how many transactions have no category at all
+    (an import's rows: they count toward no budget until someone categorizes them)."""
     as_of = as_of or store.now_local()
+    rows = budget_list(conn, as_of)
+    # ponytail: a charge two non-monthly budgets share counts in each; per-charge proration if households do that
     spent = conn.execute(f"SELECT COALESCE(SUM(amount),0) FROM tx_now t WHERE pending=0 AND date >= date(:as_of, 'start of month') AND date <= date(:as_of) "
-                         f"AND {SPEND} AND {ANY_BUDGET}", {"as_of": as_of}).fetchone()[0]
-    limit = conn.execute("SELECT COALESCE(SUM(monthly_limit),0) FROM budgets WHERE active=1").fetchone()[0]
+                         f"AND {SPEND} AND {ANY_MONTHLY} AND NOT {ANY_OTHER}", {"as_of": as_of}).fetchone()[0]
+    spent += sum(b["spent"] / PERIODS[b["period"]] for b in rows if b["period"] != "monthly")
+    limit = sum(monthly_share(b) for b in rows)
     n = conn.execute(f"SELECT count(*) FROM tx_now WHERE {UNCATEGORIZED}").fetchone()[0]
-    return {"spent": round(float(spent), 2), "limit": round(float(limit), 2), "uncategorized": n}
+    over = [{"budget": b["name"], "spent": b["spent"], "limit": b["limit"], "period": b["period"]} for b in rows if b["spent"] > b["limit"]]
+    return {"spent": round(float(spent), 2), "limit": round(float(limit), 2), "over": over, "uncategorized": n}
 
 
 def uncategorized(conn: sqlite3.Connection, transaction_ids: list[str] | None = None) -> dict:
@@ -217,13 +280,13 @@ def uncategorized(conn: sqlite3.Connection, transaction_ids: list[str] | None = 
                           for r in rows][:UNCATEGORIZED_SHOWN]}
 
 
-def month_to_date(conn: sqlite3.Connection, budget_id: int, as_of: str) -> tuple[float, float]:
-    """(spent, the part of it that is recurring charges)."""
+def month_to_date(conn: sqlite3.Connection, budget_id: int, as_of: str, start: str | None = None) -> tuple[float, float]:
+    """(spent from start, the month's first day unless given, to as_of; the part of it that is recurring charges)."""
     r = conn.execute(
         f"SELECT COALESCE(SUM(amount),0), COALESCE(SUM(CASE WHEN {RECURRING} THEN amount END),0) FROM tx_now t "
-        "WHERE pending=0 AND date >= date(:as_of, 'start of month') AND date <= date(:as_of) "
+        "WHERE pending=0 AND date >= COALESCE(:start, date(:as_of, 'start of month')) AND date <= date(:as_of) "
         f"AND {SPEND} AND {MATCH}",
-        {"as_of": as_of, "bid": budget_id}).fetchone()
+        {"as_of": as_of, "bid": budget_id, "start": start}).fetchone()
     return float(r[0] or 0), float(r[1] or 0)
 
 
@@ -277,15 +340,28 @@ def suggest(conn: sqlite3.Connection, months: int = 6, as_of: str | None = None,
                     "variance_ratio": round((vals[-1] - vals[0]) / med, 2) if med else None,
                     "top_merchants": [{"merchant": t[0], "total": t[1]} for t in top]})
     out.sort(key=lambda c: -c["median"])
-    recurring = conn.execute("SELECT COALESCE(merchant_name, description) m, last_amount, frequency FROM recurring r JOIN accounts a ON a.account_id=r.account_id "
+    recurring = conn.execute("SELECT COALESCE(merchant_name, description) m, last_amount, frequency, last_date FROM recurring r JOIN accounts a ON a.account_id=r.account_id "
                              "AND a.mirror_of IS NULL WHERE direction='outflow' AND status<>'EARLY_DETECTION'"
                              + ("" if include_ended else f" AND NOT {STREAM_ENDED}") + " ORDER BY last_amount DESC").fetchall()
     low = conn.execute("SELECT a.name, a.mask, min(b.available) lo FROM balances b JOIN accounts a ON a.account_id=b.account_id "
                        "WHERE a.type='depository' AND a.mirror_of IS NULL AND b.as_of >= datetime(?, ?) GROUP BY a.account_id", (as_of, f"-{months} months")).fetchall()
     return {"months": months, "as_of": as_of, "categories": out,
-            "recurring": [{"merchant": r[0], "amount": r[1], "frequency": r[2]} for r in recurring],
+            "recurring": [{"merchant": r[0], "amount": r[1], "frequency": r[2], **_stream_period(r[2], r[3])} for r in recurring],
             "lowest_balances": [{"account": r[0], "mask": r[1], "lowest_available": r[2]} for r in low],
             "existing_budgets": budget_list(conn, as_of)}
+
+
+# Plaid's frequencies that a monthly budget fits badly, as a budget's period
+STREAM_PERIODS = {"BIMONTHLY": "bimonthly", "QUARTERLY": "quarterly", "ANNUALLY": "yearly"}
+
+
+def _stream_period(frequency: str | None, last_date: str | None) -> dict:
+    """A stream billed every few months: the period its budget should have, anchored on the month of its last bill, so
+    each window opens with a bill and one paid a few days late still lands in it."""
+    period = STREAM_PERIODS.get(str(frequency or "").upper())
+    if not period:
+        return {}
+    return {"period": period, "anchor": int(last_date[5:7]) if last_date else None}
 
 
 # --- thresholds, categories, aliases, suppressions ----------------------------------------------
@@ -554,6 +630,12 @@ NO_RULE_NOTES = {
                    "To change the limit: finnamon budget set \"{budget}\" <amount>.",
     "budget_pace:over": "Resolved for this month; the {budget} budget is over its limit and alerts again next month if it goes over again. "
                         "To change the limit: finnamon budget set \"{budget}\" <amount>.",
+    "budget_pace:over_period": "Resolved until {window_end}; the {budget} budget is over its limit for this period and alerts again in the next one "
+                               "if it goes over again. To change the limit: finnamon budget set \"{budget}\" <amount>.",
+    "budget_pace:used": "Resolved; the {budget} budget alerts again at its next mark (75%, then 100% of the year's limit). "
+                        "To change the limit: finnamon budget set \"{budget}\" <amount> --period yearly.",
+    "budget_pace:missing": "Resolved; the {budget} budget alerts again if a later period goes by with no charge either. "
+                           "If the bill moved, set where its period starts: finnamon budget set \"{budget}\" <amount> --anchor <month>.",
     "sync_health": "Resolved; it alerts again if {institution}'s problem changes, or if it syncs and then breaks again. Run finnamon doctor to see why it "
                    "isn't syncing; if the bank wants a new login, reconnect it from the dashboard's Accounts.",
 }
@@ -561,7 +643,8 @@ NO_RULE_NOTES = {
 
 def _no_rule_note(kind: str, p: dict) -> str:
     try:
-        kind = f"{kind}:over" if kind == "budget_pace" and p.get("state") == "over" else kind
+        if kind == "budget_pace" and p.get("state") in ("over", "used", "missing"):
+            kind = f"{kind}:" + ("over_period" if p["state"] == "over" and p.get("period", "monthly") != "monthly" else p["state"])
         return NO_RULE_NOTES[kind].format(**{k: v for k, v in p.items() if v is not None})
     except (KeyError, ValueError, TypeError):   # an older payload, or a kind with no note of its own
         return "Resolved; no rule applies to this kind of alert, so the next one still alerts."

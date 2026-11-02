@@ -709,3 +709,63 @@ def test_duplicate_charge_a_run_aging_out_of_the_lookback_does_not_alert_again(c
     assert len(run(conn, "duplicate_charge", "2026-09-19 12:00:00")) == 1
     for day in range(20, 29):
         assert run(conn, "duplicate_charge", f"2026-09-{day} 12:00:00") == []
+
+
+# --- budget_pace with a period (issue 53) ---------------------------------------------------------
+
+W = ("RENT_AND_UTILITIES", "RENT_AND_UTILITIES_WATER")
+
+
+def test_budget_pace_bimonthly_alerts_on_the_bill_not_the_pace(conn):
+    """hit: a bill over the window's limit; miss: a bill under it, never projected; dedup: once per window; baseline: a
+    new window starts over."""
+    seed(conn)
+    budgets.budget_set(conn, "water", 130, list(W[1:]), period="bimonthly", anchor=9)
+    txn(conn, "w1", "chk", "2026-09-06", 120, "SPU", "SPU", "mch_spu", *W)
+    assert run(conn, "budget_pace", "2026-09-07 12:00:00") == []          # $120 by day 7 would "pace" to $514 monthly: no projection
+    txn(conn, "w2", "chk", "2026-10-03", 40, "SPU", "SPU", "mch_spu", *W)   # the window holds both: 160 > 130
+    assert len(run(conn, "budget_pace", "2026-10-05 12:00:00")) == 1
+    assert run(conn, "budget_pace", "2026-10-20 12:00:00") == []          # dedup: same window
+    a = alerts(conn, "budget_pace")[-1]
+    assert a["key"] == "budget:1:2026-09:over"
+    assert (a["payload"]["state"], a["payload"]["window_start"], a["payload"]["window_end"], a["payload"]["period"]) == ("over", "2026-09-01", "2026-10-31", "bimonthly")
+    assert "$160.00 of your $130.00 for Sep 1 to Oct 31" in notify.render(conn.execute("SELECT * FROM alerts WHERE id=?", (a["id"],)).fetchone())
+    assert "Resolved until 2026-10-31" in budgets.normal(conn, alert_id=a["id"])["next"]
+    txn(conn, "w3", "chk", "2026-11-06", 120, "SPU", "SPU", "mch_spu", *W)
+    assert run(conn, "budget_pace", "2026-11-10 12:00:00") == []          # the next window starts at zero
+
+
+def test_budget_pace_bimonthly_missing_bill(conn):
+    seed(conn)
+    budgets.budget_set(conn, "water", 130, list(W[1:]), period="bimonthly", anchor=9)
+    conn.execute("UPDATE budgets SET created_at='2026-08-15 00:00:00'")
+    txn(conn, "w0", "chk", "2026-08-06", 120, "SPU", "SPU", "mch_spu", *W)   # the Jul-Aug bill
+    assert run(conn, "budget_pace", "2026-11-03 12:00:00") == []          # Sep-Oct had none, but day 3 < budget_min_day
+    txn(conn, "late", "chk", "2026-11-02", 120, "SPU", "SPU", "mch_spu", *W)
+    assert run(conn, "budget_pace", "2026-11-06 12:00:00") == []          # it came, late: no missing alert
+    conn.execute("DELETE FROM transactions WHERE transaction_id='late'")
+    ids = run(conn, "budget_pace", "2026-11-06 12:00:00")
+    a = alerts(conn, "budget_pace")[-1]
+    assert len(ids) == 1 and a["key"] == "budget:1:2026-09:missing" and (a["payload"]["window_start"], a["payload"]["window_end"]) == ("2026-09-01", "2026-10-31")
+    assert run(conn, "budget_pace", "2026-11-20 12:00:00") == []          # dedup
+    assert "No water charge yet" in notify.render(conn.execute("SELECT * FROM alerts WHERE id=?", (a["id"],)).fetchone())
+    budgets.budget_set(conn, "new water", 130, list(W[1:]), period="bimonthly", anchor=9)   # just created: it has no past window to miss
+    assert run(conn, "budget_pace", "2026-11-21 12:00:00") == []
+
+
+def test_budget_pace_yearly_thresholds(conn):
+    seed(conn)
+    budgets.budget_set(conn, "travel", 6000, ["travel"], period="yearly")
+    txn(conn, "f1", "cc", "2026-02-11", 2000, "DELTA", "Delta", "mch_delta", "TRAVEL", "TRAVEL_FLIGHTS")
+    assert run(conn, "budget_pace", "2026-02-20 12:00:00") == []          # 33% in February: no monthly pace alert
+    txn(conn, "f2", "cc", "2026-05-11", 1100, "DELTA", "Delta", "mch_delta", "TRAVEL", "TRAVEL_FLIGHTS")
+    assert len(run(conn, "budget_pace", "2026-05-12 12:00:00")) == 1     # 52%
+    assert run(conn, "budget_pace", "2026-05-13 12:00:00") == []          # dedup
+    txn(conn, "f3", "cc", "2026-08-11", 3500, "HOTEL", "Hotel", "mch_h", "TRAVEL", "TRAVEL_LODGING")   # 110%: past 75 and 100 at once, one alert
+    run(conn, "budget_pace", "2026-08-12 12:00:00")
+    got = alerts(conn, "budget_pace")
+    assert [a["key"] for a in got] == ["budget:1:2026-01:50", "budget:1:2026-01:over"]
+    assert (got[0]["payload"]["state"], got[0]["payload"]["used_pct"], got[0]["payload"]["left"]) == ("used", 50, 2900)
+    assert "Travel has used 50% of its year" in notify.render(conn.execute("SELECT * FROM alerts WHERE id=?", (got[0]["id"],)).fetchone())
+    assert "$2,900.00 left this year" in notify.render(conn.execute("SELECT * FROM alerts WHERE id=?", (got[0]["id"],)).fetchone())
+    assert run(conn, "budget_pace", "2027-01-05 12:00:00") == []          # a new year starts over

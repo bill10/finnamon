@@ -331,6 +331,7 @@ const catIcon = (b) => (CAT_ICONS.find(([re]) => re.test(`${b.name} ${(b.covers 
 const covers = (b) => (b.covers || []).length > 1 || (b.merchants || []).length || b.fixed ? [...(b.covers || []), ...(b.fixed ? ['fixed'] : [])].join(' · ') : '';
 const barState = (b) => b.spent > b.monthly_limit ? 'over' : (b.pace > b.monthly_limit || b.spent / b.monthly_limit > 0.8) ? 'warn' : '';
 const pctOf = (b) => Math.min(100, Math.round(100 * b.spent / b.monthly_limit));
+const PER = { bimonthly: ' per 2 mo', quarterly: ' per qtr', yearly: ' per yr' };   // a budget's limit is per its period (finnamon.budgets.PERIODS)
 
 function renderBudgets(s) {
   const bs = s.budgets, body = $('budgets-body');
@@ -347,7 +348,7 @@ function renderBudgets(s) {
   body.innerHTML = `<div class="overall"><div class="row"><span>Overall</span><span class="amt num">${money(spent)} <small>/ ${money(limit)}</small></span></div>` +
     `<div class="bar"><div class="fill ${left < 0 ? 'over' : pct > 80 || over ? 'warn' : ''}" style="width:${pct}%"></div></div><div class="note ${left < 0 || over ? 'over' : ''}">${note}</div></div>` +
     `<h3>${bs.length > 4 ? 'Top categories' : 'Categories'}</h3><div class="cats">` + top.map(b =>
-      `<div class="cat"><span class="ic">${icon(catIcon(b))}</span><span class="name">${esc(b.name)}</span><span class="amt num">${money(b.spent)} / ${money(b.monthly_limit)}</span>` +
+      `<div class="cat"><span class="ic">${icon(catIcon(b))}</span><span class="name">${esc(b.name)}</span><span class="amt num">${money(b.spent)} / ${money(b.monthly_limit)}${PER[b.period] || ''}</span>` +
       `<div class="bar"><div class="fill ${barState(b)}" style="width:${pctOf(b)}%"></div></div>${covers(b) ? `<span class="covers" title="${esc(covers(b))}">${esc(covers(b))}</span>` : ''}</div>`).join('') + '</div>' +
     uncatLine(s);
   $('uncat-open')?.addEventListener('click', openUncategorized);

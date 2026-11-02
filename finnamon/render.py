@@ -30,11 +30,24 @@ def alerts(rows: list[dict]) -> str:
     return "\n".join(lines) + "\n\nDismiss one: finnamon alerts --dismiss <id>   (add --json for the full records)"
 
 
+PER_SHORT = {"monthly": "", "bimonthly": "/2 mo", "quarterly": "/qtr", "yearly": "/yr"}
+
+
+def _pace(r: dict) -> str:
+    """The "On pace for" cell: a projection for a monthly budget; how much is left of a yearly one; a bill's window."""
+    p = r.get("period", "monthly")
+    if p == "yearly":
+        return f"{money(r['left'])} left this year" if r["left"] >= 0 else f"{money(-r['left'])} over this year"
+    if p != "monthly":
+        return f"{day(r['window_start'])} to {day(r['window_end'])}"
+    return money(r["pace"]) if not r["fixed"] else "fixed"
+
+
 def budgets(rows: list[dict]) -> str:
     if not rows:
         return "No budgets yet. Ask the assistant to set some up, or: finnamon budget set <name> <amount>"
-    body = [[r["name"].capitalize() if r["name"].islower() else r["name"], money(r["spent"]), money(r["monthly_limit"]),
-             money(r["pace"]) if not r["fixed"] else "fixed", ("OVER" if r["spent"] > r["monthly_limit"] else "") , ", ".join(r.get("covers") or [])] for r in rows]
+    body = [[r["name"].capitalize() if r["name"].islower() else r["name"], money(r["spent"]), money(r["monthly_limit"]) + PER_SHORT[r.get("period", "monthly")],
+             _pace(r), ("OVER" if r["spent"] > r["monthly_limit"] else "") , ", ".join(r.get("covers") or [])] for r in rows]
     return table(["Budget", "Spent", "Limit", "On pace for", "", "Counts"], body, right=(1, 2, 3))
 
 

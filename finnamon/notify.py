@@ -182,6 +182,15 @@ def render(alert: sqlite3.Row, page: bool = False, cue: bool = True) -> str:
     if k == "low_balance":
         return f"💧 <b>{acct} is at {money(p.get('available'))}</b>, below your {money(p.get('threshold'))} threshold."
     if k == "budget_pace":
+        span = f"{day(p.get('window_start'))} to {day(p.get('window_end'))}"
+        if p.get("state") == "missing":
+            return (f"📊 <b>No {esc(p.get('budget'))} charge yet:</b> nothing came in {span}, and that budget expects one every "
+                    f"{esc({'bimonthly': '2 months', 'quarterly': 'quarter'}.get(p.get('period'), 'period'))}. Worth checking it was paid.")
+        if p.get("state") == "used":
+            return (f"📊 <b>{_title(p.get('budget'))} has used {esc(p.get('used_pct'))}% of its year:</b> {money(p.get('spent'))} of {money(p.get('limit'))}, "
+                    f"{money(p.get('left'))} left this year (through {day(p.get('window_end'))}).")
+        if p.get("state") == "over" and p.get("period", "monthly") != "monthly":
+            return f"📊 <b>{_title(p.get('budget'))} is over budget:</b> {money(p.get('spent'))} of your {money(p.get('limit'))} for {span}."
         if p.get("state") == "over":
             return f"📊 <b>{_title(p.get('budget'))} is over budget:</b> {money(p.get('spent'))} of {money(p.get('limit'))} with {int(p['days']) - int(p['day'])} days left."
         return (f"📊 <b>{_title(p.get('budget'))} on pace to go over:</b> {money(p.get('spent'))} spent by day {esc(p.get('day'))}, "
