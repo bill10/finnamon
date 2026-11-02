@@ -289,6 +289,41 @@ def send_one(conn: sqlite3.Connection, alert, chat_id: int | str | None = None) 
     return mid
 
 
+# What the household did to a held transaction since its alert was raised: a one-time category edit, a merchant category
+# rule, an alias that now names it, or an "it's normal" rule that covers it (the prelude's `suppressed`, without its as_of).
+_HANDLED = """SELECT 1 FROM tx_now t WHERE t.transaction_id = :tx AND (
+  EXISTS (SELECT 1 FROM tx_category_override x WHERE x.transaction_id = t.transaction_id AND x.created_at >= :at)
+  OR EXISTS (SELECT 1 FROM category_override o WHERE o.canonical = t.canonical AND o.created_at >= :at)
+  OR EXISTS (SELECT 1 FROM merchant_alias a WHERE a.canonical = t.alias_canonical AND a.created_at >= :at
+             AND (a.name = t.name OR (instr(a.name, '%') > 0 AND t.name LIKE a.name)))
+  OR EXISTS (SELECT 1 FROM suppressions s WHERE (s.kind IS NULL OR s.kind = :kind) AND (s.canonical IS NULL OR s.canonical = t.canonical)
+             AND (s.account_id IS NULL OR s.account_id = t.account_id) AND (s.max_amount IS NULL OR s.max_amount >= t.amount)))"""
+
+
+def recheck(conn: sqlite3.Connection, family: list) -> dict | None:
+    """A held (roundup) alert, checked against its transaction as it is now, not as triage saw it (#52). Handled since
+    (recategorized, aliased, marked normal): its whole transaction is resolved 'handled' and None comes back. Otherwise
+    best(family) with today's name for the merchant, and without triage's sentence if the category has moved under it.
+    Dismissed or resolved ones never get here: the roundup reads only unresolved rows."""
+    a = dict(best(family))
+    if not a["transaction_id"]:
+        return a
+    if conn.execute(_HANDLED, {"tx": a["transaction_id"], "at": a["created_at"], "kind": a["kind"]}).fetchone():
+        ids = store.alert_group(conn, a["id"])
+        conn.execute(f"UPDATE alerts SET resolved_at=datetime('now','localtime'), resolution='handled' WHERE id IN ({','.join('?' * len(ids))}) "
+                     "AND resolved_at IS NULL", ids)
+        return None
+    t = conn.execute("SELECT display, category FROM tx_now WHERE transaction_id=?", (a["transaction_id"],)).fetchone()
+    if t:
+        p = json.loads(a["payload_json"])
+        if p.get("merchant"):
+            p["merchant"] = t["display"]
+        if "category" in p and p["category"] != t["category"]:
+            a["reason"], p["category"] = None, t["category"]   # triage's guess was about the old category
+        a["payload_json"] = json.dumps(p)
+    return a
+
+
 def send_roundup(conn: sqlite3.Connection, as_of: str, chat_id: int | str | None = None, force: bool = False) -> int | None:
     """Sunday: one numbered message with the week's low-confidence anomalies, or one all-quiet line when there are
     none, because a quiet watchdog must not look like a dead one. A Sunday the machine slept through is sent on the
@@ -314,8 +349,8 @@ def send_roundup(conn: sqlite3.Connection, as_of: str, chat_id: int | str | None
         if told:
             _stamp(conn, [a["id"] for a in fam], told[0], told[1])
             del families[g]
-    rows = list(families.values())
-    if not rows:
+    held = [(fam, a) for fam in families.values() if (a := recheck(conn, fam))]
+    if not held:
         try:
             mid = telegram.send_message(chat_id, quiet_line(conn, as_of))
         except telegram.TelegramError as e:
@@ -326,18 +361,18 @@ def send_roundup(conn: sqlite3.Connection, as_of: str, chat_id: int | str | None
             store.set_state(conn, "last_roundup_week", week)
         return mid
     # One numbered list, chunked under Telegram's limit; each chunk is its own message with its own roundup_items rows.
-    items = [(n, fam, f"{n}. {render(best(fam), cue=False).replace('🔍 ', '')}") for n, fam in enumerate(rows, 1)]
+    items = [(n, fam, a, f"{n}. {render(a, cue=False).replace('🔍 ', '')}") for n, (fam, a) in enumerate(held, 1)]
     footer = "\nReply <i>normal 3</i> (etc.) to stop hearing about a pattern."
     chunks: list[list[tuple]] = [[]]
     size = len("📋 <b>Things I noticed this week</b>")
     for it in items:
-        if chunks[-1] and size + len(it[2]) + len(footer) > ROUNDUP_CHUNK_CHARS:
+        if chunks[-1] and size + len(it[3]) + len(footer) > ROUNDUP_CHUNK_CHARS:
             chunks.append([]); size = 0
-        chunks[-1].append(it); size += len(it[2]) + 1
+        chunks[-1].append(it); size += len(it[3]) + 1
     first_mid = None
     for ci, chunk in enumerate(chunks):
         head = "📋 <b>Things I noticed this week</b>" + (f" ({ci + 1}/{len(chunks)})" if len(chunks) > 1 else "")
-        text = "\n".join([head, *[it[2] for it in chunk]]) + (footer if ci == len(chunks) - 1 else "")
+        text = "\n".join([head, *[it[3] for it in chunk]]) + (footer if ci == len(chunks) - 1 else "")
         try:
             mid = telegram.send_message(chat_id, text)
         except telegram.TelegramError as e:
@@ -346,9 +381,9 @@ def send_roundup(conn: sqlite3.Connection, as_of: str, chat_id: int | str | None
             return first_mid
         first_mid = first_mid or mid
         with store.tx(conn):
-            for n, fam, _ in chunk:
-                _stamp(conn, [a["id"] for a in fam], chat_id, mid)
-                conn.execute("INSERT INTO roundup_items (telegram_chat_id, telegram_message_id, n, alert_id) VALUES (?,?,?,?)", (str(chat_id), mid, n, best(fam)["id"]))
+            for n, fam, a, _ in chunk:
+                _stamp(conn, [f["id"] for f in fam], chat_id, mid)
+                conn.execute("INSERT INTO roundup_items (telegram_chat_id, telegram_message_id, n, alert_id) VALUES (?,?,?,?)", (str(chat_id), mid, n, a["id"]))
     if first_mid and in_slot:
         store.set_state(conn, "last_roundup_week", week)
     return first_mid

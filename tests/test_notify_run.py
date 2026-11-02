@@ -535,3 +535,48 @@ def test_cli_notify_exits_non_zero_when_telegram_refuses(home, monkeypatch, caps
     monkeypatch.setattr(telegram, "send_message", lambda *a, **k: 7)
     cli.main(["notify", "--roundup"])   # and a good send exits 0
     assert '"roundup_message_id": 7' in capsys.readouterr().out
+
+
+def _held_first_merchant(conn):
+    """#52's step 1: a new merchant's charge, filed by the bank as rent, promoted low with a guess about that category."""
+    from finnamon import detect, triage
+    seed(conn)
+    txn(conn, "t-fence", "chk", "2026-09-16", 412, "SQ *PMT 8827", primary="RENT_AND_UTILITIES", detailed="RENT_AND_UTILITIES_RENT")
+    (aid,) = detect.run(conn, AS_OF, only=["first_merchant"])
+    triage.set_verdict(conn, conn.execute(f"SELECT {store.ALERT_GROUP} FROM alerts WHERE id=?", (aid,)).fetchone()[0],
+                       "promote", "low", "The bank filed it as rent, worth confirming.")
+    return aid
+
+
+def test_roundup_drops_a_held_alert_the_household_already_handled(conn, tg):
+    aid = _held_first_merchant(conn)
+    budgets.tx_category_set(conn, "t-fence", "HOME_IMPROVEMENT_REPAIR_AND_MAINTENANCE")   # #52's step 2: one-time edit plus an alias
+    budgets.alias_set(conn, "SQ *PMT 8827", "fence contractor")
+    notify.send_roundup(conn, "2026-09-20 18:00:00")
+    assert "All quiet" in tg.sent[-1]["text"] or "quiet week" in tg.sent[-1]["text"]
+    assert "rent" not in tg.sent[-1]["text"] and "SQ *PMT" not in tg.sent[-1]["text"]
+    assert tuple(conn.execute("SELECT resolution, sent_at FROM alerts WHERE id=?", (aid,)).fetchone()) == ("handled", None)
+    assert not conn.execute("SELECT count(*) FROM roundup_items").fetchone()[0]
+
+
+def test_roundup_drops_a_held_alert_marked_normal_for_its_merchant(conn, tg):
+    aid = _held_first_merchant(conn)
+    budgets.normal(conn, "SQ *PMT 8827")
+    notify.send_roundup(conn, "2026-09-20 18:00:00")
+    assert conn.execute("SELECT resolution FROM alerts WHERE id=?", (aid,)).fetchone()[0] == "handled"
+
+
+def test_roundup_sends_an_untouched_held_alert_with_the_current_name(conn, tg):
+    aid = _held_first_merchant(conn)
+    conn.execute("UPDATE transactions SET merchant_name='Fence Contractor' WHERE transaction_id='t-fence'")   # the bank's later sync names it; no household edit
+    assert notify.send_roundup(conn, "2026-09-20 18:00:00")
+    text = tg.sent[-1]["text"]
+    assert "1. " in text and "Fence Contractor" in text and "SQ *PMT" not in text and "worth confirming" in text
+    assert conn.execute("SELECT resolved_at IS NULL AND sent_at IS NOT NULL FROM alerts WHERE id=?", (aid,)).fetchone()[0]
+
+
+def test_roundup_drops_the_triage_guess_once_the_category_moved(conn, tg):
+    _held_first_merchant(conn)
+    conn.execute("UPDATE transactions SET pfc_primary='HOME_IMPROVEMENT', pfc_detailed='HOME_IMPROVEMENT_REPAIR_AND_MAINTENANCE'")   # the bank's own re-filing
+    assert notify.send_roundup(conn, "2026-09-20 18:00:00")
+    assert "1. " in tg.sent[-1]["text"] and "rent" not in tg.sent[-1]["text"]
