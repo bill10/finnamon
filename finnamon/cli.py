@@ -2593,10 +2593,11 @@ def cmd_budget(a) -> None:
             out(budgets.suggest(conn, a.months, a.as_of, a.include_ended))
         elif a.action == "overall":
             o = budgets.overall(conn, a.as_of)
-            print(f"{money_(o['spent'])} spent of {money_(o['limit'])} in budgets this month" + (f"; {o['uncategorized']} charges have no category yet" if o["uncategorized"] else "")) if _human(a) else out(o)
+            over = "; over: " + ", ".join(f"{b['budget']} ({money_(b['spent'])} of {money_(b['limit'])}{render.PER_SHORT[b['period']]})" for b in o["over"]) if o["over"] else ""
+            print(f"{money_(o['spent'])} spent of {money_(o['limit'])} in budgets this month" + over + (f"; {o['uncategorized']} charges have no category yet" if o["uncategorized"] else "")) if _human(a) else out(o)
         elif a.action == "set":
             _triage_read_only()
-            out(budgets.budget_set(conn, a.name, a.amount, a.category, a.merchants, a.fixed))
+            out(budgets.budget_set(conn, a.name, a.amount, a.category, a.merchants, a.fixed, a.period, a.anchor))
         elif a.action == "remove":
             _triage_read_only()
             out({"removed": budgets.budget_remove(conn, a.name)})
@@ -3014,9 +3015,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--check", action="store_true", help="fetch and print, as JSON, whether there is anything to pull (the dashboard's Update button); changes nothing")
     s.add_argument("--dry-run", action="store_true", help="look only: fetch, then name the commits to pull and the services that would restart; nothing is pulled, migrated, installed or restarted"); s.set_defaults(fn=cmd_update)
 
-    s = sp.add_parser("budget", help="monthly limits: list (default) | overall | suggest (what you spend, from history) | set <name> <amount> [--category C ...] [--merchant M ...] [--fixed] | remove <name>; amounts take $ and commas"); s.add_argument("action", choices=["list", "suggest", "set", "remove", "overall"], nargs="?", default="list")
+    s = sp.add_parser("budget", help="spending limits: list (default) | overall | suggest (what you spend, from history) | set <name> <amount> [--category C ...] [--merchant M ...] [--fixed] [--period monthly|bimonthly|quarterly|yearly] [--anchor <month>] | remove <name>; amounts take $ and commas"); s.add_argument("action", choices=["list", "suggest", "set", "remove", "overall"], nargs="?", default="list")
     s.add_argument("name", nargs="?"); s.add_argument("amount", nargs="?")
     s.add_argument("--category", action="append"); s.add_argument("--merchant", action="append", dest="merchants")   # each repeatable; given, they replace the budget's
+    s.add_argument("--period", choices=list(budgets.PERIODS), help="set: what the amount is per (default monthly; an existing budget keeps its own). Bimonthly and quarterly suit a bill every few months, yearly lumpy spending like travel")
+    s.add_argument("--anchor", metavar="MONTH", help="set, with a non-monthly --period: the month a period starts in, 1-12 or a name (March); default January")
     s.add_argument("--fixed", action=argparse.BooleanOptionalAction); s.add_argument("--months", type=int, default=6); s.add_argument("--as-of"); s.add_argument("--include-ended", action="store_true", help="suggest: list ended recurring streams too"); s.add_argument("--json", action="store_true", help="JSON even on a terminal"); s.set_defaults(fn=cmd_budget)
     s = sp.add_parser("threshold", help="<account> <amount>: alert when that checking or savings account falls below the amount (e.g. finnamon threshold Checking 500)"); s.add_argument("account", help="a name, or its last four digits"); s.add_argument("amount"); s.set_defaults(fn=cmd_threshold)
     s = sp.add_parser("settings"); s.add_argument("action", choices=["list", "get", "set"], nargs="?", default="list"); s.add_argument("key", nargs="?"); s.add_argument("value", nargs="?"); s.add_argument("--account"); s.add_argument("--ops", action="store_true", help="operational keys (daemon interval, timeouts); not for Claude"); s.add_argument("--json", action="store_true", help="JSON even on a terminal"); s.set_defaults(fn=cmd_settings)
