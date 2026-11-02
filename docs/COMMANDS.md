@@ -41,6 +41,18 @@ marks a budget that is one bill a month, so it is compared to its limit and neve
 limit edit too) keeps the categories, merchants and `--fixed`; a removed budget set again keeps its categories and
 merchants but comes back not fixed. `finnamon budget` lists each with its `categories`, `merchants`, `fixed`, `spent`,
 `recurring` (the part of `spent` that is not projected) and `pace`.
+A budget's limit is per period: `finnamon budget set water 130 --period bimonthly --anchor March` (`monthly`, the default,
+`bimonthly`, `quarterly` or `yearly`; `--anchor` is the month a period starts in, 1-12 or a name, default January; a limit
+alone keeps both). Its `spent` counts over the current window (Mar-Apr, May-Jun, ... for that water bill; Jan 1 to Dec 31
+for `yearly`), shown as `window_start`/`window_end`, with `left` and `monthly_share` (the limit over the months in its
+period). A bimonthly or quarterly budget is never projected: it alerts once its window's spending passes the limit, or when a
+whole window went by with no charge and none has come in by day `budget_min_day` of the next one. A yearly one alerts as it
+passes 50%, 75% and 100% of the year's limit and lists as "<amount> left this year". `finnamon budget suggest` gives a
+bimonthly, quarterly or annual recurring stream the `period` and `anchor` (the month of its last bill) its budget should
+take. `finnamon budget overall` is this month: its limit is every budget's monthly share, a non-monthly budget's spending
+counts as its window's over the months in its period (a $120 bill every 2 months is $60 in each), and `over` names every
+budget over its own limit. `finnamon chart budgets` draws a non-monthly budget by window, its current one with a "you are
+here" mark (the limit spread evenly to today).
 It can start adding a bank ("add my Chase account" → `finnamon link --start` gives you the Plaid link; you
 log in, the daemon finishes), and send a broken bank's re-login link to the chat (reply "fix Chase" to a re-login or
 expiring-connection alert → `finnamon link --update <item_id> --telegram`; when two logins share a bank the alert says
