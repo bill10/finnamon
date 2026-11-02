@@ -114,6 +114,8 @@ def test_suggest_proposes_period_and_anchor_from_the_stream(conn):
     rec = {r["merchant"]: r for r in budgets.suggest(conn, 3, AS_OF, include_ended=True)["recurring"]}
     assert (rec["SPU"]["period"], rec["SPU"]["anchor"]) == ("bimonthly", 9)
     assert "period" not in rec["Netflix"]
+    assert budgets._stream_period("UNKNOWN", "2026-08-12", "2026-11-10") == {"period": "quarterly", "anchor": 8}   # Plaid has no QUARTERLY
+    assert budgets._stream_period("UNKNOWN", "2026-08-12", "2026-08-26") == {}
 
 
 def test_chart_shows_the_window_with_you_are_here(conn, monkeypatch):
@@ -132,3 +134,24 @@ def test_chart_shows_the_window_with_you_are_here(conn, monkeypatch):
     assert all(v["here"] is None for v in groceries) and len(groceries) == 7   # monthly bars as before, Mar to Sep
     ov = [v for v in sp["data"]["values"] if v["budget"] == charts.OVERALL]
     assert ov[-1]["limit"] == 400 + 500 and ov[-1]["spent"] == 200   # travel's share in each month: 6000/12, 2400/12
+
+
+def test_overall_counts_a_charge_a_monthly_budget_shares_in_full(conn):
+    """A Costco run both monthly groceries and a yearly costco budget count is this month's, not 1/12 of it."""
+    seed(conn)
+    txn(conn, "c", "chk", "2026-09-05", 300, "COSTCO", "Costco", "mch_costco")
+    budgets.budget_set(conn, "groceries", 400, "FOOD_AND_DRINK_GROCERIES")
+    budgets.budget_set(conn, "costco", 1200, merchants=["Costco"], period="yearly")
+    assert budgets.overall(conn, AS_OF)["spent"] == 300
+
+
+def test_png_legend_names_you_are_here(conn, monkeypatch):
+    seed(conn)
+    monkeypatch.setattr(charts.store, "now_local", lambda: "2026-09-19 12:00:00")
+    budgets.budget_set(conn, "travel", 6000, ["travel"], period="yearly")
+    txn(conn, "f", "cc", "2026-03-11", 2400, "DELTA", "Delta", "mch_delta", *T)
+    import matplotlib.pyplot as plt
+    seen = []
+    monkeypatch.setattr(plt.Axes, "legend", lambda self, handles=None, **k: seen.extend(h.get_label() for h in handles))
+    charts.render(conn, "budgets", "travel")
+    assert seen.count("limit") == 1 and "you are here" in seen

@@ -62,7 +62,7 @@ st AS (
   FROM calc c
 )
 SELECT NULL AS account_id, 'budget_pace' AS kind,
-       'budget:' || id || ':' || strftime('%Y-%m', CASE tag WHEN 'missing' THEN prev_start ELSE start END) || ':' || tag AS key,
+       'budget:' || id || ':' || CASE WHEN period <> 'monthly' THEN period || ':' ELSE '' END || strftime('%Y-%m', CASE tag WHEN 'missing' THEN prev_start ELSE start END) || ':' || tag AS key,
        NULL AS transaction_id,
        json_object('budget', name, 'category', NULLIF(category, ''), 'limit', monthly_limit, 'spent', round(mtd, 2), 'recurring', round(recurring, 2),
                    'projection', round(projection, 2), 'day', day, 'days', days,

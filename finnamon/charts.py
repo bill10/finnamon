@@ -75,7 +75,7 @@ def render(conn: sqlite3.Connection, name: str, arg: str | None = None, months: 
         line, = ax.plot(x, [p["limit"] for p in pts], color="#c9a227", lw=2.5, marker="o", label="limit")
         ax.set_xticks(x); ax.set_xticklabels([p["label"] for p in pts], fontsize=8, rotation=45 if len(pts) > 8 else 0, ha="right" if len(pts) > 8 else "center")
         ax.set_title(f"Budget trend: {_title(b['name'])} (paler = month to date)")
-        ax.legend(handles=[Patch(color=WITHIN, label="within limit"), Patch(color=OVER, label="over limit"), line, *ax.get_lines()[1:]], fontsize=8)
+        ax.legend(handles=[Patch(color=WITHIN, label="within limit"), Patch(color=OVER, label="over limit"), line, *ax.get_lines()[:-1]], fontsize=8)
     elif name == "spend_by_category":
         rows = conn.execute(SPEND_BY_CATEGORY, (f"-{months} months",)).fetchall()
         ax.barh([_cat(r[0]) for r in rows], [r[1] for r in rows], color="#4a7ebb"); ax.invert_yaxis(); ax.xaxis.set_major_formatter(dollars)
@@ -272,7 +272,7 @@ def _period_points(conn: sqlite3.Connection, b: dict, months: int, as_of: str, f
     pts = []
     for w in shown:
         s, e = date.fromisoformat(w["start"]), date.fromisoformat(w["end"])
-        label = str(e.year) if n == 12 and s.month == 1 else f"{s:%b}–{e:%b}" + (f" {e.year}" if s.month == 1 or w is shown[0] or s.year != e.year else "")
+        label = str(e.year) if n == 12 and s.month == 1 else f"{s:%b}–{e:%b}" + (f" {e.year}" if months > 12 or s.month == 1 or w is shown[0] or s.year != e.year else "")
         now = w["start"] == cur
         spent = round(w["spent"], 2)
         pts.append({"ym": w["start"][:7], "label": label + (" (so far)" if now else ""), "spent": spent, "limit": w["limit"],

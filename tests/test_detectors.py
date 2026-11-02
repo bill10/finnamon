@@ -727,7 +727,7 @@ def test_budget_pace_bimonthly_alerts_on_the_bill_not_the_pace(conn):
     assert len(run(conn, "budget_pace", "2026-10-05 12:00:00")) == 1
     assert run(conn, "budget_pace", "2026-10-20 12:00:00") == []          # dedup: same window
     a = alerts(conn, "budget_pace")[-1]
-    assert a["key"] == "budget:1:2026-09:over"
+    assert a["key"] == "budget:1:bimonthly:2026-09:over"
     assert (a["payload"]["state"], a["payload"]["window_start"], a["payload"]["window_end"], a["payload"]["period"]) == ("over", "2026-09-01", "2026-10-31", "bimonthly")
     assert "$160.00 of your $130.00 for Sep 1 to Oct 31" in notify.render(conn.execute("SELECT * FROM alerts WHERE id=?", (a["id"],)).fetchone())
     assert "Resolved until 2026-10-31" in budgets.normal(conn, alert_id=a["id"])["next"]
@@ -746,7 +746,7 @@ def test_budget_pace_bimonthly_missing_bill(conn):
     conn.execute("DELETE FROM transactions WHERE transaction_id='late'")
     ids = run(conn, "budget_pace", "2026-11-06 12:00:00")
     a = alerts(conn, "budget_pace")[-1]
-    assert len(ids) == 1 and a["key"] == "budget:1:2026-09:missing" and (a["payload"]["window_start"], a["payload"]["window_end"]) == ("2026-09-01", "2026-10-31")
+    assert len(ids) == 1 and a["key"] == "budget:1:bimonthly:2026-09:missing" and (a["payload"]["window_start"], a["payload"]["window_end"]) == ("2026-09-01", "2026-10-31")
     assert run(conn, "budget_pace", "2026-11-20 12:00:00") == []          # dedup
     assert "No water charge yet" in notify.render(conn.execute("SELECT * FROM alerts WHERE id=?", (a["id"],)).fetchone())
     budgets.budget_set(conn, "new water", 130, list(W[1:]), period="bimonthly", anchor=9)   # just created: it has no past window to miss
@@ -764,7 +764,7 @@ def test_budget_pace_yearly_thresholds(conn):
     txn(conn, "f3", "cc", "2026-08-11", 3500, "HOTEL", "Hotel", "mch_h", "TRAVEL", "TRAVEL_LODGING")   # 110%: past 75 and 100 at once, one alert
     run(conn, "budget_pace", "2026-08-12 12:00:00")
     got = alerts(conn, "budget_pace")
-    assert [a["key"] for a in got] == ["budget:1:2026-01:50", "budget:1:2026-01:over"]
+    assert [a["key"] for a in got] == ["budget:1:yearly:2026-01:50", "budget:1:yearly:2026-01:over"]
     assert (got[0]["payload"]["state"], got[0]["payload"]["used_pct"], got[0]["payload"]["left"]) == ("used", 50, 2900)
     assert "Travel has used 50% of its year" in notify.render(conn.execute("SELECT * FROM alerts WHERE id=?", (got[0]["id"],)).fetchone())
     assert "$2,900.00 left this year" in notify.render(conn.execute("SELECT * FROM alerts WHERE id=?", (got[0]["id"],)).fetchone())

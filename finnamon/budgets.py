@@ -244,7 +244,6 @@ RECURRING = ("(t.flow = 'mortgage' OR EXISTS (SELECT 1 FROM recurring r WHERE r.
 assert "s.budget_id = :bid" in MATCH
 ANY_BUDGET = MATCH.replace("s.budget_id = :bid", "s.budget_id IN (SELECT id FROM budgets WHERE active = 1)")
 ANY_MONTHLY = MATCH.replace("s.budget_id = :bid", "s.budget_id IN (SELECT id FROM budgets WHERE active = 1 AND period = 'monthly')")
-ANY_OTHER = MATCH.replace("s.budget_id = :bid", "s.budget_id IN (SELECT id FROM budgets WHERE active = 1 AND period <> 'monthly')")
 UNCATEGORIZED = "category IS NULL AND pending = 0 AND flow IN ('expense', 'refund', 'income')"   # not a paired transfer; an imported transfer-in reads as income until categorized   # the Budgets card's count and charts' uncategorized table: one rule
 UNCATEGORIZED_SHOWN = 20   # merchants, and ids per merchant, in a reply; the count is always the whole
 
@@ -257,10 +256,14 @@ def overall(conn: sqlite3.Connection, as_of: str | None = None) -> dict:
     (an import's rows: they count toward no budget until someone categorizes them)."""
     as_of = as_of or store.now_local()
     rows = budget_list(conn, as_of)
+    # a charge a monthly budget counts is this month's in full; the rest of a non-monthly budget's window is spread over its months
     # ponytail: a charge two non-monthly budgets share counts in each; per-charge proration if households do that
     spent = conn.execute(f"SELECT COALESCE(SUM(amount),0) FROM tx_now t WHERE pending=0 AND date >= date(:as_of, 'start of month') AND date <= date(:as_of) "
-                         f"AND {SPEND} AND {ANY_MONTHLY} AND NOT {ANY_OTHER}", {"as_of": as_of}).fetchone()[0]
-    spent += sum(b["spent"] / PERIODS[b["period"]] for b in rows if b["period"] != "monthly")
+                         f"AND {SPEND} AND {ANY_MONTHLY}", {"as_of": as_of}).fetchone()[0]
+    for b in rows:
+        if b["period"] != "monthly":
+            spent += conn.execute(f"SELECT COALESCE(SUM(amount),0) FROM tx_now t WHERE pending=0 AND date >= :start AND date <= date(:as_of) "
+                                  f"AND {SPEND} AND {MATCH} AND NOT {ANY_MONTHLY}", {"as_of": as_of, "bid": b["id"], "start": b["window_start"]}).fetchone()[0] / PERIODS[b["period"]]
     limit = sum(monthly_share(b) for b in rows)
     n = conn.execute(f"SELECT count(*) FROM tx_now WHERE {UNCATEGORIZED}").fetchone()[0]
     over = [{"budget": b["name"], "spent": b["spent"], "limit": b["limit"], "period": b["period"]} for b in rows if b["spent"] > b["limit"]]
@@ -340,25 +343,29 @@ def suggest(conn: sqlite3.Connection, months: int = 6, as_of: str | None = None,
                     "variance_ratio": round((vals[-1] - vals[0]) / med, 2) if med else None,
                     "top_merchants": [{"merchant": t[0], "total": t[1]} for t in top]})
     out.sort(key=lambda c: -c["median"])
-    recurring = conn.execute("SELECT COALESCE(merchant_name, description) m, last_amount, frequency, last_date FROM recurring r JOIN accounts a ON a.account_id=r.account_id "
+    recurring = conn.execute("SELECT COALESCE(merchant_name, description) m, last_amount, frequency, last_date, predicted_next_date FROM recurring r JOIN accounts a ON a.account_id=r.account_id "
                              "AND a.mirror_of IS NULL WHERE direction='outflow' AND status<>'EARLY_DETECTION'"
                              + ("" if include_ended else f" AND NOT {STREAM_ENDED}") + " ORDER BY last_amount DESC").fetchall()
     low = conn.execute("SELECT a.name, a.mask, min(b.available) lo FROM balances b JOIN accounts a ON a.account_id=b.account_id "
                        "WHERE a.type='depository' AND a.mirror_of IS NULL AND b.as_of >= datetime(?, ?) GROUP BY a.account_id", (as_of, f"-{months} months")).fetchall()
     return {"months": months, "as_of": as_of, "categories": out,
-            "recurring": [{"merchant": r[0], "amount": r[1], "frequency": r[2], **_stream_period(r[2], r[3])} for r in recurring],
+            "recurring": [{"merchant": r[0], "amount": r[1], "frequency": r[2], **_stream_period(r[2], r[3], r[4])} for r in recurring],
             "lowest_balances": [{"account": r[0], "mask": r[1], "lowest_available": r[2]} for r in low],
             "existing_budgets": budget_list(conn, as_of)}
 
 
-# Plaid's frequencies that a monthly budget fits badly, as a budget's period
+# frequencies a monthly budget fits badly, as a budget's period. Plaid names only ANNUALLY of these; a bill every 2 or 3
+# months comes as UNKNOWN, so its gap from the last bill to the predicted next one decides (GAP_PERIODS, in months)
 STREAM_PERIODS = {"BIMONTHLY": "bimonthly", "QUARTERLY": "quarterly", "ANNUALLY": "yearly"}
+GAP_PERIODS = {2: "bimonthly", 3: "quarterly"}
 
 
-def _stream_period(frequency: str | None, last_date: str | None) -> dict:
+def _stream_period(frequency: str | None, last_date: str | None, next_date: str | None = None) -> dict:
     """A stream billed every few months: the period its budget should have, anchored on the month of its last bill, so
     each window opens with a bill and one paid a few days late still lands in it."""
     period = STREAM_PERIODS.get(str(frequency or "").upper())
+    if not period and str(frequency or "").upper() == "UNKNOWN" and last_date and next_date:
+        period = GAP_PERIODS.get(round((date.fromisoformat(next_date[:10]) - date.fromisoformat(last_date[:10])).days / 30.44))
     if not period:
         return {}
     return {"period": period, "anchor": int(last_date[5:7]) if last_date else None}
