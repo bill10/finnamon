@@ -207,15 +207,18 @@ def test_first_pull_waits_longer_for_product_not_ready(home, conn, monkeypatch):
     from finnamon import plaid_api, sync
     from tests.conftest import seed
     seed(conn)
-    monkeypatch.setattr(sync, "NOT_READY_SLEEP_S", 0)
+    sleeps = []
+    monkeypatch.setattr(sync.time, "sleep", sleeps.append)
     calls = {"n": 0}
     def not_ready(tok, cursor):
         calls["n"] += 1
-        if calls["n"] < 25:
+        if calls["n"] <= sync.FIRST_PULL_NOT_READY_RETRIES:
             raise plaid_api.PlaidError({"error_code": "PRODUCT_NOT_READY"})
         return {"added": [], "modified": [], "removed": [], "has_more": False, "next_cursor": "c1", "accounts": []}
     monkeypatch.setattr(plaid_api, "transactions_sync", not_ready)
-    assert sync.sync_transactions(conn, "item1", "tok", "2026-09-19 12:00:00") == 0   # 24 not-ready answers on a first pull are fine
+    assert sync.sync_transactions(conn, "item1", "tok", "2026-09-19 12:00:00") == 0   # the whole first-pull budget of not-ready answers is fine
+    assert calls["n"] == sync.FIRST_PULL_NOT_READY_RETRIES + 1 > sync.MAX_RESTARTS
+    assert len(sleeps) == sync.FIRST_PULL_NOT_READY_RETRIES
     assert conn.execute("SELECT status FROM items WHERE item_id='item1'").fetchone()[0] == "good"
 
 

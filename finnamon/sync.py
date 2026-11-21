@@ -148,7 +148,8 @@ def sync_transactions(conn: sqlite3.Connection, item_id: str, token: str, now: s
     if not cursor:
         not_ready_retries = max(not_ready_retries, FIRST_PULL_NOT_READY_RETRIES)
     total = 0
-    for _attempt in range(MAX_RESTARTS):
+    restarts = 0
+    while restarts < MAX_RESTARTS:
         try:
             while True:
                 page = plaid_api.transactions_sync(token, cursor)
@@ -164,11 +165,12 @@ def sync_transactions(conn: sqlite3.Connection, item_id: str, token: str, now: s
         except PlaidError as e:
             if e.code == "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION":
                 cursor = cursor_at_start
+                restarts += 1
                 continue
             if e.code == "PRODUCT_NOT_READY" and not_ready_retries > 0:
                 not_ready_retries -= 1
                 time.sleep(NOT_READY_SLEEP_S)
-                continue
+                continue   # a not-ready wait has its own budget; it does not use up a mutation restart
             raise
     log.warning("sync %s: gave up after %d MUTATION_DURING_PAGINATION restarts; partial page set applied, will resume next run", item_id, MAX_RESTARTS)
     return total
