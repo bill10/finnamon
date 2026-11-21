@@ -3,6 +3,11 @@
 All notable changes to Finnamon are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.58.0.1] - 2026-11-21
+
+### Fixed
+- **A brand-new bank connection now waits out Plaid's "not ready yet" answers.** Those waits no longer use up the three restarts reserved for changes mid-pull, so the first pull gets its full retry budget instead of giving up after 3 calls.
+
 ## [0.58.0.0] - 2026-11-02
 
 ### Added
